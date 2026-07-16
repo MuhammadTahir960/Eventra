@@ -2,4 +2,4 @@ from django.apps import AppConfig
 
 
 class VenuesConfig(AppConfig):
-    name = 'apps.venues'
+    name = "apps.venues"
