@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     "apps.sports",
     "apps.seating",
     "apps.bookings",
+    "apps.tickets",
     "apps.payments",
     "apps.payouts",
     "apps.notifications",
