@@ -1,5 +1,7 @@
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework.exceptions import AuthenticationFailed
 from .models import User
 
 
@@ -21,3 +23,30 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         return User.objects.create_user(**validated_data)
+
+
+class ActiveUserTokenObtainPairSerializer(TokenObtainPairSerializer):
+    def validate(self, attrs):
+        email = attrs.get(self.username_field)
+        password = attrs.get("password")
+
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            raise AuthenticationFailed(
+                "No active account found with the given credentials"
+            )
+
+        if not user.check_password(password):
+            raise AuthenticationFailed(
+                "No active account found with the given credentials"
+            )
+
+        if not user.is_active:
+            raise AuthenticationFailed(
+                "Account is not active. Please verify your email."
+            )
+
+        self.user = user
+        data = super().validate(attrs)
+        return data

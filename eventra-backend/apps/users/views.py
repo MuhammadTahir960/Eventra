@@ -1,7 +1,8 @@
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from .serializers import RegisterSerializer
+from rest_framework_simplejwt.views import TokenObtainPairView
+from .serializers import RegisterSerializer, ActiveUserTokenObtainPairSerializer
 from .services import register_user, verify_user_email
 
 
@@ -41,3 +42,7 @@ class VerifyEmailView(APIView):
             {"detail": message, "email": user.email},
             status=status.HTTP_200_OK,
         )
+
+
+class LoginView(TokenObtainPairView):
+    serializer_class = ActiveUserTokenObtainPairSerializer
