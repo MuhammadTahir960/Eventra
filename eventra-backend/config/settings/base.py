@@ -19,7 +19,13 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 ROOT_DIR = Path(__file__).resolve().parents[3]
 
 env = environ.Env(DEBUG=(bool, False))
-environ.Env.read_env(ROOT_DIR / ".env")
+
+# Inside the web container, only eventra-backend/ is volume-mounted,
+# so the root .env never exists at this path — Docker Compose's own
+# env_file:/environment: already populate os.environ for us in that
+# case, making this call a no-op rather than a failure.
+if (ROOT_DIR / ".env").exists():
+    environ.Env.read_env(ROOT_DIR / ".env")
 
 
 # Quick-start development settings - unsuitable for production
