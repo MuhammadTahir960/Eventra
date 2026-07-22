@@ -1,7 +1,8 @@
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from rest_framework.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.exceptions import AuthenticationFailed, TokenError
 from .models import User
 
 
@@ -50,3 +51,13 @@ class ActiveUserTokenObtainPairSerializer(TokenObtainPairSerializer):
         self.user = user
         data = super().validate(attrs)
         return data
+
+
+class LogoutSerializer(serializers.Serializer):
+    refresh = serializers.CharField()
+
+    def save(self, **kwargs):
+        try:
+            RefreshToken(self.validated_data["refresh"]).blacklist()
+        except TokenError as e:
+            raise serializers.ValidationError(str(e))
