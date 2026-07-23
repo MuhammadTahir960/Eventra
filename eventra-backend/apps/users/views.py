@@ -7,6 +7,7 @@ from .serializers import (
     RegisterSerializer,
     ActiveUserTokenObtainPairSerializer,
     LogoutSerializer,
+    UserSerializer,
 )
 
 
@@ -60,3 +61,10 @@ class LogoutView(generics.GenericAPIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(status=status.HTTP_205_RESET_CONTENT)
+
+
+class MeView(generics.RetrieveUpdateAPIView):
+    serializer_class = UserSerializer
+
+    def get_object(self):
+        return self.request.user

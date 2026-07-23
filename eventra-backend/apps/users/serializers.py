@@ -11,7 +11,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["id", "email", "password", "first_name", "last_name"]
+        fields = ["email", "password", "first_name", "last_name"]
 
     def validate(self, attrs):
         temp_user = User(
@@ -61,3 +61,10 @@ class LogoutSerializer(serializers.Serializer):
             RefreshToken(self.validated_data["refresh"]).blacklist()
         except TokenError as e:
             raise serializers.ValidationError(str(e))
+
+
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["email", "role", "first_name", "last_name", "created_at"]
+        read_only_fields = ["email", "role", "created_at"]
