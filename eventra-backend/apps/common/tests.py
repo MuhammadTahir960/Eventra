@@ -10,6 +10,12 @@ def test_healthz_returns_200():
     assert response.json() == {"status": "ok"}
 
 
+def test_healthz_post_not_allowed():
+    client = APIClient()
+    response = client.post("/healthz/")
+    assert response.status_code == 405
+
+
 @pytest.mark.django_db
 def test_can_create_a_user():
     User = get_user_model()
