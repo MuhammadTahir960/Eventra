@@ -13,6 +13,12 @@ class RegisterSerializer(serializers.ModelSerializer):
         model = User
         fields = ["email", "password", "first_name", "last_name"]
 
+    def validate_email(self, value):
+        value = value.strip()
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError("A user with that email already exists.")
+        return value
+
     def validate(self, attrs):
         temp_user = User(
             email=attrs.get("email"),
@@ -31,9 +37,10 @@ class ActiveUserTokenObtainPairSerializer(TokenObtainPairSerializer):
         email = attrs.get(self.username_field)
         password = attrs.get("password")
 
-        try:
-            user = User.objects.get(email=email)
-        except User.DoesNotExist:
+        user = User.objects.filter(email__iexact=email).first()
+
+        if user is None:
+            User().set_password(password)
             raise AuthenticationFailed(
                 "No active account found with the given credentials"
             )
@@ -49,8 +56,11 @@ class ActiveUserTokenObtainPairSerializer(TokenObtainPairSerializer):
             )
 
         self.user = user
-        data = super().validate(attrs)
-        return data
+        refresh = self.get_token(self.user)
+        return {
+            "refresh": str(refresh),
+            "access": str(refresh.access_token),
+        }
 
 
 class LogoutSerializer(serializers.Serializer):
