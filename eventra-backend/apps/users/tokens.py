@@ -13,5 +13,5 @@ def verify_token(token: str) -> int | None:
     try:
         user_id = _signer.unsign(token, max_age=TOKEN_MAX_AGE_SECONDS)
         return int(user_id)
-    except (BadSignature, SignatureExpired):
+    except (BadSignature, SignatureExpired, ValueError):
         return None
