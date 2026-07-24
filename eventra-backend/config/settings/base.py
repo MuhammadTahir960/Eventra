@@ -145,6 +145,9 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@eventra.local")
+FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
+
 
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
