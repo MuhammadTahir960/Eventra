@@ -42,8 +42,8 @@ def register_user(serializer) -> User:
 def verify_user_email(token: str) -> tuple[User, bool] | None:
     """
     Consumes a verification token. Returns (user, was_newly_verified) on
-    success — was_newly_verified is False if the account was already
-    active before this call, letting the view distinguish "just verified"
+    success — was_newly_verified is False if the email was already
+    verified before this call, letting the view distinguish "just verified"
     from "already verified" without a second DB query. Returns None if the
     token is invalid/expired/points to a user that no longer exists.
     """
@@ -56,12 +56,13 @@ def verify_user_email(token: str) -> tuple[User, bool] | None:
     except User.DoesNotExist:
         return None
 
-    if user.is_active:
+    if user.is_email_verified:
         # Valid token, but this account was already verified — not an
         # error, just nothing new to do. The view surfaces this distinctly
         # rather than claiming a fresh verification just happened.
         return user, False
 
+    # Only activate the account as part of first-time verification.
     user.is_active = True
     user.is_email_verified = True
     user.save(update_fields=["is_active", "is_email_verified"])
