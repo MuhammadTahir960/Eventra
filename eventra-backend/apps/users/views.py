@@ -14,6 +14,7 @@ from .serializers import (
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
+    throttle_scope = "auth-register"
 
     def perform_create(self, serializer):
         register_user(serializer)
@@ -21,6 +22,7 @@ class RegisterView(generics.CreateAPIView):
 
 class VerifyEmailView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_scope = "auth-verify-email"
 
     def get(self, request):
         token = request.query_params.get("token")
@@ -51,10 +53,12 @@ class VerifyEmailView(APIView):
 
 class LoginView(TokenObtainPairView):
     serializer_class = ActiveUserTokenObtainPairSerializer
+    throttle_scope = "auth-login"
 
 
 class LogoutView(generics.GenericAPIView):
     serializer_class = LogoutSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
@@ -65,6 +69,7 @@ class LogoutView(generics.GenericAPIView):
 
 class MeView(generics.RetrieveUpdateAPIView):
     serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_object(self):
         return self.request.user
