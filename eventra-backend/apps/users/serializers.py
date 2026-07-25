@@ -14,7 +14,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         fields = ["email", "password", "first_name", "last_name"]
 
     def validate_email(self, value):
-        value = value.strip()
+        value = value.strip().lower()
         if User.objects.filter(email__iexact=value).exists():
             raise serializers.ValidationError("A user with that email already exists.")
         return value
@@ -70,7 +70,7 @@ class LogoutSerializer(serializers.Serializer):
         try:
             RefreshToken(self.validated_data["refresh"]).blacklist()
         except TokenError as e:
-            raise serializers.ValidationError(str(e))
+            raise serializers.ValidationError({"refresh": str(e)})
 
 
 class UserSerializer(serializers.ModelSerializer):

@@ -1,5 +1,8 @@
+import uuid
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.contrib.auth.base_user import BaseUserManager
+from django.core.exceptions import ValidationError
+from django.core.validators import EmailValidator
 from django.db import models
 
 
@@ -7,7 +10,11 @@ class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
         if not email:
             raise ValueError("Users must have an email address")
-        email = self.normalize_email(email)
+        email = self.normalize_email(email.strip()).lower()
+        try:
+            EmailValidator()(email)
+        except ValidationError as exc:
+            raise ValueError("Users must have a valid email address") from exc
         user = self.model(email=email, **extra_fields)
         # always goes through Django's hasher, never stored raw
         user.set_password(password)
@@ -37,6 +44,8 @@ class User(AbstractBaseUser, PermissionsMixin):
         ADMIN = "admin", "Admin"
         ORGANIZER = "organizer", "Organizer"
         ATTENDEE = "attendee", "Attendee"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     email = models.EmailField(unique=True, db_index=True)
     first_name = models.CharField(max_length=30)

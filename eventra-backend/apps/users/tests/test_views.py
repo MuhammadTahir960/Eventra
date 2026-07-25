@@ -103,6 +103,28 @@ class TestRegister:
         response = api_client.get(self.url)
         assert response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
 
+    def test_throttled_after_rate_exceeded(self, api_client):
+        for i in range(5):
+            api_client.post(
+                self.url,
+                {
+                    "email": f"ratelimit{i}@example.com",
+                    "password": "a-genuinely-strong-pass-1",
+                    "first_name": "Rate",
+                    "last_name": "Limit",
+                },
+            )
+        response = api_client.post(
+            self.url,
+            {
+                "email": "ratelimit-overflow@example.com",
+                "password": "a-genuinely-strong-pass-1",
+                "first_name": "Rate",
+                "last_name": "Limit",
+            },
+        )
+        assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+
 
 # ==================================================
 # GET /auth/verify-email/
@@ -275,6 +297,7 @@ class TestLogout:
         client = auth_client(user)
         response = client.post(self.url, {"refresh": "not-a-real-token"})
         assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "refresh" in response.data
 
     def test_logout_rejects_garbage_access_token(self, api_client):
         api_client.credentials(HTTP_AUTHORIZATION="Bearer not-a-real-access-token")

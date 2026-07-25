@@ -1,4 +1,5 @@
 import pytest
+from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.tokens import RefreshToken
 from apps.users.factories import UserFactory
@@ -38,6 +39,17 @@ def test_register_serializer_valid_data_creates_user():
     assert user.email == "newuser@example.com"
     assert user.password != "a-genuinely-strong-pass-1"
     assert user.check_password("a-genuinely-strong-pass-1") is True
+
+
+def test_register_serializer_normalizes_email_casing():
+    serializer = RegisterSerializer(
+        data=_register_payload(email="  MixedCase@Example.COM  ")
+    )
+    assert serializer.is_valid(), serializer.errors
+    assert serializer.validated_data["email"] == "mixedcase@example.com"
+
+    user = serializer.save()
+    assert user.email == "mixedcase@example.com"
 
 
 def test_register_serializer_password_write_only():
@@ -245,6 +257,14 @@ def test_logout_serializer_rejects_invalid_token():
     serializer.is_valid()
     with pytest.raises(Exception):
         serializer.save()
+
+
+def test_logout_serializer_invalid_token_error_scoped_to_refresh_field():
+    serializer = LogoutSerializer(data={"refresh": "not-a-real-token"})
+    serializer.is_valid()
+    with pytest.raises(serializers.ValidationError) as exc_info:
+        serializer.save()
+    assert "refresh" in exc_info.value.detail
 
 
 def test_logout_serializer_rejects_missing_refresh_field():
