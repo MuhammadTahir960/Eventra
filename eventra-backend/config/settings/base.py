@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "daphne",
     "django.contrib.staticfiles",
+    "corsheaders",
     "rest_framework",
     "apps.users",
     "apps.venues",
@@ -68,6 +69,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -147,6 +149,9 @@ STATIC_URL = "static/"
 
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@eventra.local")
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
+BACKEND_BASE_URL = env("BACKEND_BASE_URL", default="http://localhost:8000")
+
+CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[])
 
 
 REST_FRAMEWORK = {
@@ -156,6 +161,14 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.ScopedRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "auth-login": "10/min",
+        "auth-register": "5/hour",
+        "auth-verify-email": "20/hour",
+    },
 }
 
 

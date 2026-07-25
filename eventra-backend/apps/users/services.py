@@ -12,7 +12,7 @@ def send_verification_email(user: User) -> None:
     prints to your terminal, no real SMTP involved.
     """
     token = generate_verification_token(user.id)
-    verification_link = f"{settings.FRONTEND_URL}/verify-email?token={token}"
+    verification_link = f"{settings.BACKEND_BASE_URL}/auth/verify-email/?token={token}"
 
     send_mail(
         subject="Verify your Eventra account",
@@ -51,19 +51,21 @@ def verify_user_email(token: str) -> tuple[User, bool] | None:
     if user_id is None:
         return None
 
-    try:
-        user = User.objects.get(id=user_id)
-    except User.DoesNotExist:
-        return None
+    with transaction.atomic():
+        try:
+            user = User.objects.select_for_update().get(id=user_id)
+        except User.DoesNotExist:
+            return None
 
-    if user.is_email_verified:
-        # Valid token, but this account was already verified — not an
-        # error, just nothing new to do. The view surfaces this distinctly
-        # rather than claiming a fresh verification just happened.
-        return user, False
+        if user.is_email_verified:
+            # Valid token, but this account was already verified — not an
+            # error, just nothing new to do. The view surfaces this
+            # distinctly rather than claiming a fresh verification just
+            # happened.
+            return user, False
 
-    # Only activate the account as part of first-time verification.
-    user.is_active = True
-    user.is_email_verified = True
-    user.save(update_fields=["is_active", "is_email_verified"])
-    return user, True
+        # Only activate the account as part of first-time verification.
+        user.is_active = True
+        user.is_email_verified = True
+        user.save(update_fields=["is_active", "is_email_verified"])
+        return user, True

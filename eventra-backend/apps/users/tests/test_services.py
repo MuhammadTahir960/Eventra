@@ -28,12 +28,25 @@ def test_send_verification_email_contains_working_token():
     assert len(mail.outbox) == 1
     sent = mail.outbox[0]
     assert sent.to == [user.email]
-    assert "verify-email?token=" in sent.body
+    assert "verify-email/?token=" in sent.body
 
     token = sent.body.split("token=")[1].strip()
     from apps.users.tokens import verify_token
 
-    assert verify_token(token) == user.id
+    assert verify_token(token) == str(user.id)
+
+
+@pytest.mark.django_db
+def test_verification_email_link_points_at_the_real_backend_endpoint(settings):
+    settings.BACKEND_BASE_URL = "http://api.example.test"
+    settings.FRONTEND_URL = "http://app.example.test"
+
+    user = UserFactory(is_active=False)
+    send_verification_email(user)
+
+    sent = mail.outbox[0]
+    assert "http://api.example.test/auth/verify-email/?token=" in sent.body
+    assert "app.example.test" not in sent.body
 
 
 # ==================================================
@@ -101,5 +114,8 @@ def test_verify_user_email_invalid_token_returns_none():
 
 @pytest.mark.django_db
 def test_verify_user_email_token_for_deleted_user_returns_none():
-    token = generate_verification_token(999_999)
+    import uuid
+
+    nonexistent_user_id = uuid.uuid4()
+    token = generate_verification_token(nonexistent_user_id)
     assert verify_user_email(token) is None

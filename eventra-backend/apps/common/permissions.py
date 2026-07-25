@@ -21,7 +21,15 @@ class IsAdmin(permissions.BasePermission):
 
 
 class IsOwnerOrAdmin(permissions.BasePermission):
+    owner_field = "user_id"
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated)
+
     def has_object_permission(self, request, view, obj):
         if not (request.user and request.user.is_authenticated):
             return False
-        return request.user.role == User.Roles.ADMIN or obj.user_id == request.user.id
+        if request.user.role == User.Roles.ADMIN:
+            return True
+        owner_field = getattr(view, "owner_field", self.owner_field)
+        return getattr(obj, owner_field, None) == request.user.id
