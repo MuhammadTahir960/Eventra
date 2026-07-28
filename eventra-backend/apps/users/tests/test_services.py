@@ -1,6 +1,5 @@
 import pytest
 from django.core import mail
-from apps.users.factories import UserFactory
 from apps.users.serializers import RegisterSerializer
 from apps.users.services import (
     register_user,
@@ -8,6 +7,7 @@ from apps.users.services import (
     verify_user_email,
 )
 from apps.users.tokens import generate_verification_token
+from ..factories import UserFactory
 
 
 @pytest.fixture(autouse=True)

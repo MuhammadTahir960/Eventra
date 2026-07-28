@@ -3,9 +3,10 @@ from django.core import mail
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
-from apps.users.factories import UserFactory
+from apps.common.constants import Roles
 from apps.users.models import User
 from apps.users.tokens import generate_verification_token
+from ..factories import UserFactory
 
 pytestmark = pytest.mark.django_db
 
@@ -87,7 +88,7 @@ class TestRegister:
             "password": "a-genuinely-strong-pass-1",
             "first_name": "Att",
             "last_name": "Acker",
-            "role": User.Roles.ADMIN,
+            "role": Roles.ADMIN,
             "is_staff": True,
             "is_superuser": True,
         }
@@ -95,7 +96,7 @@ class TestRegister:
         assert response.status_code == status.HTTP_201_CREATED
 
         user = User.objects.get(email="attacker@example.com")
-        assert user.role == User.Roles.ATTENDEE
+        assert user.role == Roles.ATTENDEE
         assert user.is_staff is False
         assert user.is_superuser is False
 
@@ -358,15 +359,15 @@ class TestMe:
         assert user.first_name == "New"
 
     def test_patch_cannot_change_email_or_role(self):
-        user = UserFactory(email="original@example.com", role=User.Roles.ATTENDEE)
+        user = UserFactory(email="original@example.com", role=Roles.ATTENDEE)
         client = auth_client(user)
         response = client.patch(
-            self.url, {"email": "hacked@example.com", "role": User.Roles.ADMIN}
+            self.url, {"email": "hacked@example.com", "role": Roles.ADMIN}
         )
         assert response.status_code == status.HTTP_200_OK
         user.refresh_from_db()
         assert user.email == "original@example.com"
-        assert user.role == User.Roles.ATTENDEE
+        assert user.role == Roles.ATTENDEE
 
     def test_cannot_see_or_edit_another_users_profile(self):
         UserFactory(email="victim@example.com", first_name="Victim")
