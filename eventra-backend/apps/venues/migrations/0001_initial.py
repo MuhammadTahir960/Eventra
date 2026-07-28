@@ -11,40 +11,84 @@ class Migration(migrations.Migration):
 
     initial = True
 
-    dependencies = [
-    ]
+    dependencies = []
 
     operations = [
         migrations.CreateModel(
-            name='Venue',
+            name="Venue",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('is_active', models.BooleanField(default=True)),
-                ('name', models.CharField(max_length=200, validators=[django.core.validators.MinLengthValidator(2)])),
-                ('address', models.CharField(max_length=255)),
-                ('city', models.CharField(db_index=True, max_length=100)),
-                ('country', models.CharField(max_length=100)),
-                ('capacity', models.PositiveIntegerField(validators=[django.core.validators.MinValueValidator(1)])),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("is_active", models.BooleanField(default=True)),
+                (
+                    "name",
+                    models.CharField(
+                        max_length=200,
+                        validators=[django.core.validators.MinLengthValidator(2)],
+                    ),
+                ),
+                ("address", models.CharField(max_length=255)),
+                ("city", models.CharField(db_index=True, max_length=100)),
+                ("country", models.CharField(max_length=100)),
+                (
+                    "capacity",
+                    models.PositiveIntegerField(
+                        validators=[django.core.validators.MinValueValidator(1)]
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
             ],
             options={
-                'ordering': ['name'],
-                'constraints': [models.UniqueConstraint(django.db.models.functions.text.Lower('name'), django.db.models.functions.text.Lower('city'), name='unique_venue_name_per_city_ci')],
+                "ordering": ["name"],
+                "constraints": [
+                    models.UniqueConstraint(
+                        django.db.models.functions.text.Lower("name"),
+                        django.db.models.functions.text.Lower("city"),
+                        name="unique_venue_name_per_city_ci",
+                    )
+                ],
             },
         ),
         migrations.CreateModel(
-            name='Seat',
+            name="Seat",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('section', models.CharField(max_length=50)),
-                ('row_label', models.CharField(max_length=10)),
-                ('seat_number', models.PositiveIntegerField()),
-                ('venue', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='seats', to='venues.venue')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("section", models.CharField(max_length=50)),
+                ("row_label", models.CharField(max_length=10)),
+                ("seat_number", models.PositiveIntegerField()),
+                (
+                    "venue",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="seats",
+                        to="venues.venue",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['section', 'row_label', 'seat_number'],
-                'constraints': [models.UniqueConstraint(fields=('venue', 'section', 'row_label', 'seat_number'), name='unique_seat_per_venue')],
+                "ordering": ["section", "row_label", "seat_number"],
+                "constraints": [
+                    models.UniqueConstraint(
+                        fields=("venue", "section", "row_label", "seat_number"),
+                        name="unique_seat_per_venue",
+                    )
+                ],
             },
         ),
     ]
