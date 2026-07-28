@@ -3,6 +3,9 @@ from django.core.mail import send_mail
 from django.db import transaction
 from .models import User
 from .tokens import generate_verification_token, verify_token
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def send_verification_email(user: User) -> None:
@@ -29,13 +32,21 @@ def register_user(serializer) -> User:
 
     An email, once sent, can't be rolled back the way a DB write can.
     Wrapping the send in on_commit means it only actually fires once this
-    transaction has fully and successfully committed — if anything here
-    failed and rolled back, the email simply never sends, instead of
-    confirming an account that turned out not to exist.
+    transaction has fully and successfully committed. Any delivery error
+    is caught and logged so post-commit failures do not crash the request.
     """
+
+    def _safe_send():
+        try:
+            send_verification_email(user)
+        except Exception as exc:
+            logger.error(
+                "Failed to send verification email for user %s: %s", user.id, exc
+            )
+
     with transaction.atomic():
         user = serializer.save()
-        transaction.on_commit(lambda: send_verification_email(user))
+        transaction.on_commit(_safe_send)
     return user
 
 
