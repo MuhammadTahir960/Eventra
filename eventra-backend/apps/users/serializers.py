@@ -1,4 +1,5 @@
 from django.contrib.auth.password_validation import validate_password
+from django.db import IntegrityError
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -7,11 +8,12 @@ from .models import User
 
 
 class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True)
+    password = serializers.CharField(write_only=True, max_length=128)
 
     class Meta:
         model = User
-        fields = ["email", "password", "first_name", "last_name"]
+        fields = ["id", "email", "password", "first_name", "last_name"]
+        read_only_fields = ["id"]
 
     def validate_email(self, value):
         value = value.strip().lower()
@@ -29,12 +31,21 @@ class RegisterSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        return User.objects.create_user(**validated_data)
+        try:
+            return User.objects.create_user(**validated_data)
+        except IntegrityError:
+            raise serializers.ValidationError(
+                {"email": ["A user with that email already exists."]}
+            )
 
 
 class ActiveUserTokenObtainPairSerializer(TokenObtainPairSerializer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["password"].max_length = 128
+
     def validate(self, attrs):
-        email = attrs.get(self.username_field)
+        email = attrs.get(self.username_field, "").strip()
         password = attrs.get("password")
 
         user = User.objects.filter(email__iexact=email).first()
