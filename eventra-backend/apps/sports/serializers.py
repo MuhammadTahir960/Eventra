@@ -1,6 +1,14 @@
 from django.db import IntegrityError, transaction
 from rest_framework import serializers
 from .models import League, Sport, Team
+from .services import (
+    DuplicateLeagueError,
+    DuplicateSportError,
+    DuplicateTeamError,
+    ensure_unique_league_name,
+    ensure_unique_sport_name,
+    ensure_unique_team_name,
+)
 
 
 class IntegrityErrorHandlingMixin:
@@ -34,16 +42,16 @@ class SportSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
         if not value:
             raise serializers.ValidationError("Name cannot be blank.")
 
-        qs = Sport.objects.filter(name__iexact=value)
-        if self.instance is not None:
-            qs = qs.exclude(pk=self.instance.pk)
-        if qs.exists():
-            raise serializers.ValidationError("A sport with this name already exists.")
+        exclude_pk = self.instance.pk if self.instance is not None else None
+        try:
+            ensure_unique_sport_name(value, exclude_pk=exclude_pk)
+        except DuplicateSportError as exc:
+            raise serializers.ValidationError(str(exc))
         return value
 
 
 class ScopedUniqueNameMixin:
-    scoped_model = None
+    unique_check = None
 
     def validate(self, attrs):
         sport = attrs.get("sport", getattr(self.instance, "sport", None))
@@ -56,23 +64,18 @@ class ScopedUniqueNameMixin:
             attrs["name"] = name
 
         if sport and name:
-            qs = self.scoped_model.objects.filter(sport=sport, name__iexact=name)
-            if self.instance is not None:
-                qs = qs.exclude(pk=self.instance.pk)
-            if qs.exists():
-                model_label = self.scoped_model.__name__.lower()
-                raise serializers.ValidationError(
-                    {
-                        "name": f"A {model_label} with this name already exists for this sport."
-                    }
-                )
+            exclude_pk = self.instance.pk if self.instance is not None else None
+            try:
+                self.unique_check(sport, name, exclude_pk=exclude_pk)
+            except (DuplicateLeagueError, DuplicateTeamError) as exc:
+                raise serializers.ValidationError({"name": str(exc)})
         return attrs
 
 
 class LeagueSerializer(
     IntegrityErrorHandlingMixin, ScopedUniqueNameMixin, serializers.ModelSerializer
 ):
-    scoped_model = League
+    unique_check = staticmethod(ensure_unique_league_name)
 
     class Meta:
         model = League
@@ -83,7 +86,7 @@ class LeagueSerializer(
 class TeamSerializer(
     IntegrityErrorHandlingMixin, ScopedUniqueNameMixin, serializers.ModelSerializer
 ):
-    scoped_model = Team
+    unique_check = staticmethod(ensure_unique_team_name)
 
     class Meta:
         model = Team
