@@ -6,4 +6,4 @@ class IsOrganizerOrAdminForWrite(BasePermission):
     def has_permission(self, request, view) -> bool:
         if request.method in SAFE_METHODS:
             return True
-        return (IsOrganizer() | IsAdmin()).has_permission(request, view)
+        return (IsOrganizer | IsAdmin)().has_permission(request, view)
