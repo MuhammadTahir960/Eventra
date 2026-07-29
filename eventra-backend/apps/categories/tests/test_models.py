@@ -48,6 +48,35 @@ def test_slug_supports_unicode_names():
     assert category.slug
 
 
+def test_slug_regenerates_on_rename():
+    category = CategoryFactory(name="Live Music Events", slug="")
+    assert category.slug == "live-music-events"
+
+    category.name = "Live Comedy Events"
+    category.save()
+
+    assert category.slug == "live-comedy-events"
+
+
+def test_slug_unchanged_when_name_unchanged():
+    category = CategoryFactory(name="Live Music Events", slug="")
+    original_slug = category.slug
+
+    category.icon = "music-note"
+    category.save()
+
+    assert category.slug == original_slug
+
+
+def test_explicit_slug_still_regenerates_on_rename():
+    category = CategoryFactory(name="Live Music Events", slug="custom-slug")
+
+    category.name = "Live Comedy Events"
+    category.save()
+
+    assert category.slug == "live-comedy-events"
+
+
 # ==================================================
 # Soft delete manager behavior
 # ==================================================
