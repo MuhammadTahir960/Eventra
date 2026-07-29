@@ -3,14 +3,14 @@ from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.tokens import RefreshToken
 from apps.common.constants import Roles
-from apps.users.models import User
-from apps.users.serializers import (
+from ..factories import UserFactory
+from ..models import User
+from ..serializers import (
     ActiveUserTokenObtainPairSerializer,
     LogoutSerializer,
     RegisterSerializer,
     UserSerializer,
 )
-from ..factories import UserFactory
 
 pytestmark = pytest.mark.django_db
 
@@ -94,6 +94,21 @@ def test_register_serializer_duplicate_email_rejected_case_insensitive():
     serializer = RegisterSerializer(data=_register_payload(email="Taken@Example.com"))
     assert serializer.is_valid() is False
     assert "email" in serializer.errors
+
+
+def test_register_serializer_race_condition_integrity_error_becomes_validation_error():
+    UserFactory(email="taken@example.com")
+    serializer = RegisterSerializer()
+    with pytest.raises(serializers.ValidationError) as exc_info:
+        serializer.create(
+            {
+                "email": "taken@example.com",
+                "password": "a-genuinely-strong-pass-1",
+                "first_name": "New",
+                "last_name": "User",
+            }
+        )
+    assert "email" in exc_info.value.detail
 
 
 def test_register_serializer_rejects_invalid_email_format():
