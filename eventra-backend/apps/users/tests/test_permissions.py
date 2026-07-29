@@ -1,7 +1,12 @@
 import uuid
 import pytest
 from django.contrib.auth.models import AnonymousUser
-from apps.common.permissions import IsAdmin, IsOrganizer, IsOwnerOrAdmin
+from apps.common.permissions import (
+    IsAdmin,
+    IsAdminForWrite,
+    IsOrganizer,
+    IsOwnerOrAdmin,
+)
 from apps.common.constants import Roles
 from ..factories import UserFactory
 
@@ -80,6 +85,57 @@ def test_is_admin_allows_admin():
     user = UserFactory(role=Roles.ADMIN)
     request = FakeRequest(user)
     assert IsAdmin().has_permission(request, None) is True
+
+
+# ==================================================
+# IsAdminForWrite
+# ==================================================
+
+
+class FakeMethodRequest:
+    def __init__(self, user, method):
+        self.user = user
+        self.method = method
+
+
+@pytest.mark.django_db
+def test_is_admin_for_write_allows_safe_method_for_anonymous():
+    request = FakeMethodRequest(AnonymousUser(), method="GET")
+    assert IsAdminForWrite().has_permission(request, None) is True
+
+
+@pytest.mark.django_db
+def test_is_admin_for_write_allows_safe_method_for_any_authenticated_role():
+    user = UserFactory(role=Roles.ATTENDEE)
+    request = FakeMethodRequest(user, method="GET")
+    assert IsAdminForWrite().has_permission(request, None) is True
+
+
+@pytest.mark.django_db
+def test_is_admin_for_write_denies_write_method_for_anonymous():
+    request = FakeMethodRequest(AnonymousUser(), method="POST")
+    assert IsAdminForWrite().has_permission(request, None) is False
+
+
+@pytest.mark.django_db
+def test_is_admin_for_write_denies_write_method_for_attendee():
+    user = UserFactory(role=Roles.ATTENDEE)
+    request = FakeMethodRequest(user, method="POST")
+    assert IsAdminForWrite().has_permission(request, None) is False
+
+
+@pytest.mark.django_db
+def test_is_admin_for_write_denies_write_method_for_organizer():
+    user = UserFactory(role=Roles.ORGANIZER)
+    request = FakeMethodRequest(user, method="PATCH")
+    assert IsAdminForWrite().has_permission(request, None) is False
+
+
+@pytest.mark.django_db
+def test_is_admin_for_write_allows_write_method_for_admin():
+    user = UserFactory(role=Roles.ADMIN)
+    request = FakeMethodRequest(user, method="DELETE")
+    assert IsAdminForWrite().has_permission(request, None) is True
 
 
 # ==================================================
