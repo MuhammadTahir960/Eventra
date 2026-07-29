@@ -4,8 +4,8 @@ from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 from apps.common.constants import Roles
-from apps.users.models import User
-from apps.users.tokens import generate_verification_token
+from ..models import User
+from ..tokens import generate_verification_token
 from ..factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -179,6 +179,12 @@ class TestVerifyEmail:
         user.refresh_from_db()
         assert user.is_active is True
 
+    def test_throttled_after_rate_exceeded(self, api_client):
+        for _ in range(20):
+            api_client.get(self.url, {"token": "garbage"})
+        response = api_client.get(self.url, {"token": "garbage"})
+        assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+
 
 # ==================================================
 # POST /auth/login/
@@ -228,6 +234,18 @@ class TestLogin:
             {"email": "casesensitive@example.com", "password": "testpass123"},
         )
         assert response.status_code == status.HTTP_200_OK
+
+    def test_throttled_after_rate_exceeded(self, api_client):
+        for _ in range(10):
+            api_client.post(
+                self.url,
+                {"email": "nobody@example.com", "password": "whatever123"},
+            )
+        response = api_client.post(
+            self.url,
+            {"email": "nobody@example.com", "password": "whatever123"},
+        )
+        assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
 
 
 # ==================================================
