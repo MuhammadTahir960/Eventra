@@ -90,6 +90,25 @@ def test_update_still_detects_conflict_with_a_different_row():
     assert "name" in serializer.errors
 
 
+def test_race_condition_integrity_error_becomes_validation_error():
+    from rest_framework import serializers as drf_serializers
+
+    VenueFactory(name="Arena One", city="Nairobi")
+    serializer = VenueSerializer()
+    with pytest.raises(drf_serializers.ValidationError):
+        serializer.create(_venue_payload(name="Arena One", city="Nairobi"))
+
+
+def test_update_race_condition_integrity_error_becomes_validation_error():
+    from rest_framework import serializers as drf_serializers
+
+    VenueFactory(name="Arena One", city="Nairobi")
+    other = VenueFactory(name="Arena Two", city="Nairobi")
+    serializer = VenueSerializer()
+    with pytest.raises(drf_serializers.ValidationError):
+        serializer.update(other, {"name": "Arena One"})
+
+
 # ==================================================
 # VenueSerializer — field validation (min length / min value)
 # ==================================================
