@@ -1,5 +1,5 @@
-from django.db import IntegrityError, transaction
 from rest_framework import serializers
+from apps.common.serializers import IntegrityErrorHandlingMixin
 from .models import League, Sport, Team
 from .services import (
     DuplicateLeagueError,
@@ -11,27 +11,10 @@ from .services import (
 )
 
 
-class IntegrityErrorHandlingMixin:
-    def create(self, validated_data):
-        try:
-            with transaction.atomic():
-                return super().create(validated_data)
-        except IntegrityError as exc:
-            raise serializers.ValidationError(
-                {"name": "This name already exists in the given scope."}
-            ) from exc
-
-    def update(self, instance, validated_data):
-        try:
-            with transaction.atomic():
-                return super().update(instance, validated_data)
-        except IntegrityError as exc:
-            raise serializers.ValidationError(
-                {"name": "This name already exists in the given scope."}
-            ) from exc
-
-
 class SportSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
+    integrity_error_field = "name"
+    integrity_error_message = "This name already exists in the given scope."
+
     class Meta:
         model = Sport
         fields = ["id", "name"]
@@ -76,6 +59,8 @@ class LeagueSerializer(
     IntegrityErrorHandlingMixin, ScopedUniqueNameMixin, serializers.ModelSerializer
 ):
     unique_check = staticmethod(ensure_unique_league_name)
+    integrity_error_field = "name"
+    integrity_error_message = "This name already exists in the given scope."
 
     class Meta:
         model = League
@@ -87,6 +72,8 @@ class TeamSerializer(
     IntegrityErrorHandlingMixin, ScopedUniqueNameMixin, serializers.ModelSerializer
 ):
     unique_check = staticmethod(ensure_unique_team_name)
+    integrity_error_field = "name"
+    integrity_error_message = "This name already exists in the given scope."
 
     class Meta:
         model = Team
