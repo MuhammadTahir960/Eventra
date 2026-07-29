@@ -65,6 +65,25 @@ def test_unique_name_is_accepted():
     assert serializer.is_valid(), serializer.errors
 
 
+def test_race_condition_integrity_error_becomes_validation_error():
+    from rest_framework import serializers as drf_serializers
+
+    CategoryFactory(name="Music")
+    serializer = CategorySerializer()
+    with pytest.raises(drf_serializers.ValidationError):
+        serializer.create(_payload(name="Music"))
+
+
+def test_update_race_condition_integrity_error_becomes_validation_error():
+    from rest_framework import serializers as drf_serializers
+
+    CategoryFactory(name="Music")
+    other = CategoryFactory(name="Sports")
+    serializer = CategorySerializer()
+    with pytest.raises(drf_serializers.ValidationError):
+        serializer.update(other, {"name": "Music"})
+
+
 # ==================================================
 # Update behavior
 # ==================================================
