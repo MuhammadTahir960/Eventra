@@ -134,6 +134,17 @@ class TestUpdateCategory:
         response = client.patch(f"/categories/{category.pk}/", {"name": "New Name"})
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
+    def test_organizer_cannot_update(self, organizer):
+        category = CategoryFactory(name="Old Name")
+        client = auth_client(organizer)
+        response = client.patch(f"/categories/{category.pk}/", {"name": "New Name"})
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_anonymous_cannot_update(self, api_client):
+        category = CategoryFactory(name="Old Name")
+        response = api_client.patch(f"/categories/{category.pk}/", {"name": "New Name"})
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
     def test_update_into_duplicate_name_rejected(self, admin):
         CategoryFactory(name="Taken")
         category = CategoryFactory(name="Original")
@@ -180,10 +191,23 @@ class TestDestroyCategory:
         response = client.delete(f"/categories/{category.pk}/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
+    def test_organizer_cannot_delete(self, organizer):
+        category = CategoryFactory()
+        client = auth_client(organizer)
+        response = client.delete(f"/categories/{category.pk}/")
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
     def test_anonymous_cannot_delete(self, api_client):
         category = CategoryFactory()
         response = api_client.delete(f"/categories/{category.pk}/")
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_attendee_cannot_hard_delete(self, attendee):
+        category = CategoryFactory()
+        client = auth_client(attendee)
+        response = client.delete(f"/categories/{category.pk}/?hard=true")
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert Category.all_objects.filter(pk=category.pk).exists()
 
 
 # ==================================================
@@ -205,6 +229,17 @@ class TestRestoreCategory:
         client = auth_client(attendee)
         response = client.post(f"/categories/{category.pk}/restore/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_organizer_cannot_restore(self, organizer):
+        category = CategoryFactory(is_active=False)
+        client = auth_client(organizer)
+        response = client.post(f"/categories/{category.pk}/restore/")
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_anonymous_cannot_restore(self, api_client):
+        category = CategoryFactory(is_active=False)
+        response = api_client.post(f"/categories/{category.pk}/restore/")
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
     def test_restoring_already_active_returns_409(self, admin):
         category = CategoryFactory(is_active=True)
