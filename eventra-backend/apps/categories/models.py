@@ -24,10 +24,20 @@ class Category(SoftDeleteModel):
             ),
         ]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._loaded_name = self.name
+
     def save(self, *args, **kwargs):
-        if not self.slug:
+        is_new = self._state.adding
+        if is_new:
+            if not self.slug:
+                self.slug = slugify(self.name, allow_unicode=True) or str(self.id)
+        elif self.name != self._loaded_name:
             self.slug = slugify(self.name, allow_unicode=True) or str(self.id)
+
         super().save(*args, **kwargs)
+        self._loaded_name = self.name
 
     def __str__(self) -> str:
         return self.name
