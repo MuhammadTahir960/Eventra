@@ -113,12 +113,32 @@ class TestLeagueEndpoint:
         )
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
+    def test_organizer_cannot_create(self, organizer):
+        sport = SportFactory()
+        client = auth_client(organizer)
+        response = client.post(
+            self.url, {"sport": str(sport.pk), "name": "Premier League"}
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
     def test_anonymous_cannot_create(self, api_client):
         sport = SportFactory()
         response = api_client.post(
             self.url, {"sport": str(sport.pk), "name": "Premier League"}
         )
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_blank_name_rejected(self, admin):
+        sport = SportFactory()
+        client = auth_client(admin)
+        response = client.post(self.url, {"sport": str(sport.pk), "name": "   "})
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_no_update_or_delete_endpoints_exposed(self, admin):
+        league = LeagueFactory()
+        client = auth_client(admin)
+        response = client.patch(f"/leagues/{league.pk}/", {"name": "Renamed"})
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_duplicate_name_within_sport_rejected(self, admin):
         sport = SportFactory()
@@ -176,12 +196,24 @@ class TestTeamEndpoint:
         response = client.post(self.url, {"sport": str(sport.pk), "name": "Arsenal"})
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
+    def test_organizer_cannot_create(self, organizer):
+        sport = SportFactory()
+        client = auth_client(organizer)
+        response = client.post(self.url, {"sport": str(sport.pk), "name": "Arsenal"})
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
     def test_anonymous_cannot_create(self, api_client):
         sport = SportFactory()
         response = api_client.post(
             self.url, {"sport": str(sport.pk), "name": "Arsenal"}
         )
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_blank_name_rejected(self, admin):
+        sport = SportFactory()
+        client = auth_client(admin)
+        response = client.post(self.url, {"sport": str(sport.pk), "name": "   "})
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_duplicate_name_within_sport_rejected(self, admin):
         sport = SportFactory()
@@ -198,3 +230,24 @@ class TestTeamEndpoint:
         response = api_client.get(self.url, {"sport": str(sport_a.pk)})
         names = [item["name"] for item in results(response)]
         assert names == ["Team A"]
+
+    def test_filter_by_nonexistent_sport_returns_empty(self, api_client):
+        import uuid
+
+        TeamFactory()
+        response = api_client.get(self.url, {"sport": str(uuid.uuid4())})
+        assert results(response) == []
+
+    def test_invalid_sport_filter_value_returns_400(self, api_client):
+        TeamFactory()
+        response = api_client.get(self.url, {"sport": "not-a-uuid"})
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_no_update_or_delete_endpoints_exposed(self, admin):
+        team = TeamFactory()
+        client = auth_client(admin)
+        response = client.patch(f"/teams/{team.pk}/", {"name": "Renamed"})
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+        response = client.delete(f"/teams/{team.pk}/")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
