@@ -24,6 +24,14 @@ def test_blank_sport_name_rejected():
     assert "name" in serializer.errors
 
 
+def test_validate_name_blank_guard_is_defensive_but_unreachable_via_is_valid():
+    from rest_framework import serializers as drf_serializers
+
+    serializer = SportSerializer()
+    with pytest.raises(drf_serializers.ValidationError, match="cannot be blank"):
+        serializer.validate_name("   ")
+
+
 def test_duplicate_sport_name_rejected():
     SportFactory(name="Football")
     serializer = SportSerializer(data={"name": "Football"})
@@ -72,6 +80,15 @@ def test_blank_league_name_rejected():
     serializer = LeagueSerializer(data={"sport": sport.pk, "name": "   "})
     assert serializer.is_valid() is False
     assert "name" in serializer.errors
+
+
+def test_scoped_unique_name_mixin_blank_guard_is_defensive_but_unreachable_via_is_valid():
+    from rest_framework import serializers as drf_serializers
+
+    sport = SportFactory()
+    serializer = LeagueSerializer()
+    with pytest.raises(drf_serializers.ValidationError, match="cannot be blank"):
+        serializer.validate({"sport": sport, "name": "   "})
 
 
 def test_duplicate_league_name_within_sport_rejected():
