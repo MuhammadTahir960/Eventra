@@ -1,7 +1,10 @@
-from django.db.models import Q
-from django.utils.text import slugify
 from rest_framework import serializers
 from .models import Category
+from .services import (
+    DuplicateCategoryError,
+    InactiveDuplicateCategoryError,
+    ensure_unique_category_name,
+)
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -13,24 +16,11 @@ class CategorySerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         name = attrs.get("name", getattr(self.instance, "name", None))
         if name:
-            slug = slugify(name, allow_unicode=True)
-            qs = Category.all_objects.filter(
-                Q(name__iexact=name) | Q(slug__iexact=slug)
-            )
-            if self.instance is not None:
-                qs = qs.exclude(pk=self.instance.pk)
-            existing = qs.first()
-            if existing is not None:
-                if not existing.is_active:
-                    raise serializers.ValidationError(
-                        {
-                            "name": (
-                                "A category with this name or slug already exists (inactive). "
-                                "Please restore the existing category."
-                            )
-                        }
-                    )
-                raise serializers.ValidationError(
-                    {"name": "A category with this name or slug already exists."}
-                )
+            exclude_pk = self.instance.pk if self.instance is not None else None
+            try:
+                ensure_unique_category_name(name, exclude_pk=exclude_pk)
+            except InactiveDuplicateCategoryError as exc:
+                raise serializers.ValidationError({"name": str(exc)})
+            except DuplicateCategoryError as exc:
+                raise serializers.ValidationError({"name": str(exc)})
         return attrs
