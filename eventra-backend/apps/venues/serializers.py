@@ -1,8 +1,12 @@
 from rest_framework import serializers
+from apps.common.serializers import IntegrityErrorHandlingMixin
 from .models import Venue, Seat
 
 
-class VenueSerializer(serializers.ModelSerializer):
+class VenueSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
+    integrity_error_field = "name"
+    integrity_error_message = "A venue with this name already exists in this city."
+
     class Meta:
         model = Venue
         fields = [
