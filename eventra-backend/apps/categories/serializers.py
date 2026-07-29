@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from apps.common.serializers import IntegrityErrorHandlingMixin
 from .models import Category
 from .services import (
     DuplicateCategoryError,
@@ -7,7 +8,10 @@ from .services import (
 )
 
 
-class CategorySerializer(serializers.ModelSerializer):
+class CategorySerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
+    integrity_error_field = "name"
+    integrity_error_message = "A category with this name or slug already exists."
+
     class Meta:
         model = Category
         fields = ["id", "name", "slug", "icon", "sort_order"]
