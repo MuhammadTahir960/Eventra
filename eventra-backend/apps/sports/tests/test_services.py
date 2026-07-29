@@ -71,9 +71,7 @@ def test_league_name_taken_in_different_sport_does_not_conflict():
 def test_league_exclude_pk_allows_keeping_same_name():
     sport = SportFactory()
     league = LeagueFactory(sport=sport, name="Premier League")
-    ensure_unique_league_name(
-        sport, "Premier League", exclude_pk=league.pk
-    )
+    ensure_unique_league_name(sport, "Premier League", exclude_pk=league.pk)
 
 
 # ==================================================
