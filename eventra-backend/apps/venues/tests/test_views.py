@@ -171,6 +171,11 @@ class TestUpdateVenue:
         response = client.patch(f"/venues/{venue.pk}/", {"name": "New Name"})
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
+    def test_anonymous_cannot_update(self, api_client):
+        venue = VenueFactory(name="Old Name")
+        response = api_client.patch(f"/venues/{venue.pk}/", {"name": "New Name"})
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
     def test_update_into_duplicate_name_and_city_rejected(self, admin):
         VenueFactory(name="Taken Name", city="Nairobi")
         venue = VenueFactory(name="Original Name", city="Nairobi")
@@ -233,6 +238,13 @@ class TestDestroyVenue:
         response = api_client.delete(f"/venues/{venue.pk}/")
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
+    def test_attendee_cannot_hard_delete(self, attendee):
+        venue = VenueFactory()
+        client = auth_client(attendee)
+        response = client.delete(f"/venues/{venue.pk}/?hard=true")
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert Venue.all_objects.filter(pk=venue.pk).exists()
+
 
 # ==================================================
 # POST /venues/{id}/restore/
@@ -259,6 +271,11 @@ class TestRestoreVenue:
         client = auth_client(attendee)
         response = client.post(f"/venues/{venue.pk}/restore/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_anonymous_cannot_restore(self, api_client):
+        venue = VenueFactory(is_active=False)
+        response = api_client.post(f"/venues/{venue.pk}/restore/")
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
     def test_restoring_already_active_venue_returns_409(self, admin):
         venue = VenueFactory(is_active=True)
