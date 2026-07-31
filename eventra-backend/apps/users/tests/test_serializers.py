@@ -2,9 +2,10 @@ import pytest
 from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.tokens import RefreshToken
-from apps.users.factories import UserFactory
-from apps.users.models import User
-from apps.users.serializers import (
+from apps.common.constants import Roles
+from ..factories import UserFactory
+from ..models import User
+from ..serializers import (
     ActiveUserTokenObtainPairSerializer,
     LogoutSerializer,
     RegisterSerializer,
@@ -95,6 +96,21 @@ def test_register_serializer_duplicate_email_rejected_case_insensitive():
     assert "email" in serializer.errors
 
 
+def test_register_serializer_race_condition_integrity_error_becomes_validation_error():
+    UserFactory(email="taken@example.com")
+    serializer = RegisterSerializer()
+    with pytest.raises(serializers.ValidationError) as exc_info:
+        serializer.create(
+            {
+                "email": "taken@example.com",
+                "password": "a-genuinely-strong-pass-1",
+                "first_name": "New",
+                "last_name": "User",
+            }
+        )
+    assert "email" in exc_info.value.detail
+
+
 def test_register_serializer_rejects_invalid_email_format():
     serializer = RegisterSerializer(data=_register_payload(email="not-an-email"))
     assert serializer.is_valid() is False
@@ -116,7 +132,7 @@ def test_register_serializer_rejects_last_name_over_max_length():
 def test_register_serializer_ignores_privileged_field_injection():
     payload = _register_payload(
         email="attacker@example.com",
-        role=User.Roles.ADMIN,
+        role=Roles.ADMIN,
         is_staff=True,
         is_superuser=True,
         is_active=True,
@@ -130,7 +146,7 @@ def test_register_serializer_ignores_privileged_field_injection():
     assert "is_active" not in serializer.validated_data
 
     user = serializer.save()
-    assert user.role == User.Roles.ATTENDEE
+    assert user.role == Roles.ATTENDEE
     assert user.is_staff is False
     assert user.is_superuser is False
     assert user.is_active is False
@@ -298,17 +314,17 @@ def test_user_serializer_exposes_expected_fields():
     assert data["email"] == user.email
     assert data["first_name"] == "Ada"
     assert data["last_name"] == "Lovelace"
-    assert data["role"] == User.Roles.ATTENDEE
+    assert data["role"] == Roles.ATTENDEE
     assert "password" not in data
 
 
 def test_user_serializer_email_and_role_are_read_only():
-    user = UserFactory(email="original@example.com", role=User.Roles.ATTENDEE)
+    user = UserFactory(email="original@example.com", role=Roles.ATTENDEE)
     serializer = UserSerializer(
         user,
         data={
             "email": "hacked@example.com",
-            "role": User.Roles.ADMIN,
+            "role": Roles.ADMIN,
             "first_name": "Changed",
         },
         partial=True,
@@ -317,5 +333,5 @@ def test_user_serializer_email_and_role_are_read_only():
     updated = serializer.save()
 
     assert updated.email == "original@example.com"
-    assert updated.role == User.Roles.ATTENDEE
+    assert updated.role == Roles.ATTENDEE
     assert updated.first_name == "Changed"

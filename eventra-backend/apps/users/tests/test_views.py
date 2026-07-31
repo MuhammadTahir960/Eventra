@@ -3,9 +3,10 @@ from django.core import mail
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
-from apps.users.factories import UserFactory
-from apps.users.models import User
-from apps.users.tokens import generate_verification_token
+from apps.common.constants import Roles
+from ..models import User
+from ..tokens import generate_verification_token
+from ..factories import UserFactory
 
 pytestmark = pytest.mark.django_db
 
@@ -87,7 +88,7 @@ class TestRegister:
             "password": "a-genuinely-strong-pass-1",
             "first_name": "Att",
             "last_name": "Acker",
-            "role": User.Roles.ADMIN,
+            "role": Roles.ADMIN,
             "is_staff": True,
             "is_superuser": True,
         }
@@ -95,7 +96,7 @@ class TestRegister:
         assert response.status_code == status.HTTP_201_CREATED
 
         user = User.objects.get(email="attacker@example.com")
-        assert user.role == User.Roles.ATTENDEE
+        assert user.role == Roles.ATTENDEE
         assert user.is_staff is False
         assert user.is_superuser is False
 
@@ -178,6 +179,12 @@ class TestVerifyEmail:
         user.refresh_from_db()
         assert user.is_active is True
 
+    def test_throttled_after_rate_exceeded(self, api_client):
+        for _ in range(20):
+            api_client.get(self.url, {"token": "garbage"})
+        response = api_client.get(self.url, {"token": "garbage"})
+        assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+
 
 # ==================================================
 # POST /auth/login/
@@ -227,6 +234,18 @@ class TestLogin:
             {"email": "casesensitive@example.com", "password": "testpass123"},
         )
         assert response.status_code == status.HTTP_200_OK
+
+    def test_throttled_after_rate_exceeded(self, api_client):
+        for _ in range(10):
+            api_client.post(
+                self.url,
+                {"email": "nobody@example.com", "password": "whatever123"},
+            )
+        response = api_client.post(
+            self.url,
+            {"email": "nobody@example.com", "password": "whatever123"},
+        )
+        assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
 
 
 # ==================================================
@@ -358,15 +377,15 @@ class TestMe:
         assert user.first_name == "New"
 
     def test_patch_cannot_change_email_or_role(self):
-        user = UserFactory(email="original@example.com", role=User.Roles.ATTENDEE)
+        user = UserFactory(email="original@example.com", role=Roles.ATTENDEE)
         client = auth_client(user)
         response = client.patch(
-            self.url, {"email": "hacked@example.com", "role": User.Roles.ADMIN}
+            self.url, {"email": "hacked@example.com", "role": Roles.ADMIN}
         )
         assert response.status_code == status.HTTP_200_OK
         user.refresh_from_db()
         assert user.email == "original@example.com"
-        assert user.role == User.Roles.ATTENDEE
+        assert user.role == Roles.ATTENDEE
 
     def test_cannot_see_or_edit_another_users_profile(self):
         UserFactory(email="victim@example.com", first_name="Victim")

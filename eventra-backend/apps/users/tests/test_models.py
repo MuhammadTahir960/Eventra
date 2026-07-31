@@ -1,7 +1,8 @@
 import pytest
 from django.db import IntegrityError
-from apps.users.factories import UserFactory
+from apps.common.constants import Roles
 from apps.users.models import User
+from ..factories import UserFactory
 
 pytestmark = pytest.mark.django_db
 
@@ -41,7 +42,7 @@ def test_create_user_rejects_malformed_email():
 
 def test_create_user_defaults():
     user = User.objects.create_user(email="bob@example.com", password="s3cure-pass!")
-    assert user.role == User.Roles.ATTENDEE
+    assert user.role == Roles.ATTENDEE
     assert user.is_active is False
     assert user.is_email_verified is False
     assert user.is_staff is False
@@ -72,7 +73,7 @@ def test_create_superuser_grants_full_access():
     assert admin.is_staff is True
     assert admin.is_superuser is True
     assert admin.is_active is True
-    assert admin.role == User.Roles.ADMIN
+    assert admin.role == Roles.ADMIN
 
 
 def test_create_superuser_rejects_explicit_is_staff_false():

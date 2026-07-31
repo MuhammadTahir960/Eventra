@@ -4,6 +4,7 @@ from django.contrib.auth.base_user import BaseUserManager
 from django.core.exceptions import ValidationError
 from django.core.validators import EmailValidator
 from django.db import models
+from apps.common.constants import Roles
 
 
 class UserManager(BaseUserManager):
@@ -29,7 +30,7 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault("is_superuser", True)
         # superuser shouldn't be gated by email verification
         extra_fields.setdefault("is_active", True)
-        extra_fields.setdefault("role", User.Roles.ADMIN)
+        extra_fields.setdefault("role", Roles.ADMIN)
 
         if extra_fields.get("is_staff") is not True:
             raise ValueError("Superuser must have is_staff=True.")
@@ -40,11 +41,6 @@ class UserManager(BaseUserManager):
 
 
 class User(AbstractBaseUser, PermissionsMixin):
-    class Roles(models.TextChoices):
-        ADMIN = "admin", "Admin"
-        ORGANIZER = "organizer", "Organizer"
-        ATTENDEE = "attendee", "Attendee"
-
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     email = models.EmailField(unique=True, db_index=True)

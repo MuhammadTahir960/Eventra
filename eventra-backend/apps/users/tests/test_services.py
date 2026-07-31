@@ -1,13 +1,14 @@
 import pytest
 from django.core import mail
-from apps.users.factories import UserFactory
-from apps.users.serializers import RegisterSerializer
-from apps.users.services import (
+from ..models import User
+from ..serializers import RegisterSerializer
+from ..tokens import generate_verification_token
+from ..factories import UserFactory
+from ..services import (
     register_user,
     send_verification_email,
     verify_user_email,
 )
-from apps.users.tokens import generate_verification_token
 
 
 @pytest.fixture(autouse=True)
@@ -72,6 +73,33 @@ def test_register_user_creates_user_and_sends_email_after_commit():
     assert user.is_active is False
     assert len(mail.outbox) == 1
     assert mail.outbox[0].to == [user.email]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_register_user_survives_email_send_failure(caplog):
+    from unittest.mock import patch
+
+    serializer = RegisterSerializer(
+        data={
+            "email": "resilient@example.com",
+            "password": "a-genuinely-strong-pass-1",
+            "first_name": "New",
+            "last_name": "User",
+        }
+    )
+    assert serializer.is_valid(), serializer.errors
+
+    with patch(
+        "apps.users.services.send_verification_email",
+        side_effect=RuntimeError("SMTP is down"),
+    ):
+        with caplog.at_level("ERROR"):
+            user = register_user(serializer)
+
+    assert user.pk is not None
+    assert User.objects.filter(email="resilient@example.com").exists()
+    assert len(mail.outbox) == 0
+    assert "Failed to send verification email" in caplog.text
 
 
 # ==================================================
