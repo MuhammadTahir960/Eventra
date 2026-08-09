@@ -61,7 +61,11 @@ class EventFilterSet(django_filters.FilterSet):
     def filter_search(self, queryset, name, value):
         return queryset.annotate(
             search=SearchVector("title", "description", config=EVENT_SEARCH_CONFIG)
-        ).filter(search=SearchQuery(value, search_type="websearch"))
+        ).filter(
+            search=SearchQuery(
+                value, config=EVENT_SEARCH_CONFIG, search_type="websearch"
+            )
+        )
 
 
 class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
@@ -205,6 +209,11 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
     def ticket_tier_update(self, request, pk=None, tier_id=None):
         event = self.get_object()
         tier = get_object_or_404(TicketTier, pk=tier_id, event=event)
+
+        if event.status == Event.Status.COMPLETED:
+            return Response(
+                {"detail": "Event is completed."}, status=status.HTTP_409_CONFLICT
+            )
 
         serializer = TicketTierSerializer(
             tier,
