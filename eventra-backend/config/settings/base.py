@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 from pathlib import Path
 import environ
 from datetime import timedelta
+from celery.schedules import crontab
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -48,6 +49,7 @@ INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
+    "django.contrib.postgres",
     "daphne",
     "channels",
     "django.contrib.staticfiles",
@@ -150,11 +152,29 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+MEDIA_URL = "media/"
+MEDIA_ROOT = BASE_DIR / "mediafiles"
+
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@eventra.local")
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
 BACKEND_BASE_URL = env("BACKEND_BASE_URL", default="http://localhost:8000")
 
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[])
+
+
+CELERY_BROKER_URL = env("REDIS_URL", default="redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = env("REDIS_URL", default="redis://localhost:6379/0")
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+
+CELERY_BEAT_SCHEDULE = {
+    "complete-past-events": {
+        "task": "apps.events.tasks.complete_past_events",
+        "schedule": crontab(minute=0),
+    },
+}
 
 
 REST_FRAMEWORK = {
@@ -176,6 +196,7 @@ REST_FRAMEWORK = {
         "auth-login": "10/min",
         "auth-register": "5/hour",
         "auth-verify-email": "20/hour",
+        "auth-password-reset": "5/hour",
         "anon": "100/min",
         "user": "300/min",
     },
