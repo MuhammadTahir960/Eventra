@@ -79,9 +79,33 @@ class LogoutSerializer(serializers.Serializer):
 
     def save(self, **kwargs):
         try:
-            RefreshToken(self.validated_data["refresh"]).blacklist()
+            token = RefreshToken(self.validated_data["refresh"])
         except TokenError as e:
             raise serializers.ValidationError({"refresh": str(e)})
+
+        request = self.context.get("request")
+        if request is not None and str(token.get("user_id")) != str(request.user.id):
+            raise serializers.ValidationError(
+                {"refresh": "This token does not belong to the current user."}
+            )
+
+        try:
+            token.blacklist()
+        except TokenError as e:
+            raise serializers.ValidationError({"refresh": str(e)})
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True, max_length=128)
+
+    def validate_new_password(self, value):
+        validate_password(value)
+        return value
 
 
 class UserSerializer(serializers.ModelSerializer):

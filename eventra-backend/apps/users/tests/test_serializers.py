@@ -1,6 +1,7 @@
 import pytest
+from unittest.mock import patch
 from rest_framework import serializers
-from rest_framework_simplejwt.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.exceptions import AuthenticationFailed, TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from apps.common.constants import Roles
 from ..factories import UserFactory
@@ -231,8 +232,6 @@ def test_login_serializer_error_message_does_not_leak_account_existence():
 
 
 def test_login_serializer_nonexistent_email_still_runs_a_password_check():
-    from unittest.mock import patch
-
     with patch.object(User, "set_password") as mocked_set_password:
         serializer = ActiveUserTokenObtainPairSerializer(
             data={"email": "nobody@example.com", "password": "whatever123"}
@@ -301,6 +300,22 @@ def test_logout_serializer_rejects_already_blacklisted_token():
     second.is_valid()
     with pytest.raises(Exception):
         second.save()
+
+
+def test_logout_serializer_wraps_blacklist_call_error_as_validation_error():
+    user = UserFactory()
+    refresh = RefreshToken.for_user(user)
+    serializer = LogoutSerializer(data={"refresh": str(refresh)})
+    assert serializer.is_valid(), serializer.errors
+
+    with patch(
+        "rest_framework_simplejwt.tokens.RefreshToken.blacklist",
+        side_effect=TokenError("Token is blacklisted"),
+    ):
+        with pytest.raises(serializers.ValidationError) as exc_info:
+            serializer.save()
+
+    assert "refresh" in exc_info.value.detail
 
 
 # ==================================================

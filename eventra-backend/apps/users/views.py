@@ -2,11 +2,18 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
-from .services import register_user, verify_user_email
+from .services import (
+    register_user,
+    request_password_reset,
+    reset_password,
+    verify_user_email,
+)
 from .serializers import (
     RegisterSerializer,
     ActiveUserTokenObtainPairSerializer,
     LogoutSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
     UserSerializer,
 )
 
@@ -73,3 +80,47 @@ class MeView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         return self.request.user
+
+
+class PasswordResetRequestView(generics.GenericAPIView):
+    serializer_class = PasswordResetRequestSerializer
+    permission_classes = [permissions.AllowAny]
+    throttle_scope = "auth-password-reset"
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        request_password_reset(serializer.validated_data["email"])
+        return Response(
+            {
+                "detail": (
+                    "If an account with that email exists, a password "
+                    "reset link has been sent."
+                )
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class PasswordResetConfirmView(generics.GenericAPIView):
+    serializer_class = PasswordResetConfirmSerializer
+    permission_classes = [permissions.AllowAny]
+    throttle_scope = "auth-password-reset"
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        success = reset_password(
+            serializer.validated_data["token"],
+            serializer.validated_data["new_password"],
+        )
+        if not success:
+            return Response(
+                {"detail": "Invalid or expired reset token."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(
+            {"detail": "Password has been reset successfully."},
+            status=status.HTTP_200_OK,
+        )
