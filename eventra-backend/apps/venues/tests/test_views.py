@@ -1,9 +1,14 @@
 import pytest
+import uuid
+from unittest.mock import patch
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 from apps.common.constants import Roles
 from apps.users.factories import UserFactory
+from apps.venues.services import DuplicateSeatError
+from apps.events.factories import EventFactory, TicketTierFactory
+from apps.seating.factories import EventSeatFactory
 from tests.helpers import results
 from ..models import Venue
 from ..factories import SeatFactory, VenueFactory
@@ -92,8 +97,6 @@ class TestRetrieveVenue:
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_retrieve_nonexistent_venue_returns_404(self, api_client):
-        import uuid
-
         response = api_client.get(f"/venues/{uuid.uuid4()}/")
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
@@ -183,6 +186,12 @@ class TestUpdateVenue:
         response = client.patch(f"/venues/{venue.pk}/", {"name": "Taken Name"})
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_put_is_not_allowed_even_for_admin(self, admin):
+        venue = VenueFactory(name="Old Name")
+        client = auth_client(admin)
+        response = client.put(f"/venues/{venue.pk}/", _venue_payload())
+        assert response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
+
 
 # ==================================================
 # DELETE /venues/{id}/ (soft + hard delete)
@@ -199,6 +208,14 @@ class TestDestroyVenue:
         assert venue.is_active is False
         assert Venue.all_objects.filter(pk=venue.pk).exists()
 
+    def test_soft_delete_bumps_updated_at(self, admin):
+        venue = VenueFactory()
+        original_updated_at = venue.updated_at
+        client = auth_client(admin)
+        client.delete(f"/venues/{venue.pk}/")
+        venue.refresh_from_db()
+        assert venue.updated_at > original_updated_at
+
     def test_admin_hard_deletes_with_query_param(self, admin):
         venue = VenueFactory()
         client = auth_client(admin)
@@ -213,8 +230,6 @@ class TestDestroyVenue:
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_destroy_nonexistent_venue_returns_404(self, admin):
-        import uuid
-
         client = auth_client(admin)
         response = client.delete(f"/venues/{uuid.uuid4()}/")
         assert response.status_code == status.HTTP_404_NOT_FOUND
@@ -260,6 +275,14 @@ class TestRestoreVenue:
         venue.refresh_from_db()
         assert venue.is_active is True
 
+    def test_restore_bumps_updated_at(self, admin):
+        venue = VenueFactory(is_active=False)
+        original_updated_at = venue.updated_at
+        client = auth_client(admin)
+        client.post(f"/venues/{venue.pk}/restore/")
+        venue.refresh_from_db()
+        assert venue.updated_at > original_updated_at
+
     def test_organizer_cannot_restore(self, organizer):
         venue = VenueFactory(is_active=False)
         client = auth_client(organizer)
@@ -284,8 +307,6 @@ class TestRestoreVenue:
         assert response.status_code == status.HTTP_409_CONFLICT
 
     def test_restoring_nonexistent_venue_returns_404(self, admin):
-        import uuid
-
         client = auth_client(admin)
         response = client.post(f"/venues/{uuid.uuid4()}/restore/")
         assert response.status_code == status.HTTP_404_NOT_FOUND
@@ -375,8 +396,6 @@ class TestVenueSeats:
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_seats_for_nonexistent_venue_returns_404(self, organizer):
-        import uuid
-
         client = auth_client(organizer)
         response = client.get(f"/venues/{uuid.uuid4()}/seats/")
         assert response.status_code == status.HTTP_404_NOT_FOUND
@@ -402,6 +421,20 @@ class TestVenueSeats:
         assert venue.seats.count() == 10
         assert not venue.seats.filter(section="Original").exists()
 
+    def test_admin_reseed_blocked_when_seat_in_use_by_an_event(self, admin):
+        venue = VenueFactory(capacity=100)
+        seat = SeatFactory(venue=venue, section="Original")
+        event = EventFactory(venue=venue)
+        tier = TicketTierFactory(event=event)
+        EventSeatFactory(event=event, seat=seat, ticket_tier=tier)
+
+        client = auth_client(admin)
+        response = client.post(
+            f"/venues/{venue.pk}/seats/", self._seat_template_payload(), format="json"
+        )
+        assert response.status_code == status.HTTP_409_CONFLICT
+        assert venue.seats.count() == 1
+
     def test_capacity_exceeded_returns_409(self, organizer):
         venue = VenueFactory(capacity=5)
         client = auth_client(organizer)
@@ -412,9 +445,6 @@ class TestVenueSeats:
         assert venue.seats.count() == 0
 
     def test_duplicate_seat_error_from_service_maps_to_409(self, organizer):
-        from unittest.mock import patch
-        from apps.venues.services import DuplicateSeatError
-
         venue = VenueFactory(capacity=100)
         client = auth_client(organizer)
         with patch(
