@@ -6,12 +6,14 @@ from rest_framework.response import Response
 from apps.common.constants import Roles
 from apps.common.mixins import SoftDeleteDestroyMixin, SoftDeleteRestoreMixin
 from apps.common.permissions import IsAdmin, IsAdminForWrite, IsOrganizer
+from apps.events.services import find_blocking_upcoming_event
 from .models import Venue
 from .serializers import BulkSeatTemplateSerializer, SeatSerializer, VenueSerializer
 from .services import (
     CapacityExceededError,
     DuplicateSeatError,
     SeatTemplateExistsError,
+    SeatTemplateInUseError,
     bulk_create_seat_template,
 )
 
@@ -40,11 +42,25 @@ class VenueViewSet(
                                     first time only — admin required to re-seed afterward)
     """
 
-    queryset = Venue.objects.all()
     serializer_class = VenueSerializer
     permission_classes = [IsAdminForWrite]
     filter_backends = [DjangoFilterBackend]
     filterset_class = VenueFilterSet
+    http_method_names = ["get", "post", "patch", "delete"]
+
+    def get_queryset(self):
+        user = self.request.user
+        include_inactive = str(
+            self.request.query_params.get("include_inactive", "")
+        ).lower() in ("1", "true", "yes")
+        if (
+            include_inactive
+            and user
+            and user.is_authenticated
+            and user.role == Roles.ADMIN
+        ):
+            return Venue.all_objects.all()
+        return Venue.objects.all()
 
     def perform_restore_guard(self, instance):
         if Venue.objects.filter(
@@ -60,27 +76,18 @@ class VenueViewSet(
             )
         return None
 
-    # TODO(week4): return a 409 here if this venue has any event with a
-    # future start_datetime that isn't pending_approval/rejected/cancelled.
-    # Deferred since apps.events doesn't exist yet.
-    #
-    # def perform_hard_delete_guard(self, instance):
-    #     from django.utils import timezone
-    #     from apps.events.models import Event
-    #     blocking = Event.objects.filter(
-    #         venue_id=instance.pk,
-    #         start_datetime__gt=timezone.now(),
-    #     ).exclude(status__in=["pending_approval", "rejected", "cancelled"])
-    #     if blocking.exists():
-    #         return Response(
-    #             {
-    #                    "detail": (
-    #                       "Cannot hard-delete: referenced by {blocking.count()} upcoming event(s)"
-    #                    )
-    #             },
-    #             status=status.HTTP_409_CONFLICT,
-    #         )
-    #     return None
+    def perform_hard_delete_guard(self, instance):
+        if find_blocking_upcoming_event(venue_id=instance.pk):
+            return Response(
+                {
+                    "detail": (
+                        "Cannot hard-delete: this venue is referenced by one "
+                        "or more upcoming, non-cancelled events."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        return None
 
     @action(detail=True, methods=["get", "post"], url_path="seats")
     def seats(self, request, pk=None):
@@ -101,6 +108,8 @@ class VenueViewSet(
                 allow_reseed=(request.user.role == Roles.ADMIN),
             )
         except SeatTemplateExistsError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except SeatTemplateInUseError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         except CapacityExceededError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)

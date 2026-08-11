@@ -1,7 +1,19 @@
+from django.core.exceptions import FieldDoesNotExist
 from django.db import transaction
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+
+
+def _save_fields(instance, *fields):
+    fields = list(fields)
+    try:
+        instance._meta.get_field("updated_at")
+    except FieldDoesNotExist:
+        pass
+    else:
+        fields.append("updated_at")
+    instance.save(update_fields=fields)
 
 
 class SoftDeleteDestroyMixin:
@@ -25,7 +37,7 @@ class SoftDeleteDestroyMixin:
             if not instance.is_active:
                 return Response(status=status.HTTP_404_NOT_FOUND)
             instance.is_active = False
-            instance.save(update_fields=["is_active"])
+            _save_fields(instance, "is_active")
             return Response(status=status.HTTP_204_NO_CONTENT)
 
         guard_response = self.perform_hard_delete_guard(instance)
@@ -61,6 +73,6 @@ class SoftDeleteRestoreMixin:
             return guard_response
 
         instance.is_active = True
-        instance.save(update_fields=["is_active"])
+        _save_fields(instance, "is_active")
         serializer = self.get_serializer(instance)
         return Response(serializer.data, status=status.HTTP_200_OK)

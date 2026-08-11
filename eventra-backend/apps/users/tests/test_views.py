@@ -1,11 +1,12 @@
 import pytest
+from datetime import timedelta
 from django.core import mail
 from rest_framework import status
 from rest_framework.test import APIClient
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
 from apps.common.constants import Roles
 from ..models import User
-from ..tokens import generate_verification_token
+from ..tokens import generate_password_reset_token, generate_verification_token
 from ..factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -323,6 +324,31 @@ class TestLogout:
         response = api_client.post(self.url, {"refresh": "irrelevant"})
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
+    def test_logout_rejects_another_users_refresh_token(self):
+        victim = UserFactory(is_active=True)
+        attacker = UserFactory(is_active=True)
+        victims_refresh = RefreshToken.for_user(victim)
+        client = auth_client(attacker)
+
+        response = client.post(self.url, {"refresh": str(victims_refresh)})
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "refresh" in response.data
+        replay = APIClient().post("/auth/refresh/", {"refresh": str(victims_refresh)})
+        assert replay.status_code == status.HTTP_200_OK
+
+    def test_logout_rejects_already_blacklisted_token(self):
+        user = UserFactory(is_active=True)
+        refresh = RefreshToken.for_user(user)
+        client = auth_client(user)
+
+        first = client.post(self.url, {"refresh": str(refresh)})
+        assert first.status_code == status.HTTP_205_RESET_CONTENT
+
+        second = client.post(self.url, {"refresh": str(refresh)})
+        assert second.status_code == status.HTTP_400_BAD_REQUEST
+        assert "refresh" in second.data
+
 
 # ==================================================
 # GET/PATCH /auth/me/
@@ -342,10 +368,6 @@ class TestMe:
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
     def test_expired_access_token_rejected(self, api_client):
-        from datetime import timedelta
-
-        from rest_framework_simplejwt.tokens import AccessToken
-
         user = UserFactory(is_active=True)
         access = AccessToken.for_user(user)
         access.set_exp(lifetime=timedelta(seconds=-1))
@@ -396,3 +418,119 @@ class TestMe:
 
         assert response.data["email"] == "attacker@example.com"
         assert response.data["email"] != "victim@example.com"
+
+
+# ==================================================
+# POST /auth/password-reset/, POST /auth/password-reset/confirm/
+# ==================================================
+
+
+class TestPasswordResetRequest:
+    url = "/auth/password-reset/"
+
+    def test_request_for_existing_user_sends_email_and_returns_200(self, api_client):
+        user = UserFactory()
+        response = api_client.post(self.url, {"email": user.email})
+        assert response.status_code == status.HTTP_200_OK
+        assert len(mail.outbox) == 1
+        assert mail.outbox[0].to == [user.email]
+
+    def test_request_for_unknown_email_returns_same_200_and_sends_nothing(
+        self, api_client
+    ):
+        response = api_client.post(self.url, {"email": "nobody@example.com"})
+        assert response.status_code == status.HTTP_200_OK
+        assert len(mail.outbox) == 0
+
+    def test_response_body_identical_for_existing_and_unknown_email(self, api_client):
+        user = UserFactory()
+        known = api_client.post(self.url, {"email": user.email})
+        unknown = api_client.post(self.url, {"email": "nobody@example.com"})
+        assert known.data == unknown.data
+
+    def test_invalid_email_format_returns_400(self, api_client):
+        response = api_client.post(self.url, {"email": "not-an-email"})
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_missing_email_returns_400(self, api_client):
+        response = api_client.post(self.url, {})
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_throttled_after_rate_exceeded(self, api_client):
+        for _ in range(5):
+            api_client.post(self.url, {"email": "nobody@example.com"})
+        response = api_client.post(self.url, {"email": "nobody@example.com"})
+        assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+
+
+class TestPasswordResetConfirm:
+    url = "/auth/password-reset/confirm/"
+
+    def test_valid_token_resets_password(self, api_client):
+        user = UserFactory()
+        user.set_password("original-strong-pass-1")
+        user.save()
+        token = generate_password_reset_token(user)
+
+        response = api_client.post(
+            self.url, {"token": token, "new_password": "a-new-strong-pass-2"}
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        user.refresh_from_db()
+        assert user.check_password("a-new-strong-pass-2")
+
+    def test_reset_password_can_log_in_with_new_password(self, api_client):
+        user = UserFactory(email="reset-me@example.com")
+        token = generate_password_reset_token(user)
+        api_client.post(
+            self.url, {"token": token, "new_password": "a-new-strong-pass-2"}
+        )
+
+        login = APIClient().post(
+            "/auth/login/",
+            {"email": "reset-me@example.com", "password": "a-new-strong-pass-2"},
+        )
+        assert login.status_code == status.HTTP_200_OK
+
+    def test_invalid_token_returns_400(self, api_client):
+        response = api_client.post(
+            self.url, {"token": "garbage", "new_password": "a-new-strong-pass-2"}
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_missing_fields_returns_400(self, api_client):
+        response = api_client.post(self.url, {})
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_weak_password_rejected(self, api_client):
+        user = UserFactory()
+        token = generate_password_reset_token(user)
+        response = api_client.post(self.url, {"token": token, "new_password": "123"})
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        user.refresh_from_db()
+        assert not user.check_password("123")
+
+    def test_token_cannot_be_reused(self, api_client):
+        user = UserFactory()
+        token = generate_password_reset_token(user)
+
+        first = api_client.post(
+            self.url, {"token": token, "new_password": "first-strong-pass-1"}
+        )
+        assert first.status_code == status.HTTP_200_OK
+
+        second = api_client.post(
+            self.url, {"token": token, "new_password": "second-strong-pass-2"}
+        )
+        assert second.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_throttled_after_rate_exceeded(self, api_client):
+        for _ in range(5):
+            api_client.post(
+                self.url, {"token": "garbage", "new_password": "a-strong-pass-1"}
+            )
+        response = api_client.post(
+            self.url, {"token": "garbage", "new_password": "a-strong-pass-1"}
+        )
+        assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS

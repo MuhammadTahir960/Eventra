@@ -2,7 +2,12 @@ from django.conf import settings
 from django.core.mail import send_mail
 from django.db import transaction
 from .models import User
-from .tokens import generate_verification_token, verify_token
+from .tokens import (
+    generate_password_reset_token,
+    generate_verification_token,
+    verify_password_reset_token,
+    verify_token,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -50,6 +55,57 @@ def register_user(serializer) -> User:
     return user
 
 
+def send_password_reset_email(user: User) -> None:
+    token = generate_password_reset_token(user)
+    reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+
+    send_mail(
+        subject="Reset your Eventra password",
+        message=(
+            "Use this link to reset your password:\n\n"
+            f"{reset_link}\n\n"
+            "This link expires in 1 hour. If you didn't request this, "
+            "you can safely ignore this email."
+        ),
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[user.email],
+        fail_silently=False,
+    )
+
+
+def request_password_reset(email: str) -> None:
+    user = User.objects.filter(email__iexact=email.strip(), is_active=True).first()
+    if user is None:
+        return
+
+    try:
+        send_password_reset_email(user)
+    except Exception as exc:
+        logger.error(
+            "Failed to send password reset email for user %s: %s", user.id, exc
+        )
+
+
+def reset_password(token: str, new_password: str) -> bool:
+    decoded = verify_password_reset_token(token)
+    if decoded is None:
+        return False
+    user_id, password_hash_at_issue = decoded
+
+    with transaction.atomic():
+        try:
+            user = User.objects.select_for_update().get(id=user_id)
+        except User.DoesNotExist:
+            return False
+
+        if user.password != password_hash_at_issue:
+            return False
+
+        user.set_password(new_password)
+        user.save(update_fields=["password", "last_updated"])
+        return True
+
+
 def verify_user_email(token: str) -> tuple[User, bool] | None:
     """
     Consumes a verification token. Returns (user, was_newly_verified) on
@@ -78,5 +134,5 @@ def verify_user_email(token: str) -> tuple[User, bool] | None:
         # Only activate the account as part of first-time verification.
         user.is_active = True
         user.is_email_verified = True
-        user.save(update_fields=["is_active", "is_email_verified"])
+        user.save(update_fields=["is_active", "is_email_verified", "last_updated"])
         return user, True
