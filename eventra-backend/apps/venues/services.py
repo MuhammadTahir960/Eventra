@@ -14,6 +14,13 @@ class CapacityExceededError(Exception):
     """Raised when a payload would put the venue's seat count over its declared capacity."""
 
 
+class SeatTemplateInUseError(Exception):
+    """
+    Raised when a reseed (?hard reseed via allow_reseed=True) is attempted, but one or more of
+    the venue's existing seats already has event_seats instantiated against it.
+    """
+
+
 @transaction.atomic
 def bulk_create_seat_template(
     venue: Venue, sections: list[dict], *, allow_reseed: bool = False
