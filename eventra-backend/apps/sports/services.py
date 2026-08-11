@@ -1,4 +1,83 @@
+from django.db.models import Q
+from apps.events.models import Event
 from .models import League, Sport, Team
+
+
+class SportInUseError(Exception):
+    """
+    Raised when a Sport can't be deleted because a League/Team under it
+    is referenced by an event.
+    """
+
+
+class LeagueInUseError(Exception):
+    """Raised when a League can't be deleted because it's referenced by an event."""
+
+
+class TeamInUseError(Exception):
+    """
+    Raised when a Team can't be deleted because it's referenced (as home
+    or away team) by an event.
+    """
+
+
+class LeagueSportReassignmentBlockedError(Exception):
+    """
+    Raised when a League's `sport` is being changed while an event still
+    references it.
+    """
+
+
+class TeamSportReassignmentBlockedError(Exception):
+    """
+    Raised when a Team's `sport` is being changed while an event still
+    references it as home_team or away_team.
+    """
+
+
+def ensure_sport_deletable(sport: Sport) -> None:
+    blocking = Event.all_objects.filter(
+        Q(league__sport=sport) | Q(home_team__sport=sport) | Q(away_team__sport=sport)
+    )
+    if blocking.exists():
+        raise SportInUseError(
+            "Cannot delete: one or more events reference a league or team "
+            "under this sport."
+        )
+
+
+def ensure_league_deletable(league: League) -> None:
+    if Event.all_objects.filter(league=league).exists():
+        raise LeagueInUseError(
+            "Cannot delete: one or more events reference this league."
+        )
+
+
+def ensure_team_deletable(team: Team) -> None:
+    blocking = Event.all_objects.filter(Q(home_team=team) | Q(away_team=team))
+    if blocking.exists():
+        raise TeamInUseError("Cannot delete: one or more events reference this team.")
+
+
+def ensure_league_sport_reassignable(league: League, new_sport: Sport) -> None:
+    if league.sport_id == new_sport.id:
+        return
+
+    if Event.all_objects.filter(league=league).exists():
+        raise LeagueSportReassignmentBlockedError(
+            "Cannot change sport: one or more events reference this league."
+        )
+
+
+def ensure_team_sport_reassignable(team: Team, new_sport: Sport) -> None:
+    if team.sport_id == new_sport.id:
+        return
+
+    blocking = Event.all_objects.filter(Q(home_team=team) | Q(away_team=team))
+    if blocking.exists():
+        raise TeamSportReassignmentBlockedError(
+            "Cannot change sport: one or more events reference this team."
+        )
 
 
 class DuplicateSportError(Exception):
