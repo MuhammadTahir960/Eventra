@@ -1,5 +1,7 @@
 from datetime import timedelta
+from django.db.models import Q, QuerySet
 from django.utils import timezone
+from rest_framework.generics import get_object_or_404
 from apps.common.constants import Roles
 from .models import Event, TicketTier
 
@@ -20,6 +22,7 @@ class EventNotPendingApprovalError(Exception):
     """Raised when approve/reject is attempted on an event not awaiting approval."""
 
 
+PUBLIC_STATUSES = [Event.Status.APPROVED, Event.Status.COMPLETED]
 DELETABLE_STATUSES = {Event.Status.CANCELLED, Event.Status.COMPLETED}
 SENSITIVE_EVENT_FIELDS = frozenset(
     {"venue", "category", "start_datetime", "end_datetime"}
@@ -88,6 +91,23 @@ def ensure_can_restore_event(event: Event) -> None:
         raise DuplicateEventSlugError(
             "Cannot restore: an active event with this slug already exists."
         )
+
+
+def visible_events_for_user(user) -> QuerySet:
+    qs = Event.objects.select_related(
+        "venue", "category", "organizer", "league", "home_team", "away_team"
+    )
+    if not user or not user.is_authenticated:
+        return qs.filter(status__in=PUBLIC_STATUSES)
+    if user.role == Roles.ADMIN:
+        return qs
+    if user.role == Roles.ORGANIZER:
+        return qs.filter(Q(organizer=user) | Q(status__in=PUBLIC_STATUSES))
+    return qs.filter(status__in=PUBLIC_STATUSES)
+
+
+def get_visible_event_or_404(user, pk) -> Event:
+    return get_object_or_404(visible_events_for_user(user), pk=pk)
 
 
 def find_blocking_upcoming_event(*, venue_id=None, category_id=None) -> bool:
