@@ -1,10 +1,13 @@
 import pytest
+from apps.events.factories import EventFactory, TicketTierFactory
+from apps.seating.factories import EventSeatFactory
 from ..models import Seat
 from ..factories import SeatFactory, VenueFactory
 from ..services import (
     CapacityExceededError,
     DuplicateSeatError,
     SeatTemplateExistsError,
+    SeatTemplateInUseError,
     bulk_create_seat_template,
 )
 
@@ -95,6 +98,35 @@ def test_allow_reseed_true_with_no_existing_seats_behaves_like_normal_create():
         venue=venue, sections=_sections(), allow_reseed=True
     )
     assert len(created) == venue.seats.count()
+
+
+# ==================================================
+# SeatTemplateInUseError
+# ==================================================
+
+
+def test_reseed_blocked_when_a_seat_already_has_an_instantiated_event_seat():
+    venue = VenueFactory(capacity=50)
+    seat = SeatFactory(venue=venue, section="Original", row_label="1", seat_number=1)
+    event = EventFactory(venue=venue)
+    tier = TicketTierFactory(event=event)
+    EventSeatFactory(event=event, seat=seat, ticket_tier=tier)
+
+    with pytest.raises(SeatTemplateInUseError):
+        bulk_create_seat_template(venue=venue, sections=_sections(), allow_reseed=True)
+
+    assert venue.seats.count() == 1
+    assert venue.seats.first().id == seat.id
+
+
+def test_reseed_allowed_once_the_in_use_seat_has_no_event_seats():
+    venue = VenueFactory(capacity=50)
+    SeatFactory(venue=venue, section="Original", row_label="1", seat_number=1)
+
+    created = bulk_create_seat_template(
+        venue=venue, sections=_sections(), allow_reseed=True
+    )
+    assert venue.seats.count() == len(created)
 
 
 # ==================================================
