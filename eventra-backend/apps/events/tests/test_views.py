@@ -1,5 +1,8 @@
-from datetime import timedelta
+import io
 import pytest
+from PIL import Image
+from unittest.mock import patch
+from datetime import timedelta
 from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -13,6 +16,7 @@ from tests.helpers import results
 from django.utils import timezone
 from ..factories import EventFactory, TicketTierFactory, TierSectionMappingFactory
 from ..models import Event, TicketTier, TierSectionMapping
+from ..services import TierPriceImmutableError
 
 pytestmark = pytest.mark.django_db
 
@@ -321,10 +325,6 @@ class TestCreateEvent:
         assert response.data["slug"] == "my-great-event"
 
     def test_can_upload_cover_image(self, organizer_user):
-        import io
-
-        from PIL import Image
-
         client = auth_client(organizer_user)
         buffer = io.BytesIO()
         Image.new("RGB", (10, 10), color="blue").save(buffer, format="PNG")
@@ -338,9 +338,7 @@ class TestCreateEvent:
 
 
 # ==================================================
-# POST /events/ with event_type=sports_match — admin-only, per DECISIONS.md's
-# "match creation stays admin-only" (Match was folded into Event; this is the
-# equivalent gate for the merged model).
+# POST /events/ with event_type=sports_match — admin-only
 # ==================================================
 
 
@@ -753,9 +751,6 @@ class TestIncludeInactiveFilter:
         assert "Soft Deleted" in titles
 
     def test_organizer_with_flag_does_not_see_soft_deleted_event(self, organizer_user):
-        # include_inactive is admin-only functionality — an organizer passing
-        # the flag should have no effect, not accidentally see everyone's
-        # soft-deleted events.
         event = EventFactory(status=Event.Status.CANCELLED, title="Hidden")
         event.is_active = False
         event.save(update_fields=["is_active"])
@@ -888,13 +883,6 @@ class TestTicketTiers:
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_price_update_blocked_once_seats_instantiated(self, organizer_user):
-        # EventSeat doesn't exist until Week 5, so this exercises the
-        # serializer/view's 409 branch directly via ensure_tier_price_mutable,
-        # rather than through real seat instantiation.
-        from unittest.mock import patch
-
-        from ..services import TierPriceImmutableError
-
         event = EventFactory(organizer=organizer_user, status=Event.Status.APPROVED)
         tier = TicketTierFactory(event=event, price="10.00")
         client = auth_client(organizer_user)
@@ -924,6 +912,16 @@ class TestTicketTiers:
             format="json",
         )
         assert response.status_code == status.HTTP_200_OK
+
+    def test_malformed_tier_id_in_url_returns_404_not_500(self, organizer_user):
+        event = EventFactory(organizer=organizer_user, status=Event.Status.APPROVED)
+        client = auth_client(organizer_user)
+        response = client.patch(
+            f"/events/{event.pk}/ticket-tiers/not-a-real-uuid/",
+            {"price": "5.00"},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 # ==================================================
@@ -978,6 +976,16 @@ class TestTierSectionMappings:
         client = auth_client(organizer_user)
         response = client.post(
             f"/events/{event.pk}/ticket-tiers/{foreign_tier.pk}/sections/",
+            {"section": "A"},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_malformed_tier_id_in_url_returns_404_not_500(self, organizer_user):
+        event = EventFactory(organizer=organizer_user)
+        client = auth_client(organizer_user)
+        response = client.post(
+            f"/events/{event.pk}/ticket-tiers/not-a-real-uuid/sections/",
             {"section": "A"},
             format="json",
         )
