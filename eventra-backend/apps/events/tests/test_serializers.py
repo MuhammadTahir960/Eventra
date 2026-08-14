@@ -1,11 +1,13 @@
+import pytest
 from datetime import timedelta
 from unittest.mock import MagicMock
-import pytest
 from django.utils import timezone
+from rest_framework import serializers
 from apps.categories.factories import CategoryFactory
 from apps.common.constants import Roles
 from apps.users.factories import UserFactory
 from apps.venues.factories import VenueFactory
+from apps.seating.factories import EventSeatFactory
 from ..factories import EventFactory, TicketTierFactory
 from ..models import Event
 from ..services import TierPriceImmutableError
@@ -120,13 +122,11 @@ def test_missing_required_fields_rejected():
 
 
 def test_duplicate_slug_becomes_clean_validation_error_not_500():
-    from rest_framework import serializers as drf_serializers
-
     EventFactory(title="Same Title Event")
     organizer = UserFactory(role=Roles.ORGANIZER)
     start = timezone.now() + timedelta(days=10)
     serializer = EventSerializer(context={"request": _request_for(organizer)})
-    with pytest.raises(drf_serializers.ValidationError):
+    with pytest.raises(serializers.ValidationError):
         serializer.create(
             {
                 "venue": VenueFactory(),
@@ -262,12 +262,8 @@ def test_price_update_allowed_when_no_seats_instantiated():
 
 def test_price_update_blocked_once_seats_instantiated():
     tier = TicketTierFactory(price="10.00")
+    EventSeatFactory(event=tier.event, ticket_tier=tier)
 
-    class _FakeEventSeats:
-        def exists(self):
-            return True
-
-    tier.event_seats = _FakeEventSeats()
     serializer = TicketTierSerializer(
         tier, data={"price": "20.00"}, partial=True, context={"event": tier.event}
     )
@@ -304,12 +300,8 @@ def test_price_update_does_not_retrigger_approval_for_admin_owned_event():
 
 def test_updating_name_only_does_not_touch_immutability_check():
     tier = TicketTierFactory()
+    EventSeatFactory(event=tier.event, ticket_tier=tier)
 
-    class _FakeEventSeats:
-        def exists(self):
-            return True
-
-    tier.event_seats = _FakeEventSeats()
     serializer = TicketTierSerializer(
         tier, data={"name": "Renamed"}, partial=True, context={"event": tier.event}
     )
@@ -344,12 +336,10 @@ def test_tier_event_mismatch_rejected():
 
 
 def test_duplicate_section_for_same_event_becomes_validation_error_not_500():
-    from rest_framework import serializers as drf_serializers
-
     tier = TicketTierFactory()
     serializer = TierSectionMappingSerializer(
         context={"event": tier.event, "ticket_tier": tier}
     )
     serializer.create({"section": "A"})
-    with pytest.raises(drf_serializers.ValidationError):
+    with pytest.raises(serializers.ValidationError):
         serializer.create({"section": "A"})
