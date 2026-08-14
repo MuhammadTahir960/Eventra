@@ -5,6 +5,7 @@ from apps.categories.factories import CategoryFactory
 from apps.common.constants import Roles
 from apps.users.factories import UserFactory
 from apps.venues.factories import VenueFactory
+from apps.seating.factories import EventSeatFactory
 from ..factories import EventFactory, TicketTierFactory
 from ..models import Event
 from ..services import (
@@ -50,19 +51,15 @@ def test_ensure_event_deletable_blocks_non_terminal_statuses(status):
 # ==================================================
 
 
-def test_ensure_tier_price_mutable_allows_when_no_event_seats_relation_exists():
+def test_ensure_tier_price_mutable_allows_when_no_seats_instantiated():
     tier = TicketTierFactory()
     ensure_tier_price_mutable(tier)
 
 
 def test_ensure_tier_price_mutable_blocks_when_event_seats_exist():
     tier = TicketTierFactory()
+    EventSeatFactory(event=tier.event, ticket_tier=tier)
 
-    class _FakeEventSeats:
-        def exists(self):
-            return True
-
-    tier.event_seats = _FakeEventSeats()
     with pytest.raises(TierPriceImmutableError):
         ensure_tier_price_mutable(tier)
 
@@ -274,5 +271,5 @@ def test_returns_count_of_events_completed():
     start, end = _past(hours_ago=3)
     EventFactory(status=Event.Status.APPROVED, start_datetime=start, end_datetime=end)
     EventFactory(status=Event.Status.APPROVED, start_datetime=start, end_datetime=end)
-    EventFactory(status=Event.Status.APPROVED)  # future, not swept
+    EventFactory(status=Event.Status.APPROVED)
     assert complete_past_events() == 2
