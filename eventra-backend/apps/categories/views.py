@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from apps.common.constants import Roles
 from apps.common.mixins import SoftDeleteDestroyMixin, SoftDeleteRestoreMixin
 from apps.common.permissions import IsAdminForWrite
+from apps.events.services import find_blocking_upcoming_event
 from .models import Category
 from .serializers import CategorySerializer
 from .services import DuplicateCategoryError, ensure_can_restore_category
@@ -37,8 +38,6 @@ class CategoryViewSet(
         return None
 
     def perform_hard_delete_guard(self, instance):
-        from apps.events.services import find_blocking_upcoming_event
-
         if find_blocking_upcoming_event(category_id=instance.pk):
             return Response(
                 {
