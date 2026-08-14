@@ -1,9 +1,12 @@
-import pytest
 from unittest.mock import patch
+
+import pytest
 from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import AuthenticationFailed, TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
+
 from apps.common.constants import Roles
+
 from ..factories import UserFactory
 from ..models import User
 from ..serializers import (
@@ -311,9 +314,8 @@ def test_logout_serializer_wraps_blacklist_call_error_as_validation_error():
     with patch(
         "rest_framework_simplejwt.tokens.RefreshToken.blacklist",
         side_effect=TokenError("Token is blacklisted"),
-    ):
-        with pytest.raises(serializers.ValidationError) as exc_info:
-            serializer.save()
+    ), pytest.raises(serializers.ValidationError) as exc_info:
+        serializer.save()
 
     assert "refresh" in exc_info.value.detail
 

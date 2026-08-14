@@ -1,4 +1,5 @@
 from rest_framework import serializers
+
 from .models import EventSeat
 from .services import MAX_SEATS_PER_HOLD
 

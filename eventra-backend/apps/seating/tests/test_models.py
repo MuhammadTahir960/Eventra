@@ -1,11 +1,14 @@
 from datetime import timedelta
+
 import pytest
 from django.db import IntegrityError
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
+
 from apps.events.factories import EventFactory, TicketTierFactory
 from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory, VenueFactory
+
 from ..factories import EventSeatFactory, SeatHoldFactory
 from ..models import EventSeat, SeatHold
 

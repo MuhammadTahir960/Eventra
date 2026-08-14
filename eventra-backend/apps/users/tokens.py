@@ -1,6 +1,6 @@
 import uuid
 
-from django.core.signing import TimestampSigner, BadSignature, SignatureExpired
+from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
 
 _signer = TimestampSigner(salt="users.email-verification")
 

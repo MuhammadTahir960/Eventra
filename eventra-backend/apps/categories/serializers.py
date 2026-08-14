@@ -1,5 +1,7 @@
 from rest_framework import serializers
+
 from apps.common.serializers import IntegrityErrorHandlingMixin
+
 from .models import Category
 from .services import (
     DuplicateCategoryError,

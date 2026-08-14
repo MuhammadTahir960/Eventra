@@ -1,10 +1,12 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
+
 from apps.seating.views import (
     EventSeatHoldView,
     EventSeatInstantiateView,
     EventSeatListView,
 )
+
 from .views import EventViewSet
 
 router = DefaultRouter()

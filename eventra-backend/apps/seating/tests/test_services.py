@@ -1,9 +1,11 @@
 import threading
 import uuid
 from datetime import timedelta
+
 import pytest
 from django.db import connection
 from django.utils import timezone
+
 from apps.events.factories import (
     EventFactory,
     TicketTierFactory,
@@ -12,6 +14,7 @@ from apps.events.factories import (
 from apps.events.models import Event
 from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory, VenueFactory
+
 from ..models import EventSeat, SeatHold
 from ..services import (
     MAX_SEATS_PER_HOLD,

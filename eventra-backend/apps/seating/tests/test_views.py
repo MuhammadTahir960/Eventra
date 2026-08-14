@@ -2,6 +2,7 @@ import pytest
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
+
 from apps.events.factories import (
     EventFactory,
     TicketTierFactory,
@@ -10,6 +11,7 @@ from apps.events.factories import (
 from apps.events.models import Event
 from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory
+
 from ..factories import EventSeatFactory
 from ..models import EventSeat
 from ..services import MAX_SEATS_PER_HOLD

@@ -1,17 +1,20 @@
-import pytest
 import uuid
 from unittest.mock import patch
+
+import pytest
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
+
 from apps.common.constants import Roles
-from apps.users.factories import UserFactory
-from apps.venues.services import DuplicateSeatError
 from apps.events.factories import EventFactory, TicketTierFactory
 from apps.seating.factories import EventSeatFactory
+from apps.users.factories import UserFactory
+from apps.venues.services import DuplicateSeatError
 from tests.helpers import results
-from ..models import Venue
+
 from ..factories import SeatFactory, VenueFactory
+from ..models import Venue
 
 pytestmark = pytest.mark.django_db
 

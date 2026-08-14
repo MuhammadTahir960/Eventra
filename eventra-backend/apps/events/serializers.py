@@ -1,7 +1,9 @@
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
+
 from apps.common.constants import Roles
 from apps.common.serializers import IntegrityErrorHandlingMixin
+
 from .models import Event, TicketTier, TierSectionMapping
 from .services import (
     ensure_tier_price_mutable,

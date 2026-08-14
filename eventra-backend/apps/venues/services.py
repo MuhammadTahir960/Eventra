@@ -1,6 +1,8 @@
 from django.db import IntegrityError, transaction
+
 from apps.seating.models import EventSeat
-from .models import Venue, Seat
+
+from .models import Seat, Venue
 
 
 class DuplicateSeatError(Exception):

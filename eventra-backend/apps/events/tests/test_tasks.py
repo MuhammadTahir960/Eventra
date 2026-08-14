@@ -1,6 +1,8 @@
 from datetime import timedelta
+
 import pytest
 from django.utils import timezone
+
 from ..factories import EventFactory
 from ..models import Event
 from ..tasks import complete_past_events

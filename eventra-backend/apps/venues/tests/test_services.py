@@ -1,8 +1,10 @@
 import pytest
+
 from apps.events.factories import EventFactory, TicketTierFactory
 from apps.seating.factories import EventSeatFactory
-from ..models import Seat
+
 from ..factories import SeatFactory, VenueFactory
+from ..models import Seat
 from ..services import (
     CapacityExceededError,
     DuplicateSeatError,

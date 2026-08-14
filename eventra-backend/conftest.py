@@ -1,6 +1,7 @@
 import pytest
 from django.core.cache import cache
 from rest_framework.test import APIClient
+
 from apps.users.factories import UserFactory
 
 

@@ -1,8 +1,11 @@
 from datetime import timedelta
+
 from django.db.models import Q, QuerySet
 from django.utils import timezone
 from rest_framework.generics import get_object_or_404
+
 from apps.common.constants import Roles
+
 from .models import Event, TicketTier
 
 

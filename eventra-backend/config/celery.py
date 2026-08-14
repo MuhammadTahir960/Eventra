@@ -1,4 +1,5 @@
 import os
+
 from celery import Celery
 
 if "DJANGO_SETTINGS_MODULE" not in os.environ:

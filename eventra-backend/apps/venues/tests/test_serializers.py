@@ -1,4 +1,5 @@
 import pytest
+
 from ..factories import SeatFactory, VenueFactory
 from ..serializers import (
     BulkSeatTemplateSerializer,

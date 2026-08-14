@@ -1,5 +1,6 @@
 import pytest
 from django.contrib.admin.sites import AdminSite
+
 from ..admin import VenueAdmin
 from ..factories import VenueFactory
 from ..models import Venue

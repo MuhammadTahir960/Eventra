@@ -2,12 +2,14 @@ import pytest
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
+
 from apps.common.constants import Roles
 from apps.events.factories import EventFactory
 from apps.events.models import Event
 from apps.sports.models import Sport
 from apps.users.factories import UserFactory
 from tests.helpers import results
+
 from ..factories import LeagueFactory, SportFactory, TeamFactory
 
 pytestmark = pytest.mark.django_db

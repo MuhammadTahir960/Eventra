@@ -1,8 +1,11 @@
 import uuid
 from datetime import timedelta
+
 from django.db import IntegrityError, OperationalError, transaction
 from django.utils import timezone
+
 from apps.events.models import Event
+
 from .models import EventSeat, SeatHold
 
 MAX_SEATS_PER_HOLD = 10

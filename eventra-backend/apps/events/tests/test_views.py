@@ -1,19 +1,22 @@
 import io
-import pytest
-from PIL import Image
-from unittest.mock import patch
 from datetime import timedelta
+from unittest.mock import patch
+
+import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.utils import timezone
+from PIL import Image
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
+
 from apps.categories.factories import CategoryFactory
 from apps.common.constants import Roles
 from apps.sports.factories import SportFactory, TeamFactory
 from apps.users.factories import UserFactory
 from apps.venues.factories import VenueFactory
 from tests.helpers import results
-from django.utils import timezone
+
 from ..factories import EventFactory, TicketTierFactory, TierSectionMappingFactory
 from ..models import Event, TicketTier, TierSectionMapping
 from ..services import TierPriceImmutableError

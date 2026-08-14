@@ -1,6 +1,7 @@
 import pytest
-from ..serializers import CategorySerializer
+
 from ..factories import CategoryFactory
+from ..serializers import CategorySerializer
 
 pytestmark = pytest.mark.django_db
 

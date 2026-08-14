@@ -5,10 +5,12 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import NotAuthenticated, PermissionDenied
 from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
+
 from apps.common.constants import Roles
 from apps.common.mixins import SoftDeleteRestoreMixin
 from apps.common.permissions import IsAdmin, IsEventOwnerStrict, IsOrganizer
-from .models import Event, EVENT_SEARCH_CONFIG, TicketTier
+
+from .models import EVENT_SEARCH_CONFIG, Event, TicketTier
 from .permissions import IsEventOwnerOrAdminForDelete
 from .serializers import (
     EventSerializer,

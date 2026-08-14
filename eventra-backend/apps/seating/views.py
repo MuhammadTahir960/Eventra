@@ -2,8 +2,10 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
 from apps.common.permissions import IsEventOwnerStrict
 from apps.events.services import get_visible_event_or_404
+
 from .models import EventSeat
 from .serializers import EventSeatSerializer, SeatHoldRequestSerializer
 from .services import (

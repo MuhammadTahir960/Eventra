@@ -1,10 +1,13 @@
 from datetime import timedelta
+
 import factory
 from django.utils import timezone
 from factory.django import DjangoModelFactory
+
 from apps.events.factories import EventFactory, TicketTierFactory
 from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory
+
 from .models import EventSeat, SeatHold
 
 

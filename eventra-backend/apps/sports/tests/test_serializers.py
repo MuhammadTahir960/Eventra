@@ -1,7 +1,8 @@
 import pytest
+
+from ..factories import LeagueFactory, SportFactory, TeamFactory
 from ..models import League, Team
 from ..serializers import LeagueSerializer, SportSerializer, TeamSerializer
-from ..factories import LeagueFactory, SportFactory, TeamFactory
 
 pytestmark = pytest.mark.django_db
 

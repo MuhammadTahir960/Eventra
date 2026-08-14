@@ -1,9 +1,12 @@
 from datetime import timedelta
+
 import pytest
 from django.db import IntegrityError, transaction
 from django.utils import timezone
+
 from apps.categories.factories import CategoryFactory
 from apps.venues.factories import VenueFactory
+
 from ..factories import EventFactory, TicketTierFactory, TierSectionMappingFactory
 from ..models import Event, TicketTier
 
@@ -58,9 +61,8 @@ def test_explicit_slug_is_not_overwritten_on_create():
 
 def test_duplicate_active_slug_rejected_at_db_level():
     EventFactory(title="Popular Event")
-    with pytest.raises(IntegrityError):
-        with transaction.atomic():
-            EventFactory(title="Popular Event")
+    with pytest.raises(IntegrityError), transaction.atomic():
+        EventFactory(title="Popular Event")
 
 
 def test_duplicate_slug_allowed_if_original_is_soft_deleted():
@@ -72,16 +74,14 @@ def test_duplicate_slug_allowed_if_original_is_soft_deleted():
 
 def test_end_datetime_before_start_datetime_rejected_at_db_level():
     now = timezone.now()
-    with pytest.raises(IntegrityError):
-        with transaction.atomic():
-            EventFactory(start_datetime=now, end_datetime=now - timedelta(hours=1))
+    with pytest.raises(IntegrityError), transaction.atomic():
+        EventFactory(start_datetime=now, end_datetime=now - timedelta(hours=1))
 
 
 def test_end_datetime_equal_to_start_datetime_rejected_at_db_level():
     now = timezone.now()
-    with pytest.raises(IntegrityError):
-        with transaction.atomic():
-            EventFactory(start_datetime=now, end_datetime=now)
+    with pytest.raises(IntegrityError), transaction.atomic():
+        EventFactory(start_datetime=now, end_datetime=now)
 
 
 # ==================================================
@@ -133,9 +133,8 @@ def test_hard_deleting_category_sets_event_category_to_null():
 def test_deleting_organizer_is_blocked_while_events_exist():
     event = EventFactory()
     organizer = event.organizer
-    with pytest.raises(IntegrityError):
-        with transaction.atomic():
-            organizer.delete()
+    with pytest.raises(IntegrityError), transaction.atomic():
+        organizer.delete()
 
 
 def test_hard_deleting_event_cascades_to_ticket_tiers():
@@ -171,9 +170,8 @@ def test_ticket_tier_price_must_be_positive():
 def test_duplicate_section_for_same_event_rejected_at_db_level():
     tier = TicketTierFactory()
     TierSectionMappingFactory(event=tier.event, ticket_tier=tier, section="A")
-    with pytest.raises(IntegrityError):
-        with transaction.atomic():
-            TierSectionMappingFactory(event=tier.event, ticket_tier=tier, section="A")
+    with pytest.raises(IntegrityError), transaction.atomic():
+        TierSectionMappingFactory(event=tier.event, ticket_tier=tier, section="A")
 
 
 def test_same_section_label_allowed_across_different_events():

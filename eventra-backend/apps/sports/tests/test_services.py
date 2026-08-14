@@ -1,4 +1,5 @@
 import pytest
+
 from apps.events.factories import EventFactory
 from apps.events.models import Event
 from apps.sports.services import (
@@ -13,6 +14,7 @@ from apps.sports.services import (
     ensure_unique_sport_name,
     ensure_unique_team_name,
 )
+
 from ..factories import LeagueFactory, SportFactory, TeamFactory
 
 pytestmark = pytest.mark.django_db

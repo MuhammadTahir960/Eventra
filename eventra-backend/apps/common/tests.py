@@ -1,4 +1,5 @@
 import pytest
+from django.contrib.auth.models import AnonymousUser
 from django.db import IntegrityError
 from rest_framework import mixins as drf_mixins
 from rest_framework import serializers as drf_serializers
@@ -7,12 +8,13 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.test import APIClient, APIRequestFactory
 from rest_framework.viewsets import GenericViewSet
-from django.contrib.auth.models import AnonymousUser
+
 from apps.categories.factories import CategoryFactory
 from apps.categories.models import Category
 from apps.common.constants import Roles
 from apps.events.factories import EventFactory, TicketTierFactory
 from apps.users.factories import UserFactory
+
 from .mixins import SoftDeleteDestroyMixin, SoftDeleteRestoreMixin
 from .permissions import IsEventOwnerStrict
 from .serializers import IntegrityErrorHandlingMixin

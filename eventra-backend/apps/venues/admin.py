@@ -1,5 +1,6 @@
 from django.contrib import admin
-from .models import Venue, Seat
+
+from .models import Seat, Venue
 
 
 @admin.register(Venue)

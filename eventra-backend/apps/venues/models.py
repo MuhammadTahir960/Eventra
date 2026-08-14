@@ -1,6 +1,7 @@
-from django.db import models
 from django.core.validators import MinLengthValidator, MinValueValidator
+from django.db import models
 from django.db.models.functions import Lower
+
 from apps.common.models import SoftDeleteModel, UUIDBaseModel
 
 

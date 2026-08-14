@@ -1,5 +1,6 @@
 import pytest
 from django.contrib.admin.sites import AdminSite
+
 from ..admin import EventAdmin
 from ..factories import EventFactory
 from ..models import Event

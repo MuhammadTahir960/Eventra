@@ -1,13 +1,16 @@
 import uuid
+
 import pytest
 from django.contrib.auth.models import AnonymousUser
+
+from apps.common.constants import Roles
 from apps.common.permissions import (
     IsAdmin,
     IsAdminForWrite,
     IsOrganizer,
     IsOwnerOrAdmin,
 )
-from apps.common.constants import Roles
+
 from ..factories import UserFactory
 
 SOMEONE_ELSES_ID = uuid.uuid4()
