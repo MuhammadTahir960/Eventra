@@ -31,7 +31,7 @@ class SportSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
         try:
             ensure_unique_sport_name(value, exclude_pk=exclude_pk)
         except DuplicateSportError as exc:
-            raise serializers.ValidationError(str(exc))
+            raise serializers.ValidationError(str(exc)) from exc
         return value
 
 
@@ -53,7 +53,7 @@ class ScopedUniqueNameMixin:
             try:
                 self.unique_check(sport, name, exclude_pk=exclude_pk)
             except (DuplicateLeagueError, DuplicateTeamError) as exc:
-                raise serializers.ValidationError({"name": str(exc)})
+                raise serializers.ValidationError({"name": str(exc)}) from exc
         return attrs
 
 

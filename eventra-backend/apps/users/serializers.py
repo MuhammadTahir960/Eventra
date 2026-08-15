@@ -34,10 +34,10 @@ class RegisterSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         try:
             return User.objects.create_user(**validated_data)
-        except IntegrityError:
+        except IntegrityError as exc:
             raise serializers.ValidationError(
                 {"email": ["A user with that email already exists."]}
-            )
+            ) from exc
 
 
 class ActiveUserTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -81,8 +81,8 @@ class LogoutSerializer(serializers.Serializer):
     def save(self, **kwargs):
         try:
             token = RefreshToken(self.validated_data["refresh"])
-        except TokenError as e:
-            raise serializers.ValidationError({"refresh": str(e)})
+        except TokenError as exc:
+            raise serializers.ValidationError({"refresh": str(exc)}) from exc
 
         request = self.context.get("request")
         if request is not None and str(token.get("user_id")) != str(request.user.id):
@@ -92,8 +92,8 @@ class LogoutSerializer(serializers.Serializer):
 
         try:
             token.blacklist()
-        except TokenError as e:
-            raise serializers.ValidationError({"refresh": str(e)})
+        except TokenError as exc:
+            raise serializers.ValidationError({"refresh": str(exc)}) from exc
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):
