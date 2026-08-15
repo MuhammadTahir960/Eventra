@@ -266,14 +266,14 @@ def test_logout_serializer_blacklists_valid_refresh_token():
     assert serializer.is_valid(), serializer.errors
     serializer.save()
 
-    with pytest.raises(Exception):
+    with pytest.raises(TokenError):
         RefreshToken(str(refresh)).blacklist()
 
 
 def test_logout_serializer_rejects_invalid_token():
     serializer = LogoutSerializer(data={"refresh": "not-a-real-token"})
     serializer.is_valid()
-    with pytest.raises(Exception):
+    with pytest.raises(serializers.ValidationError):
         serializer.save()
 
 
@@ -301,7 +301,7 @@ def test_logout_serializer_rejects_already_blacklisted_token():
 
     second = LogoutSerializer(data={"refresh": str(refresh)})
     second.is_valid()
-    with pytest.raises(Exception):
+    with pytest.raises(serializers.ValidationError):
         second.save()
 
 

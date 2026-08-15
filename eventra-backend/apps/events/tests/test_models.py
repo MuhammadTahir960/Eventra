@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
@@ -158,7 +159,7 @@ def test_hard_deleting_ticket_tier_cascades_to_section_mappings():
 
 def test_ticket_tier_price_must_be_positive():
     tier = TicketTierFactory.build(price="0.00")
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         tier.full_clean()
 
 
