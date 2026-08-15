@@ -1,5 +1,7 @@
 from django.db.models import Q
+
 from apps.events.models import Event
+
 from .models import League, Sport, Team
 
 

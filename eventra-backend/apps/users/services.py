@@ -1,6 +1,9 @@
+import logging
+
 from django.conf import settings
 from django.core.mail import send_mail
 from django.db import transaction
+
 from .models import User
 from .tokens import (
     generate_password_reset_token,
@@ -8,7 +11,6 @@ from .tokens import (
     verify_password_reset_token,
     verify_token,
 )
-import logging
 
 logger = logging.getLogger(__name__)
 

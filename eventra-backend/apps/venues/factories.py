@@ -1,6 +1,7 @@
 import factory
 from factory.django import DjangoModelFactory
-from apps.venues.models import Venue, Seat
+
+from apps.venues.models import Seat, Venue
 
 
 class VenueFactory(DjangoModelFactory):

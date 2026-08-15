@@ -1,5 +1,6 @@
 import pytest
 from django.contrib.admin.sites import AdminSite
+
 from ..admin import CategoryAdmin
 from ..factories import CategoryFactory
 from ..models import Category

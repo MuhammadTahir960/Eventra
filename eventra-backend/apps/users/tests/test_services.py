@@ -1,12 +1,14 @@
-import pytest
 import uuid
 from unittest.mock import patch
+
+import pytest
 from django.core import mail
-from apps.users.tokens import verify_token, verify_password_reset_token
+
+from apps.users.tokens import verify_password_reset_token, verify_token
+
+from ..factories import UserFactory
 from ..models import User
 from ..serializers import RegisterSerializer
-from ..tokens import generate_verification_token, generate_password_reset_token
-from ..factories import UserFactory
 from ..services import (
     register_user,
     request_password_reset,
@@ -15,6 +17,7 @@ from ..services import (
     send_verification_email,
     verify_user_email,
 )
+from ..tokens import generate_password_reset_token, generate_verification_token
 
 
 @pytest.fixture(autouse=True)
@@ -96,9 +99,8 @@ def test_register_user_survives_email_send_failure(caplog):
     with patch(
         "apps.users.services.send_verification_email",
         side_effect=RuntimeError("SMTP is down"),
-    ):
-        with caplog.at_level("ERROR"):
-            user = register_user(serializer)
+    ), caplog.at_level("ERROR"):
+        user = register_user(serializer)
 
     assert user.pk is not None
     assert User.objects.filter(email="resilient@example.com").exists()
@@ -237,9 +239,8 @@ def test_request_password_reset_survives_email_send_failure(caplog):
     with patch(
         "apps.users.services.send_password_reset_email",
         side_effect=RuntimeError("SMTP is down"),
-    ):
-        with caplog.at_level("ERROR"):
-            request_password_reset(user.email)
+    ), caplog.at_level("ERROR"):
+        request_password_reset(user.email)
 
     assert len(mail.outbox) == 0
     assert "Failed to send password reset email" in caplog.text

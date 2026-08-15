@@ -1,4 +1,5 @@
 import factory
+
 from .models import League, Sport, Team
 
 

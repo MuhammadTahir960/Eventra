@@ -2,7 +2,9 @@ import django_filters
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import mixins, status, viewsets
 from rest_framework.response import Response
+
 from apps.common.permissions import IsAdminForWrite
+
 from .models import League, Sport, Team
 from .serializers import LeagueSerializer, SportSerializer, TeamSerializer
 from .services import (
@@ -35,6 +37,19 @@ class TeamFilterSet(SportRelatedFilterSet):
         fields = ["sport"]
 
 
+class DeleteGuardMixin:
+    delete_guard = None
+    delete_blocked_error = None
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        try:
+            self.delete_guard(instance)
+        except self.delete_blocked_error as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        return super().destroy(request, *args, **kwargs)
+
+
 class SportReassignmentGuardMixin:
     reassignment_guard = None
     reassignment_blocked_error = None
@@ -58,6 +73,7 @@ class SportReassignmentGuardMixin:
 
 
 class SportViewSet(
+    DeleteGuardMixin,
     mixins.ListModelMixin,
     mixins.CreateModelMixin,
     mixins.RetrieveModelMixin,
@@ -69,18 +85,13 @@ class SportViewSet(
     serializer_class = SportSerializer
     permission_classes = [IsAdminForWrite]
     http_method_names = ["get", "post", "patch", "delete"]
-
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-        try:
-            ensure_sport_deletable(instance)
-        except SportInUseError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        return super().destroy(request, *args, **kwargs)
+    delete_guard = staticmethod(ensure_sport_deletable)
+    delete_blocked_error = SportInUseError
 
 
 class LeagueViewSet(
     SportReassignmentGuardMixin,
+    DeleteGuardMixin,
     mixins.ListModelMixin,
     mixins.CreateModelMixin,
     mixins.RetrieveModelMixin,
@@ -96,18 +107,13 @@ class LeagueViewSet(
     http_method_names = ["get", "post", "patch", "delete"]
     reassignment_guard = staticmethod(ensure_league_sport_reassignable)
     reassignment_blocked_error = LeagueSportReassignmentBlockedError
-
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-        try:
-            ensure_league_deletable(instance)
-        except LeagueInUseError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        return super().destroy(request, *args, **kwargs)
+    delete_guard = staticmethod(ensure_league_deletable)
+    delete_blocked_error = LeagueInUseError
 
 
 class TeamViewSet(
     SportReassignmentGuardMixin,
+    DeleteGuardMixin,
     mixins.ListModelMixin,
     mixins.CreateModelMixin,
     mixins.RetrieveModelMixin,
@@ -123,11 +129,5 @@ class TeamViewSet(
     http_method_names = ["get", "post", "patch", "delete"]
     reassignment_guard = staticmethod(ensure_team_sport_reassignable)
     reassignment_blocked_error = TeamSportReassignmentBlockedError
-
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-        try:
-            ensure_team_deletable(instance)
-        except TeamInUseError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        return super().destroy(request, *args, **kwargs)
+    delete_guard = staticmethod(ensure_team_deletable)
+    delete_blocked_error = TeamInUseError

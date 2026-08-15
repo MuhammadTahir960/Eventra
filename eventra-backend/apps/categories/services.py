@@ -1,5 +1,6 @@
 from django.db.models import Q
 from django.utils.text import slugify
+
 from .models import Category
 
 

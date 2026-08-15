@@ -1,5 +1,6 @@
 from rest_framework import permissions
 from rest_framework.permissions import SAFE_METHODS, BasePermission
+
 from apps.common.constants import Roles
 
 
@@ -30,6 +31,17 @@ class IsAdminForWrite(BasePermission):
             and request.user.is_authenticated
             and request.user.role == Roles.ADMIN
         )
+
+
+class IsEventOwnerStrict(BasePermission):
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated)
+
+    def has_object_permission(self, request, view, obj):
+        if not (request.user and request.user.is_authenticated):
+            return False
+        event = obj if hasattr(obj, "organizer_id") else obj.event
+        return event.organizer_id == request.user.id
 
 
 class IsOwnerOrAdmin(permissions.BasePermission):

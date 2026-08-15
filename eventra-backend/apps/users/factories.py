@@ -1,5 +1,6 @@
 import factory
 from factory.django import DjangoModelFactory
+
 from apps.common.constants import Roles
 from apps.users.models import User
 

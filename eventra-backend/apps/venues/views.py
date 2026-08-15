@@ -3,10 +3,12 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+
 from apps.common.constants import Roles
 from apps.common.mixins import SoftDeleteDestroyMixin, SoftDeleteRestoreMixin
 from apps.common.permissions import IsAdmin, IsAdminForWrite, IsOrganizer
 from apps.events.services import find_blocking_upcoming_event
+
 from .models import Venue
 from .serializers import BulkSeatTemplateSerializer, SeatSerializer, VenueSerializer
 from .services import (

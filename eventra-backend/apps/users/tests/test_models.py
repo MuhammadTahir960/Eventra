@@ -1,7 +1,9 @@
 import pytest
 from django.db import IntegrityError
+
 from apps.common.constants import Roles
 from apps.users.models import User
+
 from ..factories import UserFactory
 
 pytestmark = pytest.mark.django_db

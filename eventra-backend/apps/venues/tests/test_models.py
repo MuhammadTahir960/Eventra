@@ -1,8 +1,9 @@
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
-from ..models import Seat, Venue
+
 from ..factories import SeatFactory, VenueFactory
+from ..models import Seat, Venue
 
 pytestmark = pytest.mark.django_db
 

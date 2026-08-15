@@ -1,13 +1,16 @@
-import pytest
 from datetime import timedelta
+
+import pytest
 from django.core import mail
 from rest_framework import status
 from rest_framework.test import APIClient
-from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
+from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
+
 from apps.common.constants import Roles
+
+from ..factories import UserFactory
 from ..models import User
 from ..tokens import generate_password_reset_token, generate_verification_token
-from ..factories import UserFactory
 
 pytestmark = pytest.mark.django_db
 

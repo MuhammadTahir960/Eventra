@@ -1,5 +1,7 @@
 from rest_framework import serializers
+
 from apps.common.serializers import IntegrityErrorHandlingMixin
+
 from .models import Category
 from .services import (
     DuplicateCategoryError,
@@ -24,7 +26,7 @@ class CategorySerializer(IntegrityErrorHandlingMixin, serializers.ModelSerialize
             try:
                 ensure_unique_category_name(name, exclude_pk=exclude_pk)
             except InactiveDuplicateCategoryError as exc:
-                raise serializers.ValidationError({"name": str(exc)})
+                raise serializers.ValidationError({"name": str(exc)}) from exc
             except DuplicateCategoryError as exc:
-                raise serializers.ValidationError({"name": str(exc)})
+                raise serializers.ValidationError({"name": str(exc)}) from exc
         return attrs

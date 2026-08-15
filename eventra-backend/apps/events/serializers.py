@@ -1,7 +1,9 @@
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
+
 from apps.common.constants import Roles
 from apps.common.serializers import IntegrityErrorHandlingMixin
+
 from .models import Event, TicketTier, TierSectionMapping
 from .services import (
     ensure_tier_price_mutable,
@@ -77,11 +79,12 @@ class EventSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     "sports_match events require both home_team and away_team."
                 )
-            if home_team_id := getattr(home_team, "id", home_team):
-                if home_team_id == getattr(away_team, "id", away_team):
-                    raise serializers.ValidationError(
-                        {"away_team": "away_team must differ from home_team."}
-                    )
+            if (
+                home_team_id := getattr(home_team, "id", home_team)
+            ) and home_team_id == getattr(away_team, "id", away_team):
+                raise serializers.ValidationError(
+                    {"away_team": "away_team must differ from home_team."}
+                )
             if league and (
                 home_team.sport_id != league.sport_id
                 or away_team.sport_id != league.sport_id

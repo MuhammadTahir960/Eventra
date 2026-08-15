@@ -1,5 +1,8 @@
 from django.db import IntegrityError, transaction
-from .models import Venue, Seat
+
+from apps.seating.models import EventSeat
+
+from .models import Seat, Venue
 
 
 class DuplicateSeatError(Exception):
@@ -33,6 +36,12 @@ def bulk_create_seat_template(
     if existing_seat_count > 0 and not allow_reseed:
         raise SeatTemplateExistsError(
             "This venue already has a seat template. Contact an admin to modify it."
+        )
+
+    if existing_seat_count > 0 and EventSeat.objects.filter(seat__venue=venue).exists():
+        raise SeatTemplateInUseError(
+            "This venue's seats are already instantiated for one or more events — the "
+            "template can't be replaced while that event history exists."
         )
 
     new_seat_count = sum(

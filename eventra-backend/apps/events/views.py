@@ -1,16 +1,17 @@
 import django_filters
 from django.contrib.postgres.search import SearchQuery, SearchVector
-from django.db.models import Q
-from django.shortcuts import get_object_or_404
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotAuthenticated, PermissionDenied
+from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
+
 from apps.common.constants import Roles
 from apps.common.mixins import SoftDeleteRestoreMixin
-from apps.common.permissions import IsAdmin, IsOrganizer
-from .models import Event, EVENT_SEARCH_CONFIG, TicketTier
-from .permissions import IsEventOwnerOrAdminForDelete, IsEventOwnerStrict
+from apps.common.permissions import IsAdmin, IsEventOwnerStrict, IsOrganizer
+
+from .models import EVENT_SEARCH_CONFIG, Event, TicketTier
+from .permissions import IsEventOwnerOrAdminForDelete
 from .serializers import (
     EventSerializer,
     TicketTierSerializer,
@@ -25,6 +26,7 @@ from .services import (
     ensure_can_restore_event,
     ensure_event_deletable,
     reject_event,
+    visible_events_for_user,
 )
 
 
@@ -76,26 +78,20 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = Event.objects.select_related(
-            "venue", "category", "organizer", "league", "home_team", "away_team"
-        )
-        public_statuses = [Event.Status.APPROVED, Event.Status.COMPLETED]
-
-        if not user or not user.is_authenticated:
-            return qs.filter(status__in=public_statuses)
-
         include_inactive = str(
             self.request.query_params.get("include_inactive", "")
         ).lower() in ("1", "true", "yes")
-        if user.role == Roles.ADMIN:
-            if include_inactive:
-                qs = Event.all_objects.select_related(
-                    "venue", "category", "organizer", "league", "home_team", "away_team"
-                )
-            return qs
-        if user.role == Roles.ORGANIZER:
-            return qs.filter(Q(organizer=user) | Q(status__in=public_statuses))
-        return qs.filter(status__in=public_statuses)
+
+        if (
+            user
+            and user.is_authenticated
+            and user.role == Roles.ADMIN
+            and include_inactive
+        ):
+            return Event.all_objects.select_related(
+                "venue", "category", "organizer", "league", "home_team", "away_team"
+            )
+        return visible_events_for_user(user)
 
     def get_permissions(self):
         if self.action in ("list", "retrieve"):

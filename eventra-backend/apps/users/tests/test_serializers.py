@@ -1,9 +1,12 @@
-import pytest
 from unittest.mock import patch
+
+import pytest
 from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import AuthenticationFailed, TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
+
 from apps.common.constants import Roles
+
 from ..factories import UserFactory
 from ..models import User
 from ..serializers import (
@@ -263,14 +266,14 @@ def test_logout_serializer_blacklists_valid_refresh_token():
     assert serializer.is_valid(), serializer.errors
     serializer.save()
 
-    with pytest.raises(Exception):
+    with pytest.raises(TokenError):
         RefreshToken(str(refresh)).blacklist()
 
 
 def test_logout_serializer_rejects_invalid_token():
     serializer = LogoutSerializer(data={"refresh": "not-a-real-token"})
     serializer.is_valid()
-    with pytest.raises(Exception):
+    with pytest.raises(serializers.ValidationError):
         serializer.save()
 
 
@@ -298,7 +301,7 @@ def test_logout_serializer_rejects_already_blacklisted_token():
 
     second = LogoutSerializer(data={"refresh": str(refresh)})
     second.is_valid()
-    with pytest.raises(Exception):
+    with pytest.raises(serializers.ValidationError):
         second.save()
 
 
@@ -311,9 +314,8 @@ def test_logout_serializer_wraps_blacklist_call_error_as_validation_error():
     with patch(
         "rest_framework_simplejwt.tokens.RefreshToken.blacklist",
         side_effect=TokenError("Token is blacklisted"),
-    ):
-        with pytest.raises(serializers.ValidationError) as exc_info:
-            serializer.save()
+    ), pytest.raises(serializers.ValidationError) as exc_info:
+        serializer.save()
 
     assert "refresh" in exc_info.value.detail
 

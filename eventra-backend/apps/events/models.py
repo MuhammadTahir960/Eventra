@@ -1,4 +1,5 @@
 from decimal import Decimal
+
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVector
 from django.core.exceptions import ValidationError
@@ -6,6 +7,7 @@ from django.core.validators import FileExtensionValidator, MinValueValidator
 from django.db import models
 from django.db.models import F, Q
 from django.utils.text import slugify
+
 from apps.common.models import SoftDeleteModel, UUIDBaseModel
 
 MAX_COVER_IMAGE_SIZE_MB = 5

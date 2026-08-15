@@ -1,5 +1,6 @@
 import uuid
 from unittest.mock import patch
+
 from apps.users import tokens as tokens_module
 from apps.users.tokens import (
     generate_password_reset_token,

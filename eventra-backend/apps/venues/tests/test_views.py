@@ -1,15 +1,20 @@
-import pytest
 import uuid
 from unittest.mock import patch
+
+import pytest
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
+
 from apps.common.constants import Roles
+from apps.events.factories import EventFactory, TicketTierFactory
+from apps.seating.factories import EventSeatFactory
 from apps.users.factories import UserFactory
 from apps.venues.services import DuplicateSeatError
 from tests.helpers import results
-from ..models import Venue
+
 from ..factories import SeatFactory, VenueFactory
+from ..models import Venue
 
 pytestmark = pytest.mark.django_db
 
@@ -418,6 +423,20 @@ class TestVenueSeats:
         assert response.status_code == status.HTTP_201_CREATED
         assert venue.seats.count() == 10
         assert not venue.seats.filter(section="Original").exists()
+
+    def test_admin_reseed_blocked_when_seat_in_use_by_an_event(self, admin):
+        venue = VenueFactory(capacity=100)
+        seat = SeatFactory(venue=venue, section="Original")
+        event = EventFactory(venue=venue)
+        tier = TicketTierFactory(event=event)
+        EventSeatFactory(event=event, seat=seat, ticket_tier=tier)
+
+        client = auth_client(admin)
+        response = client.post(
+            f"/venues/{venue.pk}/seats/", self._seat_template_payload(), format="json"
+        )
+        assert response.status_code == status.HTTP_409_CONFLICT
+        assert venue.seats.count() == 1
 
     def test_capacity_exceeded_returns_409(self, organizer):
         venue = VenueFactory(capacity=5)

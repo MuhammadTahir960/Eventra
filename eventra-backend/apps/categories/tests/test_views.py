@@ -1,13 +1,16 @@
 import uuid
+
 import pytest
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
+
 from apps.common.constants import Roles
 from apps.users.factories import UserFactory
 from tests.helpers import results
-from ..models import Category
+
 from ..factories import CategoryFactory
+from ..models import Category
 
 pytestmark = pytest.mark.django_db
 

@@ -2,19 +2,20 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
+
+from .serializers import (
+    ActiveUserTokenObtainPairSerializer,
+    LogoutSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
+    RegisterSerializer,
+    UserSerializer,
+)
 from .services import (
     register_user,
     request_password_reset,
     reset_password,
     verify_user_email,
-)
-from .serializers import (
-    RegisterSerializer,
-    ActiveUserTokenObtainPairSerializer,
-    LogoutSerializer,
-    PasswordResetConfirmSerializer,
-    PasswordResetRequestSerializer,
-    UserSerializer,
 )
 
 

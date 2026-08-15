@@ -1,7 +1,9 @@
 import pytest
 from django.contrib.auth.models import AnonymousUser
+
 from apps.common.constants import Roles
 from apps.users.factories import UserFactory
+
 from ..permissions import IsOrganizerOrAdminForWrite
 
 
