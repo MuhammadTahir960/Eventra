@@ -1,8 +1,14 @@
 import logging
+import secrets
+import uuid
+from datetime import datetime, timedelta
 
 from django.conf import settings
 from django.core.mail import send_mail
 from django.db import transaction
+from django.utils import timezone
+
+from apps.common.redis import get_redis_client
 
 from .models import User
 from .tokens import (
@@ -13,6 +19,9 @@ from .tokens import (
 )
 
 logger = logging.getLogger(__name__)
+
+WS_TICKET_TTL_SECONDS = 30
+_WS_TICKET_KEY_PREFIX = "ws_ticket:"
 
 
 def send_verification_email(user: User) -> None:
@@ -138,3 +147,39 @@ def verify_user_email(token: str) -> tuple[User, bool] | None:
         user.is_email_verified = True
         user.save(update_fields=["is_active", "is_email_verified", "last_updated"])
         return user, True
+
+
+def issue_ws_ticket(user: User) -> tuple[str, datetime]:
+    """Issue a single-use, ~30-second WebSocket connection ticket for `user`."""
+    ticket = secrets.token_urlsafe(32)
+    expires_at = timezone.now() + timedelta(seconds=WS_TICKET_TTL_SECONDS)
+
+    client = get_redis_client()
+    client.set(
+        f"{_WS_TICKET_KEY_PREFIX}{ticket}",
+        str(user.id),
+        ex=WS_TICKET_TTL_SECONDS,
+    )
+    return ticket, expires_at
+
+
+def validate_and_consume_ws_ticket(ticket: str) -> uuid.UUID | None:
+    """
+    Atomically look up and invalidate a WebSocket ticket in one Redis round
+    trip (GETDEL) — the ticket is gone the instant it's read, valid or not,
+    so it can never be replayed no matter what the caller does with the
+    result afterward. Returns the owning user's id on success, or None if
+    the ticket is missing, expired, or already used.
+    """
+    if not ticket:
+        return None
+
+    client = get_redis_client()
+    raw_user_id = client.getdel(f"{_WS_TICKET_KEY_PREFIX}{ticket}")
+    if raw_user_id is None:
+        return None
+
+    try:
+        return uuid.UUID(raw_user_id.decode("utf-8"))
+    except (ValueError, AttributeError, TypeError):
+        return None
