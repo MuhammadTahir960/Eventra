@@ -254,6 +254,111 @@ def test_hold_seats_re_hold_by_same_user_refreshes_instead_of_conflicting():
     assert seat.status == EventSeat.Status.HELD
 
 
+def test_hold_seats_rejects_booked_seat():
+    event = _seated_event_with_mapped_venue()
+    instantiate_event_seats(event)
+    seat = EventSeat.objects.filter(event=event).first()
+    seat.status = EventSeat.Status.BOOKED
+    seat.save(update_fields=["status"])
+
+    with pytest.raises(SeatsUnavailableError) as exc_info:
+        hold_seats(event=event, seat_ids=[seat.id], user=UserFactory(role="attendee"))
+    assert exc_info.value.seat_ids == [seat.id]
+
+
+def test_hold_seats_reclaims_seat_whose_hold_has_expired_but_not_yet_been_swept():
+    event = _seated_event_with_mapped_venue()
+    instantiate_event_seats(event)
+    seat = EventSeat.objects.filter(event=event).first()
+    original_holder = UserFactory(role="attendee")
+    new_user = UserFactory(role="attendee")
+
+    original_group_id, _, _ = hold_seats(
+        event=event, seat_ids=[seat.id], user=original_holder
+    )
+    SeatHold.objects.filter(event_seat=seat).update(
+        expires_at=timezone.now() - timedelta(seconds=1)
+    )
+    seat.refresh_from_db()
+    assert seat.status == EventSeat.Status.HELD
+
+    new_group_id, new_expires_at, held = hold_seats(
+        event=event, seat_ids=[seat.id], user=new_user
+    )
+
+    assert new_group_id != original_group_id
+    assert new_expires_at > timezone.now()
+    assert len(held) == 1
+    seat.refresh_from_db()
+    assert seat.status == EventSeat.Status.HELD
+
+    hold = SeatHold.objects.get(event_seat=seat)
+    assert hold.user_id == new_user.id
+    assert hold.group_id == new_group_id
+    assert hold.expires_at == new_expires_at
+
+
+def test_hold_seats_reclaims_all_seats_in_a_multi_seat_request_when_every_hold_has_expired():
+    event = _seated_event_with_mapped_venue()
+    instantiate_event_seats(event)
+    seats = list(EventSeat.objects.filter(event=event))
+    assert len(seats) == 2
+    original_holder = UserFactory(role="attendee")
+    new_user = UserFactory(role="attendee")
+
+    hold_seats(event=event, seat_ids=[s.id for s in seats], user=original_holder)
+    SeatHold.objects.filter(event_seat__in=seats).update(
+        expires_at=timezone.now() - timedelta(seconds=1)
+    )
+
+    group_id, expires_at, held = hold_seats(
+        event=event, seat_ids=[s.id for s in seats], user=new_user
+    )
+
+    assert len(held) == 2
+    holds = SeatHold.objects.filter(event_seat__in=seats)
+    assert holds.count() == 2
+    assert {h.group_id for h in holds} == {group_id}
+    assert all(h.user_id == new_user.id for h in holds)
+
+
+def test_hold_seats_mixed_batch_one_reclaimable_one_still_live_conflicts_atomically():
+    event = _seated_event_with_mapped_venue()
+    instantiate_event_seats(event)
+    reclaimable_seat, still_live_seat = list(EventSeat.objects.filter(event=event))
+    other_user_a = UserFactory(role="attendee")
+    other_user_b = UserFactory(role="attendee")
+
+    hold_seats(event=event, seat_ids=[reclaimable_seat.id], user=other_user_a)
+    SeatHold.objects.filter(event_seat=reclaimable_seat).update(
+        expires_at=timezone.now() - timedelta(seconds=1)
+    )
+    hold_seats(event=event, seat_ids=[still_live_seat.id], user=other_user_b)
+
+    with pytest.raises(SeatsUnavailableError) as exc_info:
+        hold_seats(
+            event=event,
+            seat_ids=[reclaimable_seat.id, still_live_seat.id],
+            user=UserFactory(role="attendee"),
+        )
+    assert exc_info.value.seat_ids == [still_live_seat.id]
+
+    assert SeatHold.objects.filter(event_seat=reclaimable_seat).count() == 1
+    assert SeatHold.objects.get(event_seat=reclaimable_seat).user_id == other_user_a.id
+
+
+def test_hold_seats_still_conflicts_on_a_hold_that_has_not_expired_yet():
+    event = _seated_event_with_mapped_venue()
+    instantiate_event_seats(event)
+    seat = EventSeat.objects.filter(event=event).first()
+    original_holder = UserFactory(role="attendee")
+    hold_seats(event=event, seat_ids=[seat.id], user=original_holder)
+
+    with pytest.raises(SeatsUnavailableError) as exc_info:
+        hold_seats(event=event, seat_ids=[seat.id], user=UserFactory(role="attendee"))
+    assert exc_info.value.seat_ids == [seat.id]
+
+
 def test_hold_seats_dedupes_repeated_seat_ids():
     event = _seated_event_with_mapped_venue()
     instantiate_event_seats(event)
@@ -317,3 +422,59 @@ def test_concurrent_holds_on_the_same_seat_exactly_one_wins():
     event_seat.refresh_from_db()
     assert event_seat.status == EventSeat.Status.HELD
     assert SeatHold.objects.filter(event_seat=event_seat).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_reclaims_of_the_same_expired_unswept_hold_exactly_one_wins():
+    venue = VenueFactory()
+    SeatFactory(venue=venue, section="Main", row_label="A", seat_number=1)
+    event = EventFactory(venue=venue, is_seated=True, status=Event.Status.APPROVED)
+    tier = TicketTierFactory(event=event)
+    TierSectionMappingFactory(event=event, ticket_tier=tier, section="Main")
+    instantiate_event_seats(event)
+    event_seat = EventSeat.objects.get(event=event)
+
+    original_holder = UserFactory(role="attendee")
+    hold_seats(event=event, seat_ids=[event_seat.id], user=original_holder)
+    SeatHold.objects.filter(event_seat=event_seat).update(
+        expires_at=timezone.now() - timedelta(seconds=1)
+    )
+
+    user_a = UserFactory(role="attendee")
+    user_b = UserFactory(role="attendee")
+
+    outcomes = {}
+    barrier = threading.Barrier(2)
+
+    def attempt(user, key):
+        barrier.wait()
+        try:
+            hold_seats(event=event, seat_ids=[event_seat.id], user=user)
+            outcomes[key] = "success"
+        except SeatsUnavailableError:
+            outcomes[key] = "conflict"
+        except SeatLockConflictError:
+            outcomes[key] = "lock_conflict"
+        finally:
+            connection.close()
+
+    t1 = threading.Thread(target=attempt, args=(user_a, "a"))
+    t2 = threading.Thread(target=attempt, args=(user_b, "b"))
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    assert (
+        not t1.is_alive() and not t2.is_alive()
+    ), "a thread hung — NOWAIT should never block"
+    values = list(outcomes.values())
+    assert values.count("success") == 1
+    assert values.count("conflict") + values.count("lock_conflict") == 1
+
+    event_seat.refresh_from_db()
+    assert event_seat.status == EventSeat.Status.HELD
+    assert SeatHold.objects.filter(event_seat=event_seat).count() == 1
+    winning_hold = SeatHold.objects.get(event_seat=event_seat)
+    assert winning_hold.user_id in {user_a.id, user_b.id}
+    assert winning_hold.user_id != original_holder.id

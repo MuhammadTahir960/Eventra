@@ -537,3 +537,57 @@ class TestPasswordResetConfirm:
             self.url, {"token": "garbage", "new_password": "a-strong-pass-1"}
         )
         assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+
+
+# ==================================================
+# POST /auth/ws-ticket/
+# ==================================================
+
+
+class TestWsTicket:
+    url = "/auth/ws-ticket/"
+
+    def test_requires_authentication(self, api_client):
+        response = api_client.post(self.url)
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_authenticated_user_receives_ticket_and_expiry(self):
+        user = UserFactory()
+        client = auth_client(user)
+
+        response = client.post(self.url)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert isinstance(response.data["ticket"], str)
+        assert len(response.data["ticket"]) > 20
+        assert "expires_at" in response.data
+
+    def test_ticket_is_actually_redeemable_for_the_requesting_user(self):
+        from apps.users.services import validate_and_consume_ws_ticket
+
+        user = UserFactory()
+        client = auth_client(user)
+
+        response = client.post(self.url)
+        ticket = response.data["ticket"]
+
+        assert validate_and_consume_ws_ticket(ticket) == user.id
+
+    def test_each_call_issues_a_distinct_ticket(self):
+        user = UserFactory()
+        client = auth_client(user)
+
+        first = client.post(self.url).data["ticket"]
+        second = client.post(self.url).data["ticket"]
+
+        assert first != second
+
+    def test_throttled_after_rate_exceeded(self):
+        user = UserFactory()
+        client = auth_client(user)
+
+        for _ in range(20):
+            client.post(self.url)
+        response = client.post(self.url)
+
+        assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS

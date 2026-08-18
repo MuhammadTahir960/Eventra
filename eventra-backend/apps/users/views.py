@@ -12,6 +12,7 @@ from .serializers import (
     UserSerializer,
 )
 from .services import (
+    issue_ws_ticket,
     register_user,
     request_password_reset,
     reset_password,
@@ -123,5 +124,17 @@ class PasswordResetConfirmView(generics.GenericAPIView):
             )
         return Response(
             {"detail": "Password has been reset successfully."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class WsTicketView(generics.GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = "auth-ws-ticket"
+
+    def post(self, request):
+        ticket, expires_at = issue_ws_ticket(request.user)
+        return Response(
+            {"ticket": ticket, "expires_at": expires_at.isoformat()},
             status=status.HTTP_200_OK,
         )

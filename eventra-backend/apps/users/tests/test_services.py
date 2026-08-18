@@ -1,8 +1,11 @@
+import threading
+import time
 import uuid
 from unittest.mock import patch
 
 import pytest
 from django.core import mail
+from django.utils import timezone
 
 from apps.users.tokens import verify_password_reset_token, verify_token
 
@@ -10,11 +13,13 @@ from ..factories import UserFactory
 from ..models import User
 from ..serializers import RegisterSerializer
 from ..services import (
+    issue_ws_ticket,
     register_user,
     request_password_reset,
     reset_password,
     send_password_reset_email,
     send_verification_email,
+    validate_and_consume_ws_ticket,
     verify_user_email,
 )
 from ..tokens import generate_password_reset_token, generate_verification_token
@@ -307,3 +312,88 @@ def test_reset_password_token_for_deleted_user_returns_false():
 
     assert reset_password(token, "a-new-strong-pass-2") is False
     assert not User.objects.filter(id=user_id).exists()
+
+
+# ==================================================
+# WebSocket ticket issuance & consumption
+# ==================================================
+
+
+@pytest.mark.django_db
+def test_issue_ws_ticket_returns_opaque_ticket_and_expiry():
+    user = UserFactory()
+    ticket, expires_at = issue_ws_ticket(user)
+
+    assert isinstance(ticket, str)
+    assert len(ticket) > 20
+    assert expires_at > timezone.now()
+
+
+@pytest.mark.django_db
+def test_ws_ticket_round_trip_returns_owning_user_id():
+    user = UserFactory()
+    ticket, _ = issue_ws_ticket(user)
+
+    resolved_user_id = validate_and_consume_ws_ticket(ticket)
+
+    assert resolved_user_id == user.id
+
+
+@pytest.mark.django_db
+def test_ws_ticket_is_single_use():
+    user = UserFactory()
+    ticket, _ = issue_ws_ticket(user)
+
+    first = validate_and_consume_ws_ticket(ticket)
+    second = validate_and_consume_ws_ticket(ticket)
+
+    assert first == user.id
+    assert second is None
+
+
+@pytest.mark.django_db
+def test_ws_ticket_expires_after_ttl(monkeypatch):
+    import apps.users.services as services_module
+
+    monkeypatch.setattr(services_module, "WS_TICKET_TTL_SECONDS", 1)
+
+    user = UserFactory()
+    ticket, _ = issue_ws_ticket(user)
+
+    time.sleep(1.5)
+
+    assert validate_and_consume_ws_ticket(ticket) is None
+
+
+@pytest.mark.django_db
+def test_ws_ticket_garbage_or_unknown_value_returns_none():
+    assert validate_and_consume_ws_ticket("this-was-never-issued") is None
+
+
+@pytest.mark.django_db
+def test_ws_ticket_empty_or_missing_value_returns_none():
+    assert validate_and_consume_ws_ticket("") is None
+    assert validate_and_consume_ws_ticket(None) is None
+
+
+@pytest.mark.django_db
+def test_ws_ticket_two_concurrent_consumers_only_one_wins():
+    user = UserFactory()
+    ticket, _ = issue_ws_ticket(user)
+
+    results = []
+    barrier = threading.Barrier(2)
+
+    def attempt():
+        barrier.wait()
+        results.append(validate_and_consume_ws_ticket(ticket))
+
+    threads = [threading.Thread(target=attempt) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    winners = [r for r in results if r is not None]
+    assert winners == [user.id]
+    assert results.count(None) == 1

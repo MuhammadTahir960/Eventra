@@ -163,8 +163,10 @@ BACKEND_BASE_URL = env("BACKEND_BASE_URL", default="http://localhost:8000")
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[])
 
 
-CELERY_BROKER_URL = env("REDIS_URL", default="redis://localhost:6379/0")
-CELERY_RESULT_BACKEND = env("REDIS_URL", default="redis://localhost:6379/0")
+REDIS_URL = env("REDIS_URL", default="redis://localhost:6379/0")
+
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
@@ -176,6 +178,22 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": crontab(minute=0),
     },
 }
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": REDIS_URL,
+        "KEY_PREFIX": "eventra",
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        },
+    }
+}
+
+
+WS_CONNECT_RATE_LIMIT_PER_USER = env.int("WS_CONNECT_RATE_LIMIT_PER_USER", default=20)
+WS_CONNECT_RATE_LIMIT_PER_IP = env.int("WS_CONNECT_RATE_LIMIT_PER_IP", default=30)
+WS_CONNECT_RATE_LIMIT_WINDOW_SECONDS = 60
 
 
 REST_FRAMEWORK = {
@@ -198,6 +216,7 @@ REST_FRAMEWORK = {
         "auth-register": "5/hour",
         "auth-verify-email": "20/hour",
         "auth-password-reset": "5/hour",
+        "auth-ws-ticket": "20/min",
         "anon": "100/min",
         "user": "300/min",
     },

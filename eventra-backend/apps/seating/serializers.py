@@ -1,7 +1,10 @@
-from rest_framework import serializers
+import json
 
+from rest_framework import serializers
+from rest_framework.utils.encoders import JSONEncoder as DRFJSONEncoder
+
+from .constants import MAX_SEATS_PER_HOLD
 from .models import EventSeat
-from .services import MAX_SEATS_PER_HOLD
 
 
 class EventSeatSerializer(serializers.ModelSerializer):
@@ -31,6 +34,11 @@ class EventSeatSerializer(serializers.ModelSerializer):
             if obj.price_override is not None
             else obj.ticket_tier.price
         )
+
+
+def serialize_seats_for_ws(seats) -> list[dict]:
+    data = EventSeatSerializer(seats, many=True).data
+    return json.loads(json.dumps(data, cls=DRFJSONEncoder))
 
 
 class SeatHoldRequestSerializer(serializers.Serializer):

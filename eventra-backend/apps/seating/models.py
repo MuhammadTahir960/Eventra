@@ -39,7 +39,7 @@ class EventSeat(UUIDBaseModel):
 
 
 class SeatHold(UUIDBaseModel):
-    group_id = models.UUIDField(db_index=True)
+    group_id = models.UUIDField()
     event_seat = models.OneToOneField(
         EventSeat, on_delete=models.CASCADE, related_name="hold"
     )

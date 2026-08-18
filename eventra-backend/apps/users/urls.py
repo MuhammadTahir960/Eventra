@@ -9,6 +9,7 @@ from .views import (
     PasswordResetRequestView,
     RegisterView,
     VerifyEmailView,
+    WsTicketView,
 )
 
 urlpatterns = [
@@ -28,4 +29,5 @@ urlpatterns = [
         PasswordResetConfirmView.as_view(),
         name="password-reset-confirm",
     ),
+    path("ws-ticket/", WsTicketView.as_view(), name="ws-ticket"),
 ]

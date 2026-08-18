@@ -113,6 +113,10 @@ def get_visible_event_or_404(user, pk) -> Event:
     return get_object_or_404(visible_events_for_user(user), pk=pk)
 
 
+def get_visible_event_by_slug_or_404(user, slug) -> Event:
+    return get_object_or_404(visible_events_for_user(user), slug=slug)
+
+
 def find_blocking_upcoming_event(*, venue_id=None, category_id=None) -> bool:
     if not venue_id and not category_id:
         return False
