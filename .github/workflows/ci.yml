@@ -35,11 +35,21 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     env:
       SECRET_KEY: ci-test-secret-key
       DEBUG: "True"
       DATABASE_URL: postgres://eventra_test:eventra_test@localhost:5432/eventra_test
+      REDIS_URL: redis://localhost:6379/0
 
     steps:
       - uses: actions/checkout@v6
