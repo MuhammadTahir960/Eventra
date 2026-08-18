@@ -1,15 +1,16 @@
 import uuid
 from datetime import timedelta
 
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.db import IntegrityError, OperationalError, transaction
 from django.utils import timezone
 
 from apps.events.models import Event
 
+from .constants import HOLD_DURATION_MINUTES, MAX_SEATS_PER_HOLD
 from .models import EventSeat, SeatHold
-
-MAX_SEATS_PER_HOLD = 10
-HOLD_DURATION_MINUTES = 10
+from .serializers import serialize_seats_for_ws
 
 
 class NotSeatedEventError(Exception):
@@ -131,15 +132,16 @@ def hold_seats(
     try:
         with transaction.atomic():
             locked_seats = list(
-                EventSeat.objects.select_for_update(nowait=True, of=("self",)).filter(
-                    event=event, id__in=seat_ids
-                )
+                EventSeat.objects.select_for_update(nowait=True, of=("self",))
+                .select_related("seat", "ticket_tier")
+                .filter(event=event, id__in=seat_ids)
             )
             found_ids = {seat.id for seat in locked_seats}
             missing_ids = [sid for sid in seat_ids if sid not in found_ids]
             if missing_ids:
                 raise SeatsNotFoundError(missing_ids)
 
+            now = timezone.now()
             existing_holds = {
                 hold.event_seat_id: hold
                 for hold in SeatHold.objects.filter(event_seat__in=locked_seats)
@@ -149,8 +151,13 @@ def hold_seats(
             for seat in locked_seats:
                 if seat.status == EventSeat.Status.AVAILABLE:
                     continue
+                if seat.status == EventSeat.Status.BOOKED:
+                    conflict_ids.append(seat.id)
+                    continue
                 hold = existing_holds.get(seat.id)
                 if hold is not None and hold.user_id == user.id:
+                    continue
+                if hold is not None and hold.expires_at < now:
                     continue
                 conflict_ids.append(seat.id)
             if conflict_ids:
@@ -169,12 +176,28 @@ def hold_seats(
                 )
                 for seat in locked_seats
             )
+
+            for seat in locked_seats:
+                seat.status = EventSeat.Status.HELD
+
+            transaction.on_commit(
+                lambda: _broadcast_seat_update(event=event, seats=locked_seats)
+            )
     except OperationalError as exc:
         raise SeatLockConflictError(
             "One or more of these seats are being processed by another request right now. "
             "Please try again."
         ) from exc
 
-    for seat in locked_seats:
-        seat.status = EventSeat.Status.HELD
     return group_id, expires_at, locked_seats
+
+
+def _broadcast_seat_update(*, event: Event, seats: list[EventSeat]) -> None:
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f"seats_{event.slug}",
+        {
+            "type": "seat_update",
+            "seats": serialize_seats_for_ws(seats),
+        },
+    )
