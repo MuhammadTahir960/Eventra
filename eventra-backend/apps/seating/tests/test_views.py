@@ -1,4 +1,8 @@
+import threading
+import uuid
+
 import pytest
+from django.db import connection
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -220,3 +224,67 @@ class TestHoldSeats:
             f"/events/{event.id}/seats/hold/", {"seat_ids": [str(seat.id)]}
         )
         assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_hold_against_non_seated_event_returns_400(
+        self, organizer_user, attendee_user
+    ):
+        event = EventFactory(
+            organizer=organizer_user,
+            is_seated=False,
+            status=Event.Status.APPROVED,
+        )
+
+        response = auth_client(attendee_user).post(
+            f"/events/{event.id}/seats/hold/", {"seat_ids": [str(uuid.uuid4())]}
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_hold_unknown_seat_id_returns_400_naming_seat_ids(
+        self, organizer_user, attendee_user
+    ):
+        event = self._instantiated_event(organizer_user)
+        unknown_id = str(uuid.uuid4())
+
+        response = auth_client(attendee_user).post(
+            f"/events/{event.id}/seats/hold/", {"seat_ids": [unknown_id]}
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert {str(sid) for sid in response.data["seat_ids"]} == {unknown_id}
+
+    @pytest.mark.django_db(transaction=True)
+    def test_hold_returns_409_when_seat_row_is_locked_by_another_transaction(
+        self, organizer_user, attendee_user
+    ):
+        event = self._instantiated_event(organizer_user)
+        seat_id = str(EventSeat.objects.filter(event=event).first().id)
+
+        lock_acquired = threading.Event()
+        release_lock = threading.Event()
+
+        def hold_row_lock():
+            with connection.cursor() as cursor:
+                cursor.execute("BEGIN")
+                cursor.execute(
+                    "SELECT id FROM seating_eventseat WHERE id = %s FOR UPDATE",
+                    [seat_id],
+                )
+                lock_acquired.set()
+                release_lock.wait(timeout=10)
+                cursor.execute("COMMIT")
+            connection.close()
+
+        locker = threading.Thread(target=hold_row_lock)
+        locker.start()
+        lock_acquired.wait(timeout=10)
+
+        try:
+            response = auth_client(attendee_user).post(
+                f"/events/{event.id}/seats/hold/", {"seat_ids": [seat_id]}
+            )
+        finally:
+            release_lock.set()
+            locker.join(timeout=10)
+
+        assert not locker.is_alive(), "locking thread hung — test setup is broken"
+        assert response.status_code == status.HTTP_409_CONFLICT
+        assert "being processed by another request" in response.data["detail"]
