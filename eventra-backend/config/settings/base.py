@@ -15,6 +15,7 @@ from pathlib import Path
 
 import environ
 from celery.schedules import crontab
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -232,3 +233,17 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,  # old refresh token can't be reused after rotating
     "SIGNING_KEY": env("JWT_SIGNING_KEY", default=SECRET_KEY),
 }
+
+
+STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY")
+STRIPE_PUBLISHABLE_KEY = env("STRIPE_PUBLISHABLE_KEY")
+
+if not STRIPE_SECRET_KEY.startswith("sk_test_"):
+    raise ImproperlyConfigured(
+        "STRIPE_SECRET_KEY must be a Stripe *test-mode* key (sk_test_...). "
+        "This project never processes real payments by design."
+    )
+if not STRIPE_PUBLISHABLE_KEY.startswith("pk_test_"):
+    raise ImproperlyConfigured(
+        "STRIPE_PUBLISHABLE_KEY must be a Stripe *test-mode* key (pk_test_...)."
+    )
