@@ -24,6 +24,13 @@ class EventSeat(UUIDBaseModel):
     price_override = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True
     )
+    held_booking = models.ForeignKey(
+        "bookings.Booking",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="held_event_seats",
+    )
 
     class Meta:
         constraints = [
