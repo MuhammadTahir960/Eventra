@@ -2,17 +2,15 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.payments.serializers import CheckoutResponseSerializer
+from apps.payments.services import PaymentGatewayError
+
 from .models import Booking
-from .serializers import (
-    BookingSerializer,
-    CheckoutResponseSerializer,
-    HoldIdSerializer,
-)
+from .serializers import BookingSerializer, HoldIdSerializer
 from .services import (
     BookingNotPendingError,
     HoldExpiredError,
     HoldNotFoundError,
-    PaymentGatewayError,
     cancel_booking,
     checkout_booking,
     create_booking_from_hold,
