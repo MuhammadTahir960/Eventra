@@ -1,7 +1,7 @@
 celery==5.6.3
 channels==4.3.2
 daphne==4.2.2
-Django==6.0.7
+Django==6.0.8
 django-cors-headers==4.4.0
 django-environ==0.14.0
 django-filter==26.1
@@ -11,3 +11,4 @@ djangorestframework==3.17.1
 djangorestframework_simplejwt==5.5.1
 psycopg[binary]==3.3.4
 redis==8.1.0
+stripe==15.5.1
