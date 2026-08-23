@@ -1,7 +1,9 @@
 from django.core.exceptions import FieldDoesNotExist
 from django.db import transaction
+from django.http import Http404
 from rest_framework import status
 from rest_framework.decorators import action
+from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
 
 
@@ -23,10 +25,11 @@ class SoftDeleteDestroyMixin:
     def destroy(self, request, *args, **kwargs):
         lookup_url_kwarg = self.lookup_url_kwarg or self.lookup_field
         model = self.get_queryset().model
-        instance = model.all_objects.filter(
-            **{self.lookup_field: self.kwargs[lookup_url_kwarg]}
-        ).first()
-        if instance is None:
+        try:
+            instance = get_object_or_404(
+                model.all_objects, **{self.lookup_field: self.kwargs[lookup_url_kwarg]}
+            )
+        except Http404:
             return Response(status=status.HTTP_404_NOT_FOUND)
 
         self.check_object_permissions(request, instance)
@@ -58,8 +61,9 @@ class SoftDeleteRestoreMixin:
     @action(detail=True, methods=["post"])
     def restore(self, request, pk=None):
         model = self.get_queryset().model
-        instance = model.all_objects.filter(pk=pk).first()
-        if instance is None:
+        try:
+            instance = get_object_or_404(model.all_objects, pk=pk)
+        except Http404:
             return Response(status=status.HTTP_404_NOT_FOUND)
 
         if instance.is_active:
