@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from apps.events.factories import EventFactory
 from apps.payments.models import Payment
+from apps.payments.services import PaymentGatewayError
 from apps.seating.factories import EventSeatFactory, SeatHoldFactory
 from apps.seating.models import EventSeat, SeatHold
 from apps.users.factories import UserFactory
@@ -21,7 +22,6 @@ from ..services import (
     BookingNotPendingError,
     HoldExpiredError,
     HoldNotFoundError,
-    PaymentGatewayError,
     cancel_booking,
     checkout_booking,
     create_booking_from_hold,
