@@ -140,7 +140,7 @@ class TestBookingCheckoutEndpoint:
         )
         fake_intent = MagicMock(id="pi_test_abc", client_secret="pi_test_abc_secret")
         monkeypatch.setattr(
-            "apps.bookings.services.stripe.PaymentIntent.create",
+            "apps.payments.services.stripe.PaymentIntent.create",
             MagicMock(return_value=fake_intent),
         )
         client = _authed_client(user)
@@ -169,7 +169,7 @@ class TestBookingCheckoutEndpoint:
         def _boom(*args, **kwargs):
             raise stripe.error.APIConnectionError("could not connect to Stripe")
 
-        monkeypatch.setattr("apps.bookings.services.stripe.PaymentIntent.create", _boom)
+        monkeypatch.setattr("apps.payments.services.stripe.PaymentIntent.create", _boom)
         client = _authed_client(user)
 
         response = client.post(f"/bookings/{booking.id}/checkout/")

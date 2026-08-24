@@ -219,7 +219,7 @@ class TestCheckoutBooking:
         )
         fake_intent = MagicMock(id="pi_recovered", client_secret="secret_recovered")
         monkeypatch.setattr(
-            "apps.bookings.services.stripe.PaymentIntent.create",
+            "apps.payments.services.stripe.PaymentIntent.create",
             MagicMock(return_value=fake_intent),
         )
 
@@ -238,7 +238,7 @@ class TestCheckoutBooking:
         )
         fake_intent = MagicMock(id="pi_race", client_secret="secret_race")
         monkeypatch.setattr(
-            "apps.bookings.services.stripe.PaymentIntent.create",
+            "apps.payments.services.stripe.PaymentIntent.create",
             MagicMock(return_value=fake_intent),
         )
 
@@ -275,7 +275,7 @@ class TestCheckoutBooking:
         def _boom(*args, **kwargs):
             raise stripe.error.APIConnectionError("could not connect to Stripe")
 
-        monkeypatch.setattr("apps.bookings.services.stripe.PaymentIntent.create", _boom)
+        monkeypatch.setattr("apps.payments.services.stripe.PaymentIntent.create", _boom)
 
         with pytest.raises(PaymentGatewayError):
             checkout_booking(booking)
@@ -289,7 +289,7 @@ class TestCheckoutBooking:
         fake_intent = MagicMock(id="pi_test_123", client_secret="pi_test_123_secret")
         mock_create = MagicMock(return_value=fake_intent)
         monkeypatch.setattr(
-            "apps.bookings.services.stripe.PaymentIntent.create", mock_create
+            "apps.payments.services.stripe.PaymentIntent.create", mock_create
         )
 
         payment = checkout_booking(booking)
@@ -308,7 +308,7 @@ class TestCheckoutBooking:
         fake_intent = MagicMock(id="pi_test_456", client_secret="pi_test_456_secret")
         mock_create = MagicMock(return_value=fake_intent)
         monkeypatch.setattr(
-            "apps.bookings.services.stripe.PaymentIntent.create", mock_create
+            "apps.payments.services.stripe.PaymentIntent.create", mock_create
         )
 
         first = checkout_booking(booking)
@@ -332,7 +332,7 @@ class TestCheckoutBooking:
         booking = BookingFactory(status=Booking.Status.PENDING, total_amount=dollars)
         fake_intent = MagicMock(id="pi_test_x", client_secret="pi_test_x_secret")
         monkeypatch.setattr(
-            "apps.bookings.services.stripe.PaymentIntent.create",
+            "apps.payments.services.stripe.PaymentIntent.create",
             MagicMock(return_value=fake_intent),
         )
 
