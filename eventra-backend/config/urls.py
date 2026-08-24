@@ -29,6 +29,7 @@ urlpatterns = [
     path("", include("apps.categories.urls")),
     path("", include("apps.sports.urls")),
     path("", include("apps.events.urls")),
+    path("", include("apps.bookings.urls")),
 ]
 
 if settings.DEBUG:

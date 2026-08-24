@@ -123,20 +123,12 @@ class Event(SoftDeleteModel):
             ),
         ]
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._loaded_title = self.title
-
     def save(self, *args, **kwargs):
         is_new = self._state.adding
-        if is_new:
-            if not self.slug:
-                self.slug = slugify(self.title, allow_unicode=True) or str(self.id)
-        elif self.title != self._loaded_title:
+        if is_new and not self.slug:
             self.slug = slugify(self.title, allow_unicode=True) or str(self.id)
 
         super().save(*args, **kwargs)
-        self._loaded_title = self.title
 
     def __str__(self) -> str:
         return self.title

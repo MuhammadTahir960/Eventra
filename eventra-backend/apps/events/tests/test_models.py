@@ -24,11 +24,12 @@ def test_slug_generated_on_create():
     assert event.slug == "summer-music-festival"
 
 
-def test_slug_regenerated_when_title_changes():
+def test_slug_frozen_after_creation_even_when_title_changes():
     event = EventFactory(title="Old Title")
+    original_slug = event.slug
     event.title = "New Title"
     event.save()
-    assert event.slug == "new-title"
+    assert event.slug == original_slug
 
 
 def test_slug_not_regenerated_when_title_unchanged():
