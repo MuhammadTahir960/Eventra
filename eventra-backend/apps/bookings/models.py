@@ -12,6 +12,7 @@ class Booking(UUIDBaseModel):
         CONFIRMED = "confirmed", "Confirmed"
         CANCELLED = "cancelled", "Cancelled"
         REFUNDED = "refunded", "Refunded"
+        REFUND_FAILED = "refund_failed", "Refund Failed"
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
