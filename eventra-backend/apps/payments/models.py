@@ -10,6 +10,7 @@ class Payment(UUIDBaseModel):
         SUCCEEDED = "succeeded", "Succeeded"
         FAILED = "failed", "Failed"
         CANCELED = "canceled", "Canceled"
+        REFUNDED = "refunded", "Refunded"
 
     booking = models.OneToOneField(
         Booking,
