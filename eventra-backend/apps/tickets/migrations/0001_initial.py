@@ -12,7 +12,7 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ("bookings", "0001_initial"),
+        ("bookings", "0002_alter_booking_status"),
         ("seating", "0003_eventseat_held_booking"),
     ]
 
