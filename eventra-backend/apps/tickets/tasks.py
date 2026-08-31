@@ -3,7 +3,7 @@ import logging
 from celery import shared_task
 
 from .models import Ticket
-from .services import render_ticket_pdf
+from .services import get_or_render_ticket_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ def generate_ticket_pdf(booking_id):
 
     for ticket in tickets:
         try:
-            render_ticket_pdf(ticket)
+            get_or_render_ticket_pdf(ticket)
         except Exception:
             logger.exception(
                 "Failed to render ticket PDF for ticket %s (booking %s)",
