@@ -1,8 +1,11 @@
+import logging
 import uuid
 from datetime import timedelta
 
+import requests
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from django.conf import settings
 from django.db import IntegrityError, OperationalError, transaction
 from django.utils import timezone
 
@@ -11,6 +14,8 @@ from apps.events.models import Event
 from .constants import HOLD_DURATION_MINUTES, MAX_SEATS_PER_HOLD
 from .models import EventSeat, SeatHold
 from .serializers import serialize_seats_for_ws
+
+logger = logging.getLogger(__name__)
 
 
 class NotSeatedEventError(Exception):
@@ -181,7 +186,7 @@ def hold_seats(
                 seat.status = EventSeat.Status.HELD
 
             transaction.on_commit(
-                lambda: _broadcast_seat_update(event=event, seats=locked_seats)
+                lambda: broadcast_seat_update(event=event, seats=locked_seats)
             )
     except OperationalError as exc:
         raise SeatLockConflictError(
@@ -192,7 +197,7 @@ def hold_seats(
     return group_id, expires_at, locked_seats
 
 
-def _broadcast_seat_update(*, event: Event, seats: list[EventSeat]) -> None:
+def broadcast_seat_update(*, event: Event, seats: list[EventSeat]) -> None:
     channel_layer = get_channel_layer()
     async_to_sync(channel_layer.group_send)(
         f"seats_{event.slug}",
@@ -201,3 +206,60 @@ def _broadcast_seat_update(*, event: Event, seats: list[EventSeat]) -> None:
             "seats": serialize_seats_for_ws(seats),
         },
     )
+
+
+def notify_internal_broadcast(
+    *, event_slug: str, seat_ids: list, status_label: str
+) -> None:
+    try:
+        requests.post(
+            f"{settings.INTERNAL_API_BASE_URL}/internal/seats/broadcast/",
+            json={
+                "event_slug": event_slug,
+                "seat_ids": [str(seat_id) for seat_id in seat_ids],
+                "status": status_label,
+            },
+            timeout=5,
+        )
+    except requests.RequestException:
+        logger.exception(
+            "Internal broadcast call failed for event %s (seats: %s)",
+            event_slug,
+            seat_ids,
+        )
+
+
+def release_expired_holds() -> None:
+    now = timezone.now()
+
+    with transaction.atomic():
+        expired_holds = list(
+            SeatHold.objects.select_for_update()
+            .filter(expires_at__lt=now)
+            .select_related("event_seat__event")
+        )
+        if not expired_holds:
+            return
+
+        event_seat_ids = [hold.event_seat_id for hold in expired_holds]
+        seats = list(
+            EventSeat.objects.select_for_update().filter(id__in=event_seat_ids)
+        )
+        for seat in seats:
+            seat.status = EventSeat.Status.AVAILABLE
+        EventSeat.objects.bulk_update(seats, ["status"])
+
+        seat_ids_by_event_slug: dict[str, list] = {}
+        for hold in expired_holds:
+            seat_ids_by_event_slug.setdefault(hold.event_seat.event.slug, []).append(
+                hold.event_seat_id
+            )
+
+        SeatHold.objects.filter(id__in=[hold.id for hold in expired_holds]).delete()
+
+        for event_slug, seat_ids in seat_ids_by_event_slug.items():
+            transaction.on_commit(
+                lambda event_slug=event_slug, seat_ids=seat_ids: notify_internal_broadcast(
+                    event_slug=event_slug, seat_ids=seat_ids, status_label="available"
+                )
+            )
