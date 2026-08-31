@@ -22,9 +22,9 @@ from ..services import (
     BookingNotPendingError,
     HoldExpiredError,
     HoldNotFoundError,
-    cancel_booking,
     checkout_booking,
     create_booking_from_hold,
+    sweep_expired_pending_bookings,
 )
 
 pytestmark = pytest.mark.django_db
@@ -340,30 +340,95 @@ class TestCheckoutBooking:
         assert payment.amount == expected_cents
 
 
-class TestCancelBooking:
-    def test_releases_seats_and_cancels_pending_booking(self):
+class TestSweepExpiredPendingBookings:
+    def test_stale_pending_booking_is_released_and_cancelled(
+        self, monkeypatch, django_capture_on_commit_callbacks
+    ):
+        mock_notify = MagicMock()
+        monkeypatch.setattr(
+            "apps.bookings.services.notify_internal_broadcast", mock_notify
+        )
+
         user = UserFactory()
         group_id, seat = _held_seat_with_hold(user)
         booking, _ = create_booking_from_hold(group_id, user)
+        Booking.objects.filter(id=booking.id).update(
+            created_at=timezone.now() - timedelta(minutes=10)
+        )
 
-        cancel_booking(booking)
+        with django_capture_on_commit_callbacks(execute=True):
+            sweep_expired_pending_bookings()
 
         booking.refresh_from_db()
         seat.refresh_from_db()
         assert booking.status == Booking.Status.CANCELLED
         assert seat.status == EventSeat.Status.AVAILABLE
         assert seat.held_booking_id is None
+        mock_notify.assert_called_once()
+        _, kwargs = mock_notify.call_args
+        assert kwargs["seat_ids"] == [seat.id]
+        assert kwargs["status_label"] == "available"
 
-    def test_raises_when_booking_not_pending(self):
-        booking = BookingFactory(status=Booking.Status.CONFIRMED)
-        with pytest.raises(BookingNotPendingError):
-            cancel_booking(booking)
+    def test_booking_still_within_window_is_left_alone(self, monkeypatch):
+        mock_notify = MagicMock()
+        monkeypatch.setattr(
+            "apps.bookings.services.notify_internal_broadcast", mock_notify
+        )
 
-    def test_cancel_then_recancel_is_rejected(self):
         user = UserFactory()
         group_id, seat = _held_seat_with_hold(user)
         booking, _ = create_booking_from_hold(group_id, user)
 
-        cancel_booking(booking)
-        with pytest.raises(BookingNotPendingError):
-            cancel_booking(booking)
+        sweep_expired_pending_bookings()
+
+        booking.refresh_from_db()
+        seat.refresh_from_db()
+        assert booking.status == Booking.Status.PENDING
+        assert seat.status == EventSeat.Status.HELD
+        mock_notify.assert_not_called()
+
+    def test_already_confirmed_booking_is_untouched_even_if_stale(self, monkeypatch):
+        mock_notify = MagicMock()
+        monkeypatch.setattr(
+            "apps.bookings.services.notify_internal_broadcast", mock_notify
+        )
+
+        user = UserFactory()
+        group_id, seat = _held_seat_with_hold(user)
+        booking, _ = create_booking_from_hold(group_id, user)
+        Booking.objects.filter(id=booking.id).update(
+            status=Booking.Status.CONFIRMED,
+            created_at=timezone.now() - timedelta(minutes=10),
+        )
+
+        sweep_expired_pending_bookings()
+
+        booking.refresh_from_db()
+        assert booking.status == Booking.Status.CONFIRMED
+        mock_notify.assert_not_called()
+
+    def test_multiple_stale_bookings_across_different_events_each_broadcast(
+        self, monkeypatch, django_capture_on_commit_callbacks
+    ):
+        mock_notify = MagicMock()
+        monkeypatch.setattr(
+            "apps.bookings.services.notify_internal_broadcast", mock_notify
+        )
+
+        user = UserFactory()
+        group_id_a, seat_a = _held_seat_with_hold(user)
+        booking_a, _ = create_booking_from_hold(group_id_a, user)
+        group_id_b, seat_b = _held_seat_with_hold(user)
+        booking_b, _ = create_booking_from_hold(group_id_b, user)
+        Booking.objects.filter(id__in=[booking_a.id, booking_b.id]).update(
+            created_at=timezone.now() - timedelta(minutes=10)
+        )
+
+        with django_capture_on_commit_callbacks(execute=True):
+            sweep_expired_pending_bookings()
+
+        assert mock_notify.call_count == 2
+        booking_a.refresh_from_db()
+        booking_b.refresh_from_db()
+        assert booking_a.status == Booking.Status.CANCELLED
+        assert booking_b.status == Booking.Status.CANCELLED

@@ -176,36 +176,3 @@ class TestBookingCheckoutEndpoint:
 
         assert response.status_code == 502
         assert "could not connect to Stripe" not in str(response.data)
-
-
-class TestBookingCancelEndpoint:
-    def test_cancel_against_non_pending_booking_returns_409(self):
-        user = UserFactory()
-        booking = BookingFactory(user=user, status=Booking.Status.CONFIRMED)
-        client = _authed_client(user)
-
-        response = client.post(f"/bookings/{booking.id}/cancel/")
-        assert response.status_code == 409
-
-    def test_cancel_happy_path_releases_seat(self):
-        user = UserFactory()
-        event = EventFactory(status="approved")
-        group_id = uuid.uuid4()
-        seat = EventSeatFactory(event=event, status=EventSeat.Status.HELD)
-        SeatHoldFactory(
-            group_id=group_id,
-            event_seat=seat,
-            user=user,
-            expires_at=timezone.now() + timedelta(minutes=10),
-        )
-        client = _authed_client(user)
-        create_resp = client.post(
-            "/bookings/", {"hold_id": str(group_id)}, format="json"
-        )
-        booking_id = create_resp.data["id"]
-
-        response = client.post(f"/bookings/{booking_id}/cancel/")
-
-        assert response.status_code == 200
-        seat.refresh_from_db()
-        assert seat.status == EventSeat.Status.AVAILABLE
