@@ -11,7 +11,6 @@ from .services import (
     BookingNotPendingError,
     HoldExpiredError,
     HoldNotFoundError,
-    cancel_booking,
     checkout_booking,
     create_booking_from_hold,
 )
@@ -81,21 +80,3 @@ class BookingCheckoutView(APIView):
         return Response(
             CheckoutResponseSerializer(payment).data, status=status.HTTP_200_OK
         )
-
-
-class BookingCancelView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request, id):
-        booking = generics.get_object_or_404(
-            Booking.objects.filter(user=request.user), id=id
-        )
-        try:
-            booking = cancel_booking(booking)
-        except BookingNotPendingError:
-            return Response(
-                {"detail": "Cancellation is only available for pending bookings."},
-                status=status.HTTP_409_CONFLICT,
-            )
-
-        return Response(BookingSerializer(booking).data, status=status.HTTP_200_OK)
