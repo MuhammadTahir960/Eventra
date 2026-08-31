@@ -4,9 +4,12 @@ from io import BytesIO
 
 import qrcode
 import weasyprint
+from django.core.cache import cache
 from django.db import transaction
 
 from .models import Ticket
+
+TICKET_PDF_CACHE_TTL_SECONDS = 600
 
 
 class TicketWrongEventError(Exception):
@@ -65,6 +68,21 @@ def render_ticket_pdf(ticket: Ticket) -> bytes:
     </html>
     """
     return weasyprint.HTML(string=ticket_html).write_pdf()
+
+
+def _ticket_pdf_cache_key(ticket_id) -> str:
+    return f"ticket-pdf:{ticket_id}"
+
+
+def get_or_render_ticket_pdf(ticket: Ticket) -> bytes:
+    key = _ticket_pdf_cache_key(ticket.id)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+
+    pdf_bytes = render_ticket_pdf(ticket)
+    cache.set(key, pdf_bytes, timeout=TICKET_PDF_CACHE_TTL_SECONDS)
+    return pdf_bytes
 
 
 def validate_ticket(*, ticket: Ticket, event_id) -> Ticket:
