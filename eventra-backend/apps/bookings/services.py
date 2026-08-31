@@ -1,4 +1,5 @@
 import uuid
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
@@ -6,9 +7,11 @@ from django.utils import timezone
 
 from apps.payments.services import create_or_refresh_payment_intent
 from apps.seating.models import EventSeat, SeatHold
-from apps.seating.serializers import serialize_seats_for_ws
+from apps.seating.services import notify_internal_broadcast
 
 from .models import Booking
+
+BOOKING_EXPIRY_MINUTES = 5
 
 
 class HoldNotFoundError(Exception):
@@ -99,57 +102,44 @@ def checkout_booking(booking):
     return create_or_refresh_payment_intent(booking)
 
 
-def _broadcast_seats_released(event_slug, event_seats):
-    from asgiref.sync import async_to_sync
-    from channels.layers import get_channel_layer
-
-    channel_layer = get_channel_layer()
-    if channel_layer is None:
-        return
-
-    async_to_sync(channel_layer.group_send)(
-        f"seats_{event_slug}",
-        {
-            "type": "seat_update",
-            "seats": serialize_seats_for_ws(event_seats),
-        },
+def sweep_expired_pending_bookings() -> None:
+    cutoff = timezone.now() - timedelta(minutes=BOOKING_EXPIRY_MINUTES)
+    stale_booking_ids = list(
+        Booking.objects.filter(
+            status=Booking.Status.PENDING, created_at__lt=cutoff
+        ).values_list("id", flat=True)
     )
 
+    for booking_id in stale_booking_ids:
+        _release_one_expired_booking(booking_id)
 
-def cancel_booking(booking):
-    if booking.status != Booking.Status.PENDING:
-        raise BookingNotPendingError(
-            f"Booking {booking.id} is '{booking.status}', not 'pending'."
-        )
 
+def _release_one_expired_booking(booking_id) -> None:
     with transaction.atomic():
+        booking = Booking.objects.select_for_update().filter(id=booking_id).first()
+        if booking is None or booking.status != Booking.Status.PENDING:
+            return
+
         seats = list(
             EventSeat.objects.select_for_update(of=("self",))
             .filter(held_booking=booking)
             .select_related("event")
         )
-
-        EventSeat.objects.filter(held_booking=booking).update(
-            status=EventSeat.Status.AVAILABLE,
-            held_booking=None,
-        )
+        for seat in seats:
+            seat.status = EventSeat.Status.AVAILABLE
+            seat.held_booking = None
+        EventSeat.objects.bulk_update(seats, ["status", "held_booking"])
 
         booking.status = Booking.Status.CANCELLED
         booking.save(update_fields=["status", "updated_at"])
 
+        seat_ids_by_event_slug: dict[str, list] = {}
         for seat in seats:
-            seat.status = EventSeat.Status.AVAILABLE
-            seat.held_booking = None
+            seat_ids_by_event_slug.setdefault(seat.event.slug, []).append(seat.id)
 
-        seats_by_event_slug = {}
-        for seat in seats:
-            seats_by_event_slug.setdefault(seat.event.slug, []).append(seat)
-
-        for slug, event_seats in seats_by_event_slug.items():
+        for event_slug, seat_ids in seat_ids_by_event_slug.items():
             transaction.on_commit(
-                lambda slug=slug, event_seats=event_seats: _broadcast_seats_released(
-                    slug, event_seats
+                lambda event_slug=event_slug, seat_ids=seat_ids: notify_internal_broadcast(
+                    event_slug=event_slug, seat_ids=seat_ids, status_label="available"
                 )
             )
-
-    return booking
