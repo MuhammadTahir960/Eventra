@@ -1,13 +1,19 @@
+from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.common.permissions import IsEventOwnerStrict
+from apps.events.models import Event
 from apps.events.services import get_visible_event_or_404
 
 from .models import EventSeat
-from .serializers import EventSeatSerializer, SeatHoldRequestSerializer
+from .serializers import (
+    EventSeatSerializer,
+    InternalBroadcastRequestSerializer,
+    SeatHoldRequestSerializer,
+)
 from .services import (
     AlreadyInstantiatedError,
     EmptySeatSelectionError,
@@ -18,6 +24,7 @@ from .services import (
     SeatsUnavailableError,
     TooManySeatsError,
     UncoveredSectionsError,
+    broadcast_seat_update,
     hold_seats,
     instantiate_event_seats,
 )
@@ -99,3 +106,28 @@ class EventSeatHoldView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class InternalSeatsBroadcastView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        payload = InternalBroadcastRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        event = get_object_or_404(
+            Event.objects.only("id", "slug"),
+            slug=payload.validated_data["event_slug"],
+        )
+
+        seats = list(
+            EventSeat.objects.filter(
+                event=event, id__in=payload.validated_data["seat_ids"]
+            ).select_related("seat", "ticket_tier")
+        )
+        if not seats:
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        broadcast_seat_update(event=event, seats=seats)
+        return Response(status=status.HTTP_204_NO_CONTENT)
