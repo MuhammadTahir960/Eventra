@@ -22,14 +22,17 @@ from django.contrib.staticfiles.urls import staticfiles_urlpatterns
 from django.urls import include, path
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
+    path("django-admin/", admin.site.urls),
     path("", include("apps.common.urls")),
     path("auth/", include("apps.users.urls")),
     path("", include("apps.venues.urls")),
     path("", include("apps.categories.urls")),
     path("", include("apps.sports.urls")),
     path("", include("apps.events.urls")),
+    path("", include("apps.seating.urls")),
     path("", include("apps.bookings.urls")),
+    path("", include("apps.payments.urls")),
+    path("", include("apps.tickets.urls")),
 ]
 
 if settings.DEBUG:
