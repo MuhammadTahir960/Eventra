@@ -161,6 +161,8 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@eventra.local")
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
 BACKEND_BASE_URL = env("BACKEND_BASE_URL", default="http://localhost:8000")
 
+INTERNAL_API_BASE_URL = env("INTERNAL_API_BASE_URL", default="http://web:8000")
+
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[])
 
 
@@ -177,6 +179,14 @@ CELERY_BEAT_SCHEDULE = {
     "complete-past-events": {
         "task": "apps.events.tasks.complete_past_events",
         "schedule": crontab(minute=0),
+    },
+    "release-expired-holds": {
+        "task": "apps.seating.tasks.release_expired_holds",
+        "schedule": 60.0,
+    },
+    "release-expired-bookings": {
+        "task": "apps.bookings.tasks.release_expired_bookings",
+        "schedule": 60.0,
     },
 }
 
@@ -237,6 +247,7 @@ SIMPLE_JWT = {
 
 STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY")
 STRIPE_PUBLISHABLE_KEY = env("STRIPE_PUBLISHABLE_KEY")
+STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET")
 
 if not STRIPE_SECRET_KEY.startswith("sk_test_"):
     raise ImproperlyConfigured(
