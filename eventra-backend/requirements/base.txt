@@ -9,6 +9,9 @@ django-redis==7.0.0
 pillow==12.3.0
 djangorestframework==3.17.1
 djangorestframework_simplejwt==5.5.1
-psycopg[binary]==3.3.4
+psycopg[binary]==3.3.5
+qrcode==8.2
 redis==8.1.0
-stripe==15.5.1
+requests==2.34.2
+stripe==15.6.1
+weasyprint==69.0
