@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -17,6 +18,7 @@ services:
 
   redis:
     image: redis:7
+    restart: unless-stopped
     ports:
       - "6379:6379"
     volumes:
@@ -30,18 +32,20 @@ services:
   web:
     build:
       context: ./eventra-backend
+    restart: unless-stopped
     volumes:
       - ./eventra-backend:/app
       - static_volume:/app/staticfiles
       - media_volume:/app/mediafiles
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     env_file:
       - .env
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.dev
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
+      XDG_CACHE_HOME: /tmp
     depends_on:
       postgres:
         condition: service_healthy
@@ -50,6 +54,7 @@ services:
 
   nginx:
     image: nginx:1.27
+    restart: unless-stopped
     ports:
       - "80:80"
     volumes:
@@ -58,6 +63,51 @@ services:
       - media_volume:/app/mediafiles:ro
     depends_on:
       web:
+        condition: service_healthy
+
+  celery-worker:
+    build:
+      context: ./eventra-backend
+    restart: unless-stopped
+    entrypoint: []
+    command: celery -A config worker --loglevel=info
+    volumes:
+      - ./eventra-backend:/app
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      INTERNAL_API_BASE_URL: http://web:8000
+      XDG_CACHE_HOME: /tmp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+
+  celery-beat:
+    build:
+      context: ./eventra-backend
+    restart: unless-stopped
+    entrypoint: []
+    command: celery -A config beat --loglevel=info -s /tmp/celerybeat-schedule
+    volumes:
+      - ./eventra-backend:/app
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      XDG_CACHE_HOME: /tmp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
 volumes:
