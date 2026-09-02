@@ -195,7 +195,7 @@ def refund_event_bookings(event_id, *, only_failed: bool = False) -> None:
                 "Refund failed for booking %s (event %s)", booking.id, event_id
             )
             Booking.objects.filter(id=booking.id).update(
-                status=Booking.Status.REFUND_FAILED
+                status=Booking.Status.REFUND_FAILED, updated_at=timezone.now()
             )
             continue
 
