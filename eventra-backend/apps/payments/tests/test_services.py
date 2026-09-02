@@ -1,4 +1,5 @@
 import threading
+import time
 from decimal import Decimal
 from unittest.mock import MagicMock
 
@@ -363,6 +364,34 @@ class TestRefundEventBookings:
                 assert booking.status == Booking.Status.REFUND_FAILED
             else:
                 assert booking.status == Booking.Status.REFUNDED
+
+    def test_refund_failed_write_bumps_updated_at(self, monkeypatch):
+        event = EventFactory(status="approved")
+        booking = BookingFactory(status=Booking.Status.CONFIRMED)
+        seat = EventSeatFactory(event=event, status=EventSeat.Status.BOOKED)
+        Ticket.objects.create(booking=booking, event_seat=seat)
+        PaymentFactory(
+            booking=booking,
+            stripe_payment_intent_id="pi_updated_at_regression",
+            status=Payment.Status.SUCCEEDED,
+        )
+
+        old_updated_at = booking.updated_at
+        time.sleep(1.1)
+
+        def boom(*a, **k):
+            raise stripe.error.APIConnectionError("simulated failure")
+
+        monkeypatch.setattr("apps.payments.services.stripe.Refund.create", boom)
+        monkeypatch.setattr(
+            "apps.notifications.tasks.send_refund_email.delay", MagicMock()
+        )
+
+        refund_event_bookings(str(event.id))
+
+        booking.refresh_from_db()
+        assert booking.status == Booking.Status.REFUND_FAILED
+        assert booking.updated_at > old_updated_at
 
     def test_only_failed_scopes_to_refund_failed_bookings_only(self, monkeypatch):
         monkeypatch.setattr("apps.payments.services.stripe.Refund.create", MagicMock())
