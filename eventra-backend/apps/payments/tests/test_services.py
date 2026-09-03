@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 import stripe
-from django.db import connection
+from django.db import IntegrityError, connection
 
 from apps.bookings.factories import BookingFactory
 from apps.bookings.models import Booking
@@ -318,6 +318,60 @@ class TestRefundBooking:
         payment.refresh_from_db()
         assert booking.status == Booking.Status.CONFIRMED
         assert payment.status == Payment.Status.SUCCEEDED
+
+    def test_stripe_succeeds_then_db_write_fails_then_retry_completes_cleanly(
+        self, monkeypatch
+    ):
+        booking, payment = _confirmed_booking_with_payment()
+
+        refund_mock = MagicMock()
+        monkeypatch.setattr("apps.payments.services.stripe.Refund.create", refund_mock)
+
+        original_save = Payment.save
+        call_count = {"n": 0}
+
+        def _save_fails_once_then_recovers(self, *args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise IntegrityError("simulated DB failure after Stripe succeeded")
+            return original_save(self, *args, **kwargs)
+
+        monkeypatch.setattr(Payment, "save", _save_fails_once_then_recovers)
+
+        with pytest.raises(IntegrityError):
+            refund_booking(booking)
+
+        payment.refresh_from_db()
+        booking.refresh_from_db()
+        assert payment.status == Payment.Status.SUCCEEDED
+        assert booking.status == Booking.Status.CONFIRMED
+        assert all(t.status == Ticket.Status.VALID for t in booking.tickets.all())
+
+        refund_booking(booking)
+
+        payment.refresh_from_db()
+        booking.refresh_from_db()
+        assert payment.status == Payment.Status.REFUNDED
+        assert booking.status == Booking.Status.REFUNDED
+        assert all(t.status == Ticket.Status.CANCELLED for t in booking.tickets.all())
+
+        assert refund_mock.call_count == 2
+        first_call_kwargs = refund_mock.call_args_list[0].kwargs
+        second_call_kwargs = refund_mock.call_args_list[1].kwargs
+        expected_key = f"refund-{payment.id}"
+        assert first_call_kwargs["idempotency_key"] == expected_key
+        assert second_call_kwargs["idempotency_key"] == expected_key
+
+    def test_replay_after_successful_refund_never_calls_stripe_again(self, monkeypatch):
+        refund_mock = MagicMock()
+        monkeypatch.setattr("apps.payments.services.stripe.Refund.create", refund_mock)
+        booking, payment = _confirmed_booking_with_payment()
+
+        refund_booking(booking)
+        assert refund_mock.call_count == 1
+
+        refund_booking(booking)
+        assert refund_mock.call_count == 1
 
 
 class TestRefundEventBookings:
