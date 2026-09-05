@@ -1,6 +1,7 @@
 import django_filters
 from django.contrib.postgres.search import SearchQuery, SearchVector
-from rest_framework import permissions, status, viewsets
+from django.db import transaction
+from rest_framework import permissions, status, views, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotAuthenticated, PermissionDenied
 from rest_framework.generics import get_object_or_404
@@ -9,6 +10,7 @@ from rest_framework.response import Response
 from apps.common.constants import Roles
 from apps.common.mixins import SoftDeleteRestoreMixin
 from apps.common.permissions import IsAdmin, IsEventOwnerStrict, IsOrganizer
+from apps.payments.tasks import refund_event_bookings_task
 
 from .models import EVENT_SEARCH_CONFIG, Event, TicketTier
 from .permissions import IsEventOwnerOrAdminForDelete
@@ -19,10 +21,12 @@ from .serializers import (
 )
 from .services import (
     DuplicateEventSlugError,
+    EventNotCancellableError,
     EventNotDeletableError,
     EventNotPendingApprovalError,
     TierPriceImmutableError,
     approve_event,
+    cancel_event,
     ensure_can_restore_event,
     ensure_event_deletable,
     reject_event,
@@ -102,6 +106,8 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
             return [permissions.IsAuthenticated(), IsEventOwnerStrict()]
         if self.action == "destroy":
             return [permissions.IsAuthenticated(), IsEventOwnerOrAdminForDelete()]
+        if self.action == "cancel":
+            return [permissions.IsAuthenticated(), IsEventOwnerOrAdminForDelete()]
         if self.action == "restore":
             return [IsAdmin()]
         if self.action in ("approve", "reject"):
@@ -165,6 +171,22 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
             reject_event(event)
         except EventNotPendingApprovalError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        return Response(self.get_serializer(event).data)
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        event = self.get_object()
+
+        with transaction.atomic():
+            try:
+                cancel_event(event)
+            except EventNotCancellableError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+
+            transaction.on_commit(
+                lambda: refund_event_bookings_task.delay(str(event.id))
+            )
+
         return Response(self.get_serializer(event).data)
 
     @action(
@@ -247,3 +269,20 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class EventRetryRefundsView(views.APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def post(self, request, event_id):
+        event = get_object_or_404(Event.all_objects, pk=event_id)
+
+        if event.status != Event.Status.CANCELLED:
+            return Response(
+                {"detail": "Retrying refunds only makes sense for a cancelled event."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        refund_event_bookings_task.delay(str(event.id), True)
+
+        return Response(status=status.HTTP_202_ACCEPTED)

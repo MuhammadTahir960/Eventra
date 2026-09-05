@@ -7,7 +7,7 @@ from apps.seating.views import (
     EventSeatListView,
 )
 
-from .views import EventViewSet
+from .views import EventRetryRefundsView, EventViewSet
 
 router = DefaultRouter()
 router.register("events", EventViewSet, basename="event")
@@ -27,5 +27,10 @@ urlpatterns = router.urls + [
         "events/<uuid:event_id>/seats/hold/",
         EventSeatHoldView.as_view(),
         name="event-seats-hold",
+    ),
+    path(
+        "admin/events/<uuid:event_id>/retry-refunds/",
+        EventRetryRefundsView.as_view(),
+        name="admin-event-retry-refunds",
     ),
 ]

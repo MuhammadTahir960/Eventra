@@ -52,6 +52,7 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       STRIPE_SECRET_KEY: sk_test_ci_dummy_key_for_settings_boot
       STRIPE_PUBLISHABLE_KEY: pk_test_ci_dummy_key_for_settings_boot
+      STRIPE_WEBHOOK_SECRET: whsec_ci_dummy_key_for_settings_boot
 
     steps:
       - uses: actions/checkout@v6
@@ -79,6 +80,61 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+  nginx-config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install nginx
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nginx-light
+
+      - name: Stub the "web" upstream hostname for this CI job only
+        run: echo "127.0.0.1 web" | sudo tee -a /etc/hosts
+
+      - name: Syntax-check nginx.conf (nginx -t)
+        run: |
+          sudo cp nginx/nginx.conf /etc/nginx/conf.d/eventra-syntax-check.conf
+          sudo rm -f /etc/nginx/sites-enabled/default
+          sudo nginx -t
+          sudo rm -f /etc/nginx/conf.d/eventra-syntax-check.conf
+
+      - name: Start nginx with the real config
+        run: |
+          sudo mkdir -p /app/staticfiles /app/mediafiles
+          sudo cp nginx/nginx.conf /etc/nginx/conf.d/default.conf
+          sudo nginx
+          sleep 1
+
+      - name: Verify /internal/ is denied at the reverse-proxy layer (403)
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/internal/seats/broadcast/)
+          echo "GET /internal/seats/broadcast/ -> $status"
+          if [ "$status" != "403" ]; then
+            echo "::error::Expected /internal/seats/broadcast/ to be denied with 403 at the nginx layer, got $status instead."
+            exit 1
+          fi
+
+      - name: Verify the deny block covers nested /internal/ paths too
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/internal/anything/nested/path/)
+          echo "GET /internal/anything/nested/path/ -> $status"
+          if [ "$status" != "403" ]; then
+            echo "::error::Expected a nested /internal/... path to be denied with 403, got $status instead."
+            exit 1
+          fi
+
+      - name: Sanity check — a non-/internal/ path is NOT denied by the same rule
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/healthz/)
+          echo "GET /healthz/ -> $status"
+          if [ "$status" = "403" ]; then
+            echo "::error::/healthz/ was denied (403) -- the /internal/ deny block appears to be too broad."
+            exit 1
+          fi
 
   frontend:
     runs-on: ubuntu-latest

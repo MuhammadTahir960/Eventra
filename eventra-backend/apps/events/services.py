@@ -25,6 +25,10 @@ class EventNotPendingApprovalError(Exception):
     """Raised when approve/reject is attempted on an event not awaiting approval."""
 
 
+class EventNotCancellableError(Exception):
+    """Raised when cancel is attempted on an event that's completed or already cancelled."""
+
+
 PUBLIC_STATUSES = [Event.Status.APPROVED, Event.Status.COMPLETED]
 DELETABLE_STATUSES = {Event.Status.CANCELLED, Event.Status.COMPLETED}
 SENSITIVE_EVENT_FIELDS = frozenset(
@@ -84,6 +88,19 @@ def reject_event(event: Event) -> Event:
             f"(current status: {event.get_status_display()})."
         )
     event.status = Event.Status.REJECTED
+    event.save(update_fields=["status", "updated_at"])
+    return event
+
+
+def cancel_event(event: Event) -> Event:
+    if event.status == Event.Status.COMPLETED:
+        raise EventNotCancellableError(
+            "Event is completed and can no longer be cancelled."
+        )
+    if event.status == Event.Status.CANCELLED:
+        raise EventNotCancellableError("Event is already cancelled.")
+
+    event.status = Event.Status.CANCELLED
     event.save(update_fields=["status", "updated_at"])
     return event
 

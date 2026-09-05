@@ -47,3 +47,12 @@ class SeatHoldRequestSerializer(serializers.Serializer):
         allow_empty=False,
         max_length=MAX_SEATS_PER_HOLD,
     )
+
+
+class InternalBroadcastRequestSerializer(serializers.Serializer):
+    event_slug = serializers.SlugField()
+    seat_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        allow_empty=False,
+    )
+    status = serializers.CharField(required=False, allow_blank=True)
