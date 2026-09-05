@@ -89,13 +89,19 @@ def validate_ticket(*, ticket: Ticket, event_id) -> Ticket:
     if ticket.event_seat.event_id != event_id:
         raise TicketWrongEventError("Ticket is for a different event")
 
-    if ticket.status == Ticket.Status.USED:
-        raise TicketAlreadyUsedError("Ticket already used")
-    if ticket.status == Ticket.Status.CANCELLED:
-        raise TicketAlreadyCancelledError("Ticket cancelled")
-
     with transaction.atomic():
-        ticket.status = Ticket.Status.USED
-        ticket.save(update_fields=["status", "updated_at"])
+        locked_ticket = (
+            Ticket.objects.select_for_update(of=("self",))
+            .select_related("event_seat", "event_seat__event", "event_seat__seat")
+            .get(pk=ticket.pk)
+        )
 
-    return ticket
+        if locked_ticket.status == Ticket.Status.USED:
+            raise TicketAlreadyUsedError("Ticket already used")
+        if locked_ticket.status == Ticket.Status.CANCELLED:
+            raise TicketAlreadyCancelledError("Ticket cancelled")
+
+        locked_ticket.status = Ticket.Status.USED
+        locked_ticket.save(update_fields=["status", "updated_at"])
+
+    return locked_ticket
