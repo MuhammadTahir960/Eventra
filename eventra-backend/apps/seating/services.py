@@ -212,7 +212,7 @@ def notify_internal_broadcast(
     *, event_slug: str, seat_ids: list, status_label: str
 ) -> None:
     try:
-        requests.post(
+        response = requests.post(
             f"{settings.INTERNAL_API_BASE_URL}/internal/seats/broadcast/",
             json={
                 "event_slug": event_slug,
@@ -221,6 +221,7 @@ def notify_internal_broadcast(
             },
             timeout=5,
         )
+        response.raise_for_status()
     except requests.RequestException:
         logger.exception(
             "Internal broadcast call failed for event %s (seats: %s)",
