@@ -1,8 +1,10 @@
 import threading
 import uuid
 from datetime import timedelta
+from unittest.mock import MagicMock
 
 import pytest
+import requests
 from django.db import connection
 from django.utils import timezone
 
@@ -29,6 +31,7 @@ from ..services import (
     UncoveredSectionsError,
     hold_seats,
     instantiate_event_seats,
+    notify_internal_broadcast,
 )
 
 pytestmark = pytest.mark.django_db
@@ -478,3 +481,43 @@ def test_concurrent_reclaims_of_the_same_expired_unswept_hold_exactly_one_wins()
     winning_hold = SeatHold.objects.get(event_seat=event_seat)
     assert winning_hold.user_id in {user_a.id, user_b.id}
     assert winning_hold.user_id != original_holder.id
+
+
+class TestNotifyInternalBroadcast:
+    def test_non_2xx_response_is_logged_not_swallowed_silently(
+        self, monkeypatch, caplog
+    ):
+        mock_response = MagicMock(status_code=500)
+        mock_response.raise_for_status.side_effect = requests.HTTPError(
+            "500 Server Error", response=mock_response
+        )
+        monkeypatch.setattr(
+            "apps.seating.services.requests.post",
+            MagicMock(return_value=mock_response),
+        )
+
+        with caplog.at_level("ERROR"):
+            notify_internal_broadcast(
+                event_slug="test-event",
+                seat_ids=[uuid.uuid4()],
+                status_label="available",
+            )
+
+        assert "Internal broadcast call failed" in caplog.text
+
+    def test_2xx_response_is_not_logged_as_a_failure(self, monkeypatch, caplog):
+        mock_response = MagicMock(status_code=200)
+        mock_response.raise_for_status.return_value = None
+        monkeypatch.setattr(
+            "apps.seating.services.requests.post",
+            MagicMock(return_value=mock_response),
+        )
+
+        with caplog.at_level("ERROR"):
+            notify_internal_broadcast(
+                event_slug="test-event",
+                seat_ids=[uuid.uuid4()],
+                status_label="available",
+            )
+
+        assert "Internal broadcast call failed" not in caplog.text
