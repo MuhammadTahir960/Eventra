@@ -92,6 +92,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y nginx-light
 
+      - name: Stub the "web" upstream hostname for this CI job only
+        run: echo "127.0.0.1 web" | sudo tee -a /etc/hosts
+
       - name: Syntax-check nginx.conf (nginx -t)
         run: |
           sudo cp nginx/nginx.conf /etc/nginx/conf.d/eventra-syntax-check.conf
