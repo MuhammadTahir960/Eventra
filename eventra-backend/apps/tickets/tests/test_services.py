@@ -1,4 +1,7 @@
+import threading
+
 import pytest
+from django.db import connection
 
 from apps.bookings.factories import BookingFactory
 from apps.events.factories import EventFactory
@@ -73,6 +76,42 @@ class TestValidateTicket:
 
         with pytest.raises(TicketWrongEventError):
             validate_ticket(ticket=ticket, event_id=other_event.id)
+
+    @pytest.mark.django_db(transaction=True)
+    def test_concurrent_scans_of_the_same_ticket_yield_exactly_one_success(self):
+        event = EventFactory(status="approved")
+        seat = EventSeatFactory(event=event)
+        ticket = Ticket.objects.create(
+            booking=BookingFactory(), event_seat=seat, status=Ticket.Status.VALID
+        )
+
+        results = []
+        errors = []
+        barrier = threading.Barrier(2)
+
+        def attempt():
+            barrier.wait()
+            local_ticket = Ticket.objects.get(pk=ticket.pk)
+            try:
+                validate_ticket(ticket=local_ticket, event_id=event.id)
+                results.append("used")
+            except TicketAlreadyUsedError:
+                results.append("rejected")
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+            finally:
+                connection.close()
+
+        threads = [threading.Thread(target=attempt) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+        assert sorted(results) == ["rejected", "used"]
+        ticket.refresh_from_db()
+        assert ticket.status == Ticket.Status.USED
 
 
 class TestRenderTicketPdf:
