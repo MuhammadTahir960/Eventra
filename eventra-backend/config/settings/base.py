@@ -188,6 +188,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.bookings.tasks.release_expired_bookings",
         "schedule": 60.0,
     },
+    "create-payouts-for-completed-events": {
+        "task": "apps.payouts.tasks.create_payouts_for_completed_events",
+        "schedule": crontab(hour=2, minute=0),
+    },
 }
 
 CACHES = {
