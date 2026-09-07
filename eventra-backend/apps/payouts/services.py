@@ -6,6 +6,7 @@ from django.utils import timezone
 
 from apps.bookings.models import Booking
 from apps.events.models import Event
+from apps.tickets.models import Ticket
 
 from .models import OrganizerPayout
 
@@ -40,6 +41,14 @@ def compute_payout_amounts(event: Event) -> tuple[Decimal, Decimal, Decimal]:
     )
     net_amount = gross_revenue - platform_fee
     return gross_revenue, platform_fee, net_amount
+
+
+def get_event_sales(event: Event) -> dict:
+    tickets_sold = Ticket.objects.filter(
+        event_seat__event=event, booking__status=Booking.Status.CONFIRMED
+    ).count()
+    gross_revenue = _sum_confirmed_booking_totals(event)
+    return {"tickets_sold": tickets_sold, "gross_revenue": gross_revenue}
 
 
 def create_payout(event: Event) -> tuple[OrganizerPayout, bool]:
