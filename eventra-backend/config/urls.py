@@ -33,6 +33,7 @@ urlpatterns = [
     path("", include("apps.bookings.urls")),
     path("", include("apps.payments.urls")),
     path("", include("apps.tickets.urls")),
+    path("", include("apps.payouts.urls")),
 ]
 
 if settings.DEBUG:
