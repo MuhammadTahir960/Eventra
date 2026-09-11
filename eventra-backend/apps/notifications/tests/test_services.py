@@ -5,12 +5,18 @@ from django.core import mail
 
 from apps.bookings.factories import BookingFactory
 from apps.events.factories import EventFactory
+from apps.payouts.factories import OrganizerPayoutFactory
 from apps.seating.factories import EventSeatFactory
 from apps.seating.models import EventSeat
 from apps.tickets.models import Ticket
 
 from ..models import Notification
-from ..services import send_booking_confirmation_email, send_refund_confirmation_email
+from ..services import (
+    send_booking_confirmation_email,
+    send_payout_ready_email,
+    send_payout_settled_email,
+    send_refund_confirmation_email,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -112,3 +118,51 @@ class TestSendRefundConfirmationEmail:
         assert notification.status == Notification.Status.FAILED
         assert notification.sent_at is None
         assert len(mail.outbox) == 0
+
+
+class TestSendPayoutReadyEmail:
+    def test_happy_path_sends_email_to_the_organizer(self):
+        event = EventFactory()
+        payout = OrganizerPayoutFactory(event=event)
+
+        send_payout_ready_email(payout)
+
+        assert len(mail.outbox) == 1
+        sent = mail.outbox[0]
+        assert sent.to == [event.organizer.email]
+        assert "payout" in sent.subject.lower()
+        assert payout.payout_reference in sent.body
+
+    def test_happy_path_records_a_sent_notification(self):
+        event = EventFactory()
+        payout = OrganizerPayoutFactory(event=event)
+
+        send_payout_ready_email(payout)
+
+        notification = Notification.objects.get(user=event.organizer)
+        assert notification.type == Notification.NotificationType.PAYOUT_READY
+        assert notification.status == Notification.Status.SENT
+        assert notification.sent_at is not None
+
+
+class TestSendPayoutSettledEmail:
+    def test_happy_path_sends_email_to_the_organizer(self):
+        event = EventFactory()
+        payout = OrganizerPayoutFactory(event=event, status="settled")
+
+        send_payout_settled_email(payout)
+
+        assert len(mail.outbox) == 1
+        sent = mail.outbox[0]
+        assert sent.to == [event.organizer.email]
+        assert "settled" in sent.subject.lower()
+
+    def test_happy_path_records_a_sent_notification(self):
+        event = EventFactory()
+        payout = OrganizerPayoutFactory(event=event, status="settled")
+
+        send_payout_settled_email(payout)
+
+        notification = Notification.objects.get(user=event.organizer)
+        assert notification.type == Notification.NotificationType.PAYOUT_SETTLED
+        assert notification.status == Notification.Status.SENT
