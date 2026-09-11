@@ -43,12 +43,52 @@ def compute_payout_amounts(event: Event) -> tuple[Decimal, Decimal, Decimal]:
     return gross_revenue, platform_fee, net_amount
 
 
+_SOLD_BOOKING_STATUSES = (
+    Booking.Status.CONFIRMED,
+    Booking.Status.REFUNDED,
+    Booking.Status.REFUND_FAILED,
+)
+
+
+def _ticket_sale_amount(ticket: Ticket) -> Decimal:
+    seat = ticket.event_seat
+    return (
+        seat.price_override
+        if seat.price_override is not None
+        else seat.ticket_tier.price
+    )
+
+
 def get_event_sales(event: Event) -> dict:
-    tickets_sold = Ticket.objects.filter(
-        event_seat__event=event, booking__status=Booking.Status.CONFIRMED
-    ).count()
-    gross_revenue = _sum_confirmed_booking_totals(event)
-    return {"tickets_sold": tickets_sold, "gross_revenue": gross_revenue}
+    tickets = (
+        Ticket.objects.filter(
+            event_seat__event=event, booking__status__in=_SOLD_BOOKING_STATUSES
+        )
+        .select_related("booking", "event_seat", "event_seat__ticket_tier")
+        .order_by("-created_at")
+    )
+
+    entries = []
+    gross_revenue = Decimal("0.00")
+    for ticket in tickets:
+        amount = _ticket_sale_amount(ticket)
+        is_refunded = ticket.booking.status == Booking.Status.REFUNDED
+        if not is_refunded:
+            gross_revenue += amount
+        entries.append(
+            {
+                "ticket_id": ticket.id,
+                "ticket_code": ticket.ticket_code,
+                "amount": amount,
+                "status": "refunded" if is_refunded else "confirmed",
+            }
+        )
+
+    return {
+        "tickets_sold": len(entries),
+        "gross_revenue": gross_revenue,
+        "tickets": entries,
+    }
 
 
 def create_payout(event: Event) -> tuple[OrganizerPayout, bool]:
