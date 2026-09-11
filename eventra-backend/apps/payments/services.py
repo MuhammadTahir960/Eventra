@@ -116,7 +116,7 @@ def confirm_payment_from_webhook(payment_intent_id: str) -> Booking:
         booking.save(update_fields=["status", "updated_at"])
 
         seats = list(
-            EventSeat.objects.select_for_update()
+            EventSeat.objects.select_for_update(of=("self",))
             .filter(held_booking=booking)
             .select_related("event", "seat", "ticket_tier")
         )
