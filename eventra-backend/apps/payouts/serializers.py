@@ -26,6 +26,14 @@ class OrganizerPayoutSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class TicketSaleSerializer(serializers.Serializer):
+    ticket_id = serializers.UUIDField()
+    ticket_code = serializers.CharField()
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    status = serializers.ChoiceField(choices=["confirmed", "refunded"])
+
+
 class EventSalesSerializer(serializers.Serializer):
     tickets_sold = serializers.IntegerField()
     gross_revenue = serializers.DecimalField(max_digits=10, decimal_places=2)
+    tickets = TicketSaleSerializer(many=True)
