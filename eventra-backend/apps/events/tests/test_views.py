@@ -661,14 +661,14 @@ class TestRestoreEvent:
 
 
 # ==================================================
-# POST /events/{id}/approve/, POST /events/{id}/reject/
+# POST /admin/events/{id}/approve/, POST /admin/events/{id}/reject/
 # ==================================================
 
 
 class TestApproveRejectEvent:
     def test_admin_can_approve_pending_event(self, admin_client):
         event = EventFactory(status=Event.Status.PENDING_APPROVAL)
-        response = admin_client.post(f"/events/{event.pk}/approve/")
+        response = admin_client.post(f"/admin/events/{event.pk}/approve/")
         assert response.status_code == status.HTTP_200_OK
         event.refresh_from_db()
         assert event.status == Event.Status.APPROVED
@@ -676,13 +676,13 @@ class TestApproveRejectEvent:
     def test_approve_bumps_updated_at(self, admin_client):
         event = EventFactory(status=Event.Status.PENDING_APPROVAL)
         original_updated_at = event.updated_at
-        admin_client.post(f"/events/{event.pk}/approve/")
+        admin_client.post(f"/admin/events/{event.pk}/approve/")
         event.refresh_from_db()
         assert event.updated_at > original_updated_at
 
     def test_admin_can_reject_pending_event(self, admin_client):
         event = EventFactory(status=Event.Status.PENDING_APPROVAL)
-        response = admin_client.post(f"/events/{event.pk}/reject/")
+        response = admin_client.post(f"/admin/events/{event.pk}/reject/")
         assert response.status_code == status.HTTP_200_OK
         event.refresh_from_db()
         assert event.status == Event.Status.REJECTED
@@ -690,42 +690,42 @@ class TestApproveRejectEvent:
     def test_reject_bumps_updated_at(self, admin_client):
         event = EventFactory(status=Event.Status.PENDING_APPROVAL)
         original_updated_at = event.updated_at
-        admin_client.post(f"/events/{event.pk}/reject/")
+        admin_client.post(f"/admin/events/{event.pk}/reject/")
         event.refresh_from_db()
         assert event.updated_at > original_updated_at
 
     def test_approve_already_approved_event_returns_409(self, admin_client):
         event = EventFactory(status=Event.Status.APPROVED)
-        response = admin_client.post(f"/events/{event.pk}/approve/")
+        response = admin_client.post(f"/admin/events/{event.pk}/approve/")
         assert response.status_code == status.HTTP_409_CONFLICT
         event.refresh_from_db()
         assert event.status == Event.Status.APPROVED
 
     def test_reject_already_rejected_event_returns_409(self, admin_client):
         event = EventFactory(status=Event.Status.REJECTED)
-        response = admin_client.post(f"/events/{event.pk}/reject/")
+        response = admin_client.post(f"/admin/events/{event.pk}/reject/")
         assert response.status_code == status.HTTP_409_CONFLICT
 
     def test_approve_cancelled_event_returns_409(self, admin_client):
         event = EventFactory(status=Event.Status.CANCELLED)
-        response = admin_client.post(f"/events/{event.pk}/approve/")
+        response = admin_client.post(f"/admin/events/{event.pk}/approve/")
         assert response.status_code == status.HTTP_409_CONFLICT
 
     def test_organizer_cannot_approve(self, organizer_user):
         event = EventFactory(status=Event.Status.PENDING_APPROVAL)
         client = auth_client(organizer_user)
-        response = client.post(f"/events/{event.pk}/approve/")
+        response = client.post(f"/admin/events/{event.pk}/approve/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_organizer_cannot_reject(self, organizer_user):
         event = EventFactory(status=Event.Status.PENDING_APPROVAL)
         client = auth_client(organizer_user)
-        response = client.post(f"/events/{event.pk}/reject/")
+        response = client.post(f"/admin/events/{event.pk}/reject/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_anonymous_cannot_approve(self, api_client):
         event = EventFactory(status=Event.Status.PENDING_APPROVAL)
-        response = api_client.post(f"/events/{event.pk}/approve/")
+        response = api_client.post(f"/admin/events/{event.pk}/approve/")
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
