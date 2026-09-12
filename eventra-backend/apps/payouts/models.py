@@ -36,7 +36,6 @@ class OrganizerPayout(UUIDBaseModel):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        indexes = [models.Index(fields=["status"])]
         ordering = ["-created_at"]
 
     def __str__(self) -> str:
