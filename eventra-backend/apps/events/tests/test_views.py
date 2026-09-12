@@ -154,6 +154,23 @@ class TestListEvents:
         titles = {e["title"] for e in results(response)}
         assert titles == {"Match"}
 
+    def test_filter_by_status(self, admin_client):
+        EventFactory(status=Event.Status.APPROVED, title="Approved")
+        EventFactory(status=Event.Status.REJECTED, title="Rejected")
+        EventFactory(status=Event.Status.CANCELLED, title="Cancelled")
+
+        response = admin_client.get(self.url, {"status": Event.Status.REJECTED})
+        titles = {e["title"] for e in results(response)}
+        assert titles == {"Rejected"}
+
+    def test_status_filter_composes_with_visibility_not_bypass_it(self, api_client):
+        EventFactory(status=Event.Status.PENDING_APPROVAL, title="Hidden Pending")
+
+        response = api_client.get(self.url, {"status": Event.Status.PENDING_APPROVAL})
+        assert response.status_code == status.HTTP_200_OK
+        titles = {e["title"] for e in results(response)}
+        assert titles == set()
+
     def test_filter_by_category(self, api_client):
         target_category = CategoryFactory()
         EventFactory(
