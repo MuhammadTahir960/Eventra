@@ -56,6 +56,72 @@ def send_booking_confirmation_email(booking) -> None:
         notification.save()
 
 
+def send_payout_ready_email(payout) -> None:
+    organizer = payout.event.organizer
+    notification = Notification(
+        user=organizer,
+        type=Notification.NotificationType.PAYOUT_READY,
+        status=Notification.Status.FAILED,
+    )
+    try:
+        message = EmailMessage(
+            subject="Your Eventra payout is ready for review",
+            body=(
+                f"Hi {organizer.first_name or organizer.email},\n\n"
+                f'Your event "{payout.event.title}" has concluded and a payout has been '
+                f"calculated: net amount ${payout.net_amount} (reference "
+                f"{payout.payout_reference}). An admin will review and settle it shortly."
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=[organizer.email],
+        )
+        message.send(fail_silently=False)
+
+        notification.status = Notification.Status.SENT
+        notification.sent_at = timezone.now()
+        notification.message = f"Payout ready: {payout.payout_reference}"
+    except Exception:
+        logger.exception("Failed to send payout-ready email for payout %s", payout.id)
+        notification.message = "Failed to send payout-ready email"
+        notification.save()
+        raise
+    else:
+        notification.save()
+
+
+def send_payout_settled_email(payout) -> None:
+    organizer = payout.event.organizer
+    notification = Notification(
+        user=organizer,
+        type=Notification.NotificationType.PAYOUT_SETTLED,
+        status=Notification.Status.FAILED,
+    )
+    try:
+        message = EmailMessage(
+            subject="Your Eventra payout has been settled",
+            body=(
+                f"Hi {organizer.first_name or organizer.email},\n\n"
+                f'Your payout for "{payout.event.title}" (reference '
+                f"{payout.payout_reference}) has been settled: net amount "
+                f"${payout.net_amount}."
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=[organizer.email],
+        )
+        message.send(fail_silently=False)
+
+        notification.status = Notification.Status.SENT
+        notification.sent_at = timezone.now()
+        notification.message = f"Payout settled: {payout.payout_reference}"
+    except Exception:
+        logger.exception("Failed to send payout-settled email for payout %s", payout.id)
+        notification.message = "Failed to send payout-settled email"
+        notification.save()
+        raise
+    else:
+        notification.save()
+
+
 def send_refund_confirmation_email(booking) -> None:
     notification = Notification(
         user=booking.user,

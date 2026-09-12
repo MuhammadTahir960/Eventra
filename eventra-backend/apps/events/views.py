@@ -37,6 +37,7 @@ from .services import (
 class EventFilterSet(django_filters.FilterSet):
     category = django_filters.UUIDFilter(field_name="category_id")
     city = django_filters.CharFilter(field_name="venue__city", lookup_expr="iexact")
+    status = django_filters.ChoiceFilter(choices=Event.Status.choices)
     date_from = django_filters.DateTimeFilter(
         field_name="start_datetime", lookup_expr="gte"
     )
@@ -57,6 +58,7 @@ class EventFilterSet(django_filters.FilterSet):
             "event_type",
             "category",
             "city",
+            "status",
             "date_from",
             "date_to",
             "min_price",
@@ -110,8 +112,6 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
             return [permissions.IsAuthenticated(), IsEventOwnerOrAdminForDelete()]
         if self.action == "restore":
             return [IsAdmin()]
-        if self.action in ("approve", "reject"):
-            return [permissions.IsAuthenticated(), IsAdmin()]
         return [perm() for perm in self.permission_classes]
 
     def update(self, request, *args, **kwargs):
@@ -152,26 +152,6 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
         except DuplicateEventSlugError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         return None
-
-    @action(detail=True, methods=["post"])
-    def approve(self, request, pk=None):
-        """Admin-only: pending_approval -> approved."""
-        event = self.get_object()
-        try:
-            approve_event(event)
-        except EventNotPendingApprovalError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        return Response(self.get_serializer(event).data)
-
-    @action(detail=True, methods=["post"])
-    def reject(self, request, pk=None):
-        """Admin-only: pending_approval -> rejected."""
-        event = self.get_object()
-        try:
-            reject_event(event)
-        except EventNotPendingApprovalError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        return Response(self.get_serializer(event).data)
 
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
@@ -286,3 +266,27 @@ class EventRetryRefundsView(views.APIView):
         refund_event_bookings_task.delay(str(event.id), True)
 
         return Response(status=status.HTTP_202_ACCEPTED)
+
+
+class EventApproveView(views.APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def post(self, request, event_id):
+        event = get_object_or_404(Event.objects, pk=event_id)
+        try:
+            approve_event(event)
+        except EventNotPendingApprovalError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        return Response(EventSerializer(event).data)
+
+
+class EventRejectView(views.APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def post(self, request, event_id):
+        event = get_object_or_404(Event.objects, pk=event_id)
+        try:
+            reject_event(event)
+        except EventNotPendingApprovalError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        return Response(EventSerializer(event).data)

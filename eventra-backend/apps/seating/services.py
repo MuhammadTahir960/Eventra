@@ -235,7 +235,7 @@ def release_expired_holds() -> None:
 
     with transaction.atomic():
         expired_holds = list(
-            SeatHold.objects.select_for_update()
+            SeatHold.objects.select_for_update(of=("self",))
             .filter(expires_at__lt=now)
             .select_related("event_seat__event")
         )
@@ -244,7 +244,9 @@ def release_expired_holds() -> None:
 
         event_seat_ids = [hold.event_seat_id for hold in expired_holds]
         seats = list(
-            EventSeat.objects.select_for_update().filter(id__in=event_seat_ids)
+            EventSeat.objects.select_for_update(of=("self",)).filter(
+                id__in=event_seat_ids
+            )
         )
         for seat in seats:
             seat.status = EventSeat.Status.AVAILABLE

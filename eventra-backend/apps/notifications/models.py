@@ -7,6 +7,8 @@ class Notification(UUIDBaseModel):
     class NotificationType(models.TextChoices):
         BOOKING_CONFIRMATION = "booking_confirmation", "Booking Confirmation"
         EVENT_CANCELLED_REFUND = "event_cancelled_refund", "Event Cancelled Refund"
+        PAYOUT_READY = "payout_ready", "Payout Ready"
+        PAYOUT_SETTLED = "payout_settled", "Payout Settled"
 
     class Status(models.TextChoices):
         SENT = "sent", "Sent"
