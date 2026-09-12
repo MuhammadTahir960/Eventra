@@ -123,14 +123,14 @@ def create_payout(event: Event) -> tuple[OrganizerPayout, bool]:
 
 def create_payouts_for_completed_events() -> int:
     completed_event_ids = list(
-        Event.objects.filter(
+        Event.all_objects.filter(
             status=Event.Status.COMPLETED, payout__isnull=True
         ).values_list("id", flat=True)
     )
 
     created_count = 0
     for event_id in completed_event_ids:
-        event = Event.objects.get(id=event_id)
+        event = Event.all_objects.get(id=event_id)
         _, created = create_payout(event)
         if created:
             created_count += 1
@@ -170,14 +170,14 @@ def settle_payout(payout_id) -> None:
             return
 
         try:
-            organizer_is_active = Event.objects.filter(
+            organizer_is_active = Event.all_objects.filter(
                 id=payout.event_id, organizer__is_active=True
             ).exists()
             if not organizer_is_active:
                 raise OrganizerInactiveError(
                     f"Organizer for event {payout.event_id} is not active."
                 )
-        except Exception:
+        except OrganizerInactiveError:
             logger.exception("Payout settlement failed for payout %s", payout.id)
             payout.status = OrganizerPayout.Status.FAILED
             payout.save(update_fields=["status", "updated_at"])
