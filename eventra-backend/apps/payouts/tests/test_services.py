@@ -373,6 +373,14 @@ class TestCreatePayoutsForCompletedEvents:
         assert second_run == 0
         assert OrganizerPayout.objects.filter(event=event).count() == 1
 
+    def test_soft_deleted_completed_event_still_gets_a_payout(self):
+        event = EventFactory(status=Event.Status.COMPLETED, is_active=False)
+
+        created_count = create_payouts_for_completed_events()
+
+        assert created_count == 1
+        assert OrganizerPayout.objects.filter(event=event).exists()
+
 
 class TestRequestPayoutSettlement:
     def test_flips_pending_to_processing_and_enqueues_settle_task(
@@ -487,14 +495,14 @@ class TestSettlePayout:
             event=event, status=OrganizerPayout.Status.PROCESSING
         )
 
-        real_filter = Event.objects.filter
+        real_filter = Event.all_objects.filter
         calls = []
 
         def spy_filter(*args, **kwargs):
             calls.append(kwargs)
             return real_filter(*args, **kwargs)
 
-        monkeypatch.setattr(Event.objects, "filter", spy_filter)
+        monkeypatch.setattr(Event.all_objects, "filter", spy_filter)
 
         settle_payout(payout.id)
 
@@ -502,3 +510,17 @@ class TestSettlePayout:
             "organizer-active check should be its own unlocked Event query, "
             "not a select_related()/select_for_update() traversal from OrganizerPayout"
         )
+
+    def test_soft_deleted_completed_event_with_active_organizer_still_settles(self):
+        organizer = UserFactory(is_active=True)
+        event = EventFactory(
+            status=Event.Status.COMPLETED, organizer=organizer, is_active=False
+        )
+        payout = OrganizerPayoutFactory(
+            event=event, status=OrganizerPayout.Status.PROCESSING
+        )
+
+        settle_payout(payout.id)
+
+        payout.refresh_from_db()
+        assert payout.status == OrganizerPayout.Status.SETTLED
