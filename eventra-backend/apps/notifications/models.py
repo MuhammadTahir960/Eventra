@@ -9,6 +9,7 @@ class Notification(UUIDBaseModel):
         EVENT_CANCELLED_REFUND = "event_cancelled_refund", "Event Cancelled Refund"
         PAYOUT_READY = "payout_ready", "Payout Ready"
         PAYOUT_SETTLED = "payout_settled", "Payout Settled"
+        EVENT_REMINDER = "event_reminder", "Event Reminder"
 
     class Status(models.TextChoices):
         SENT = "sent", "Sent"
