@@ -1,8 +1,10 @@
+from django.conf import settings
 from django.core.validators import MinLengthValidator, MinValueValidator
 from django.db import models
 from django.db.models.functions import Lower
 
 from apps.common.models import SoftDeleteModel, UUIDBaseModel
+from apps.common.validators import IMAGE_EXTENSION_VALIDATOR, validate_image_upload_size
 
 
 class Venue(SoftDeleteModel):
@@ -11,6 +13,12 @@ class Venue(SoftDeleteModel):
     city = models.CharField(max_length=100, db_index=True)
     country = models.CharField(max_length=100)
     capacity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    photo = models.ImageField(
+        upload_to="venue_photos/",
+        blank=True,
+        null=True,
+        validators=[IMAGE_EXTENSION_VALIDATOR, validate_image_upload_size],
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -46,3 +54,35 @@ class Seat(UUIDBaseModel):
 
     def __str__(self) -> str:
         return f"{self.venue.name} — {self.section}/{self.row_label}/{self.seat_number}"
+
+
+class VenueRequest(UUIDBaseModel):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        FULFILLED = "fulfilled", "Fulfilled"
+        REJECTED = "rejected", "Rejected"
+
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="venue_requests",
+    )
+    venue_name = models.CharField(max_length=200)
+    city = models.CharField(max_length=100)
+    notes = models.TextField(blank=True, default="")
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING
+    )
+    admin_notes = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["requested_by"]),
+            models.Index(fields=["status"]),
+        ]
+        ordering = ["created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.venue_name} ({self.city}) — {self.status}"
