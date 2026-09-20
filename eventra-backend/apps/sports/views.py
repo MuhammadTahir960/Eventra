@@ -1,6 +1,7 @@
 import django_filters
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import mixins, status, viewsets
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
 from apps.common.permissions import IsAdminForWrite
@@ -102,6 +103,7 @@ class LeagueViewSet(
     queryset = League.objects.select_related("sport").all()
     serializer_class = LeagueSerializer
     permission_classes = [IsAdminForWrite]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     filter_backends = [DjangoFilterBackend]
     filterset_class = LeagueFilterSet
     http_method_names = ["get", "post", "patch", "delete"]
@@ -124,6 +126,7 @@ class TeamViewSet(
     queryset = Team.objects.select_related("sport").all()
     serializer_class = TeamSerializer
     permission_classes = [IsAdminForWrite]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     filter_backends = [DjangoFilterBackend]
     filterset_class = TeamFilterSet
     http_method_names = ["get", "post", "patch", "delete"]

@@ -66,7 +66,7 @@ class LeagueSerializer(
 
     class Meta:
         model = League
-        fields = ["id", "sport", "name"]
+        fields = ["id", "sport", "name", "logo"]
         read_only_fields = ["id"]
 
 
@@ -79,5 +79,5 @@ class TeamSerializer(
 
     class Meta:
         model = Team
-        fields = ["id", "sport", "name"]
+        fields = ["id", "sport", "name", "logo"]
         read_only_fields = ["id"]
