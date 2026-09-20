@@ -43,6 +43,11 @@ class UserManager(BaseUserManager):
 
 
 class User(AbstractBaseUser, PermissionsMixin):
+    class Gender(models.TextChoices):
+        MALE = "male", "Male"
+        FEMALE = "female", "Female"
+        OTHER = "other", "Other"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     email = models.EmailField(unique=True, db_index=True)
@@ -50,6 +55,9 @@ class User(AbstractBaseUser, PermissionsMixin):
     last_name = models.CharField(max_length=30)
     role = models.CharField(
         max_length=20, choices=Roles.choices, default=Roles.ATTENDEE
+    )
+    gender = models.CharField(
+        max_length=10, choices=Gender.choices, blank=True, default=""
     )
 
     # False until GET /auth/verify-email/ flips it
