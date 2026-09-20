@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 
 from apps.bookings.models import Booking
 from apps.common.models import UUIDBaseModel
@@ -46,6 +47,13 @@ class Payment(UUIDBaseModel):
 
     class Meta:
         indexes = [models.Index(fields=["stripe_payment_intent_id"])]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["stripe_payment_intent_id"],
+                condition=~Q(stripe_payment_intent_id=""),
+                name="uniq_payment_stripe_payment_intent_id",
+            )
+        ]
 
     def __str__(self):
         return f"Payment for booking {self.booking_id} ({self.status})"
