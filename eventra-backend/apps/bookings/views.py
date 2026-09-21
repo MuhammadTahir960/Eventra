@@ -8,7 +8,9 @@ from apps.payments.services import PaymentGatewayError
 from .models import Booking
 from .serializers import BookingSerializer, HoldIdSerializer
 from .services import (
+    BookingExpiredError,
     BookingNotPendingError,
+    EventClosedError,
     HoldExpiredError,
     HoldNotFoundError,
     checkout_booking,
@@ -42,6 +44,8 @@ class BookingListCreateView(generics.ListCreateAPIView):
                 {"detail": "This hold has already expired."},
                 status=status.HTTP_409_CONFLICT,
             )
+        except EventClosedError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
         response_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return Response(BookingSerializer(booking).data, status=response_status)
@@ -71,6 +75,8 @@ class BookingCheckoutView(APIView):
                 {"detail": "Checkout is only available for pending bookings."},
                 status=status.HTTP_409_CONFLICT,
             )
+        except (BookingExpiredError, EventClosedError) as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         except PaymentGatewayError:
             return Response(
                 {"detail": "Unable to reach the payment provider. Please try again."},
