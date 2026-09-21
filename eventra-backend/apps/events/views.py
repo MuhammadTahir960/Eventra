@@ -1,7 +1,8 @@
 import django_filters
 from django.contrib.postgres.search import SearchQuery, SearchVector
 from django.db import transaction
-from rest_framework import permissions, status, views, viewsets
+from django.db.models import ProtectedError
+from rest_framework import generics, permissions, status, views, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotAuthenticated, PermissionDenied
 from rest_framework.generics import get_object_or_404
@@ -23,12 +24,15 @@ from .services import (
     DuplicateEventSlugError,
     EventNotCancellableError,
     EventNotDeletableError,
+    EventNotEditableError,
     EventNotPendingApprovalError,
+    EventRejectionReasonRequiredError,
     TierPriceImmutableError,
     approve_event,
     cancel_event,
     ensure_can_restore_event,
     ensure_event_deletable,
+    ensure_event_editable,
     reject_event,
     visible_events_for_user,
 )
@@ -44,12 +48,8 @@ class EventFilterSet(django_filters.FilterSet):
     date_to = django_filters.DateTimeFilter(
         field_name="start_datetime", lookup_expr="lte"
     )
-    min_price = django_filters.NumberFilter(
-        field_name="ticket_tiers__price", lookup_expr="gte", distinct=True
-    )
-    max_price = django_filters.NumberFilter(
-        field_name="ticket_tiers__price", lookup_expr="lte", distinct=True
-    )
+    min_price = django_filters.NumberFilter(method="filter_noop")
+    max_price = django_filters.NumberFilter(method="filter_noop")
     search = django_filters.CharFilter(method="filter_search")
 
     class Meta:
@@ -65,6 +65,20 @@ class EventFilterSet(django_filters.FilterSet):
             "max_price",
             "search",
         ]
+
+    def filter_noop(self, queryset, name, value):
+        return queryset
+
+    def filter_queryset(self, queryset):
+        queryset = super().filter_queryset(queryset)
+        bounds = {}
+        if self.form.cleaned_data.get("min_price") is not None:
+            bounds["ticket_tiers__price__gte"] = self.form.cleaned_data["min_price"]
+        if self.form.cleaned_data.get("max_price") is not None:
+            bounds["ticket_tiers__price__lte"] = self.form.cleaned_data["max_price"]
+        if bounds:
+            queryset = queryset.filter(**bounds).distinct()
+        return queryset
 
     def filter_search(self, queryset, name, value):
         return queryset.annotate(
@@ -96,8 +110,8 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
         ):
             return Event.all_objects.select_related(
                 "venue", "category", "organizer", "league", "home_team", "away_team"
-            )
-        return visible_events_for_user(user)
+            ).order_by("-start_datetime", "id")
+        return visible_events_for_user(user).order_by("-start_datetime", "id")
 
     def get_permissions(self):
         if self.action in ("list", "retrieve"):
@@ -118,11 +132,10 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
 
-        if instance.status == Event.Status.COMPLETED:
-            return Response(
-                {"detail": "Event is completed and can no longer be edited."},
-                status=status.HTTP_409_CONFLICT,
-            )
+        try:
+            ensure_event_editable(instance)
+        except EventNotEditableError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
@@ -143,7 +156,17 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
             instance.save(update_fields=["is_active", "updated_at"])
             return Response(status=status.HTTP_204_NO_CONTENT)
 
-        instance.delete()
+        try:
+            with transaction.atomic():
+                instance.delete()
+        except ProtectedError:
+            return Response(
+                {
+                    "detail": "Cannot permanently delete an event that has "
+                    "bookings, tickets or payouts. Soft-delete it instead."
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def perform_restore_guard(self, instance):
@@ -164,7 +187,7 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
                 return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
             transaction.on_commit(
-                lambda: refund_event_bookings_task.delay(str(event.id))
+                lambda: refund_event_bookings_task.delay(str(event.id)), robust=True
             )
 
         return Response(self.get_serializer(event).data)
@@ -186,10 +209,10 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
             raise NotAuthenticated()
         if not IsEventOwnerStrict().has_object_permission(request, self, event):
             raise PermissionDenied("Only the event's owner may add ticket tiers.")
-        if event.status == Event.Status.COMPLETED:
-            return Response(
-                {"detail": "Event is completed."}, status=status.HTTP_409_CONFLICT
-            )
+        try:
+            ensure_event_editable(event)
+        except EventNotEditableError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
         serializer = TicketTierSerializer(
             data=request.data, context={"event": event, "request": request}
@@ -208,10 +231,10 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
         event = self.get_object()
         tier = get_object_or_404(TicketTier, pk=tier_id, event=event)
 
-        if event.status == Event.Status.COMPLETED:
-            return Response(
-                {"detail": "Event is completed."}, status=status.HTTP_409_CONFLICT
-            )
+        try:
+            ensure_event_editable(event)
+        except EventNotEditableError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
         serializer = TicketTierSerializer(
             tier,
@@ -222,7 +245,8 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         try:
-            serializer.save()
+            with transaction.atomic():
+                serializer.save()
         except TierPriceImmutableError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
@@ -238,10 +262,10 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
         event = self.get_object()
         tier = get_object_or_404(TicketTier, pk=tier_id, event=event)
 
-        if event.status == Event.Status.COMPLETED:
-            return Response(
-                {"detail": "Event is completed."}, status=status.HTTP_409_CONFLICT
-            )
+        try:
+            ensure_event_editable(event)
+        except EventNotEditableError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
         serializer = TierSectionMappingSerializer(
             data=request.data, context={"event": event, "ticket_tier": tier}
@@ -277,7 +301,7 @@ class EventApproveView(views.APIView):
             approve_event(event)
         except EventNotPendingApprovalError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        return Response(EventSerializer(event).data)
+        return Response(EventSerializer(event, context={"request": request}).data)
 
 
 class EventRejectView(views.APIView):
@@ -286,7 +310,36 @@ class EventRejectView(views.APIView):
     def post(self, request, event_id):
         event = get_object_or_404(Event.objects, pk=event_id)
         try:
-            reject_event(event)
+            reason = (
+                request.data.get("reason") if hasattr(request.data, "get") else None
+            )
+            reject_event(event, reason if isinstance(reason, str) else "")
         except EventNotPendingApprovalError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        return Response(EventSerializer(event).data)
+        except EventRejectionReasonRequiredError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(EventSerializer(event, context={"request": request}).data)
+
+
+class EventPendingListView(generics.ListAPIView):
+    serializer_class = EventSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def get_queryset(self):
+        return Event.objects.filter(status=Event.Status.PENDING_APPROVAL).order_by(
+            "created_at"
+        )
+
+
+class OrganizerEventListView(generics.ListAPIView):
+    serializer_class = EventSerializer
+    permission_classes = [permissions.IsAuthenticated, IsOrganizer]
+
+    def get_queryset(self):
+        return (
+            Event.objects.filter(organizer=self.request.user)
+            .select_related(
+                "venue", "category", "organizer", "league", "home_team", "away_team"
+            )
+            .order_by("-created_at", "id")
+        )
