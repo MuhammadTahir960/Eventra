@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 
@@ -11,6 +12,13 @@ from .services import (
     should_retrigger_approval,
     should_retrigger_approval_for_tier,
 )
+
+
+def _is_organizer_or_admin_for_event(request, event) -> bool:
+    user = getattr(request, "user", None)
+    if not (user and user.is_authenticated):
+        return False
+    return user.role == Roles.ADMIN or event.organizer_id == user.id
 
 
 class EventSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
@@ -32,8 +40,8 @@ class EventSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
             "description",
             "event_type",
             "status",
+            "rejection_reason",
             "is_seated",
-            "cover_image",
             "start_datetime",
             "end_datetime",
             "is_active",
@@ -45,13 +53,25 @@ class EventSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
             "organizer",
             "slug",
             "status",
+            "rejection_reason",
             "is_active",
             "created_at",
             "updated_at",
         ]
+        extra_kwargs = {
+            "description": {"max_length": 5000},
+            "venue": {"required": True, "allow_null": False},
+            "category": {"required": True, "allow_null": False},
+        }
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        if not _is_organizer_or_admin_for_event(request, instance):
+            data.pop("rejection_reason", None)
+        return data
 
     def _current(self, attrs, field):
-        """Resolve a field's effective value for both create and partial update."""
         return attrs.get(field, getattr(self.instance, field, None))
 
     def validate(self, attrs):
@@ -61,6 +81,25 @@ class EventSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"end_datetime": "end_datetime must be after start_datetime."}
             )
+
+        now = timezone.now()
+        start_changed = "start_datetime" in attrs and (
+            self.instance is None
+            or attrs["start_datetime"] != self.instance.start_datetime
+        )
+        if start_changed and attrs["start_datetime"] <= now:
+            raise serializers.ValidationError(
+                {"start_datetime": "start_datetime must be in the future."}
+            )
+
+        if self.instance is not None and self.instance.event_seats.exists():
+            for field in ("venue", "is_seated"):
+                if field in attrs and attrs[field] != getattr(self.instance, field):
+                    raise serializers.ValidationError(
+                        {
+                            field: f"{field} cannot change once seats have been instantiated."
+                        }
+                    )
 
         event_type = self._current(attrs, "event_type")
         home_team = self._current(attrs, "home_team")
@@ -117,6 +156,11 @@ class EventSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
             and validated_data[field] != getattr(instance, field)
         }
         if should_retrigger_approval(event=instance, changed_fields=changed_fields):
+            validated_data["status"] = Event.Status.PENDING_APPROVAL
+        elif (
+            instance.status == Event.Status.REJECTED
+            and instance.organizer.role != Roles.ADMIN
+        ):
             validated_data["status"] = Event.Status.PENDING_APPROVAL
         return super().update(instance, validated_data)
 

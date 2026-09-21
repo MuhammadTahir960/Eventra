@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.db import transaction
 from django.db.models import Q, QuerySet
 from django.utils import timezone
 from rest_framework.generics import get_object_or_404
@@ -25,6 +26,10 @@ class EventNotPendingApprovalError(Exception):
     """Raised when approve/reject is attempted on an event not awaiting approval."""
 
 
+class EventRejectionReasonRequiredError(Exception):
+    """Raised when POST /admin/events/{id}/reject/ is called with no (or blank) reason."""
+
+
 class EventNotCancellableError(Exception):
     """Raised when cancel is attempted on an event that's completed or already cancelled."""
 
@@ -42,6 +47,17 @@ def ensure_event_deletable(event: Event) -> None:
         raise EventNotDeletableError(
             "Event must be cancelled or completed before it can be deleted "
             f"(current status: {event.get_status_display()})."
+        )
+
+
+class EventNotEditableError(Exception):
+    """Raised when an edit targets a cancelled or completed (terminal) event."""
+
+
+def ensure_event_editable(event: Event) -> None:
+    if event.status in (Event.Status.COMPLETED, Event.Status.CANCELLED):
+        raise EventNotEditableError(
+            f"A {event.get_status_display().lower()} event can no longer be edited."
         )
 
 
@@ -70,29 +86,65 @@ def should_retrigger_approval_for_tier(tier: TicketTier) -> bool:
     return tier.event.organizer.role != Roles.ADMIN
 
 
+MAX_REJECTION_REASON_LENGTH = 2000
+
+
+def _lock(event: Event) -> None:
+    event.refresh_from_db(from_queryset=Event.all_objects.select_for_update())
+
+
 def approve_event(event: Event) -> Event:
+    with transaction.atomic():
+        return _approve_locked(event)
+
+
+def _approve_locked(event: Event) -> Event:
+    _lock(event)
     if event.status != Event.Status.PENDING_APPROVAL:
         raise EventNotPendingApprovalError(
             "Only events awaiting approval can be approved "
             f"(current status: {event.get_status_display()})."
         )
     event.status = Event.Status.APPROVED
-    event.save(update_fields=["status", "updated_at"])
+    event.rejection_reason = ""
+    event.save(update_fields=["status", "rejection_reason", "updated_at"])
     return event
 
 
-def reject_event(event: Event) -> Event:
+def reject_event(event: Event, reason: str) -> Event:
+    with transaction.atomic():
+        return _reject_locked(event, reason)
+
+
+def _reject_locked(event: Event, reason: str) -> Event:
+    _lock(event)
     if event.status != Event.Status.PENDING_APPROVAL:
         raise EventNotPendingApprovalError(
             "Only events awaiting approval can be rejected "
             f"(current status: {event.get_status_display()})."
         )
+    reason = (reason if isinstance(reason, str) else "").strip()
+    if not reason:
+        raise EventRejectionReasonRequiredError(
+            "A non-empty 'reason' is required to reject an event."
+        )
+    if len(reason) > MAX_REJECTION_REASON_LENGTH:
+        raise EventRejectionReasonRequiredError(
+            f"'reason' must be at most {MAX_REJECTION_REASON_LENGTH} characters."
+        )
     event.status = Event.Status.REJECTED
-    event.save(update_fields=["status", "updated_at"])
+    event.rejection_reason = reason
+    event.save(update_fields=["status", "rejection_reason", "updated_at"])
     return event
 
 
 def cancel_event(event: Event) -> Event:
+    with transaction.atomic():
+        return _cancel_locked(event)
+
+
+def _cancel_locked(event: Event) -> Event:
+    _lock(event)
     if event.status == Event.Status.COMPLETED:
         raise EventNotCancellableError(
             "Event is completed and can no longer be cancelled."
