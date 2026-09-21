@@ -147,10 +147,10 @@ def test_ensure_can_restore_event_allows_when_no_conflict():
 
 
 def test_ensure_can_restore_event_blocks_active_slug_collision():
-    inactive = EventFactory(title="Shared Title")
+    inactive = EventFactory(title="Shared Title", slug="shared-title")
     inactive.is_active = False
     inactive.save(update_fields=["is_active"])
-    EventFactory(title="Shared Title")
+    EventFactory(title="Shared Title", slug="shared-title")
 
     with pytest.raises(DuplicateEventSlugError):
         ensure_can_restore_event(inactive)
