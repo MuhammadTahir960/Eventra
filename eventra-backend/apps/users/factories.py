@@ -13,6 +13,7 @@ class UserFactory(DjangoModelFactory):
     first_name = factory.Faker("first_name")
     last_name = factory.Faker("last_name")
     role = Roles.ATTENDEE
+    gender = User.Gender.OTHER
     is_active = True
     password = factory.PostGenerationMethodCall("set_password", "testpass123")
 
