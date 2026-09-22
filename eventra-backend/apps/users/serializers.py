@@ -2,7 +2,10 @@ from django.contrib.auth.password_validation import validate_password
 from django.db import IntegrityError
 from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import AuthenticationFailed, TokenError
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.serializers import (
+    TokenObtainPairSerializer,
+    TokenRefreshSerializer,
+)
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import User
@@ -10,10 +13,11 @@ from .models import User
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, max_length=128)
+    gender = serializers.ChoiceField(choices=User.Gender.choices, required=True)
 
     class Meta:
         model = User
-        fields = ["id", "email", "password", "first_name", "last_name"]
+        fields = ["id", "email", "password", "first_name", "last_name", "gender"]
         read_only_fields = ["id"]
 
     def validate_email(self, value):
@@ -109,8 +113,39 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         return value
 
 
+_AVATAR_ASSET_KEYS = {
+    User.Gender.MALE: "avatar-male",
+    User.Gender.FEMALE: "avatar-female",
+    User.Gender.OTHER: "avatar-other",
+}
+
+
 class UserSerializer(serializers.ModelSerializer):
+    avatar = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ["email", "role", "first_name", "last_name", "created_at"]
-        read_only_fields = ["email", "role", "created_at"]
+        fields = [
+            "id",
+            "email",
+            "role",
+            "first_name",
+            "last_name",
+            "gender",
+            "avatar",
+            "is_active",
+            "created_at",
+        ]
+        read_only_fields = ["id", "email", "role", "is_active", "created_at"]
+        extra_kwargs = {"gender": {"allow_blank": False}}
+
+    def get_avatar(self, obj) -> str:
+        return _AVATAR_ASSET_KEYS.get(obj.gender, _AVATAR_ASSET_KEYS[User.Gender.OTHER])
+
+
+class SafeTokenRefreshSerializer(TokenRefreshSerializer):
+    def validate(self, attrs):
+        try:
+            return super().validate(attrs)
+        except User.DoesNotExist as exc:
+            raise TokenError("Token is invalid.") from exc

@@ -1,14 +1,20 @@
+import django_filters
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
+from apps.common.constants import Roles
+from apps.common.permissions import IsAdmin
+
+from .models import User
 from .serializers import (
     ActiveUserTokenObtainPairSerializer,
     LogoutSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     RegisterSerializer,
+    SafeTokenRefreshSerializer,
     UserSerializer,
 )
 from .services import (
@@ -138,3 +144,53 @@ class WsTicketView(generics.GenericAPIView):
             {"ticket": ticket, "expires_at": expires_at.isoformat()},
             status=status.HTTP_200_OK,
         )
+
+
+class AdminUserFilterSet(django_filters.FilterSet):
+    search = django_filters.CharFilter(method="filter_search")
+    role = django_filters.ChoiceFilter(choices=Roles.choices)
+
+    class Meta:
+        model = User
+        fields = ["search", "role"]
+
+    def filter_search(self, queryset, name, value):
+        return queryset.filter(email__icontains=value)
+
+
+class AdminUserListView(generics.ListAPIView):
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    filterset_class = AdminUserFilterSet
+    queryset = User.objects.all().order_by("-created_at")
+
+
+class AdminUserRoleUpdateView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def patch(self, request, user_id):
+        target_user = generics.get_object_or_404(User, pk=user_id)
+        new_role = request.data.get("role") if hasattr(request.data, "get") else None
+        valid_roles = {choice for choice, _ in Roles.choices}
+        if not isinstance(new_role, str) or new_role not in valid_roles:
+            return Response(
+                {"detail": f"'role' must be one of {sorted(valid_roles)}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if target_user.id == request.user.id and new_role != Roles.ADMIN:
+            return Response(
+                {"detail": "Cannot change your own admin role."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        target_user.role = new_role
+        update_fields = ["role", "last_updated"]
+        if new_role != Roles.ADMIN:
+            target_user.is_staff = False
+            target_user.is_superuser = False
+            update_fields += ["is_staff", "is_superuser"]
+        target_user.save(update_fields=update_fields)
+        return Response(UserSerializer(target_user).data)
+
+
+class SafeTokenRefreshView(TokenRefreshView):
+    serializer_class = SafeTokenRefreshSerializer
