@@ -5,6 +5,7 @@ from apps.users import tokens as tokens_module
 from apps.users.tokens import (
     generate_password_reset_token,
     generate_verification_token,
+    password_fingerprint,
     verify_password_reset_token,
     verify_token,
 )
@@ -61,7 +62,10 @@ PASSWORD_HASH = "pbkdf2_sha256$600000$somesalt$somehash"
 def test_password_reset_round_trip():
     user = _FakeUser(USER_ID, PASSWORD_HASH)
     token = generate_password_reset_token(user)
-    assert verify_password_reset_token(token) == (str(USER_ID), PASSWORD_HASH)
+    assert verify_password_reset_token(token) == (
+        str(USER_ID),
+        password_fingerprint(user),
+    )
 
 
 def test_password_reset_tampered_token_rejected():
@@ -91,14 +95,27 @@ def test_password_reset_token_still_valid_just_under_the_expiry_boundary():
 
     almost_expired = __import__("time").time() + (60 * 60) - 60
     with patch("django.core.signing.time.time", return_value=almost_expired):
-        assert verify_password_reset_token(token) == (str(USER_ID), PASSWORD_HASH)
+        assert verify_password_reset_token(token) == (
+            str(USER_ID),
+            password_fingerprint(user),
+        )
 
 
 def test_password_reset_token_stale_after_password_change():
     user = _FakeUser(USER_ID, PASSWORD_HASH)
     token = generate_password_reset_token(user)
-    decoded_user_id, decoded_hash = verify_password_reset_token(token)
-    assert decoded_hash == PASSWORD_HASH
+    _, decoded_fingerprint = verify_password_reset_token(token)
+    assert decoded_fingerprint == password_fingerprint(user)
+
+    user.password = "pbkdf2_sha256$changed$hash"
+    assert decoded_fingerprint != password_fingerprint(user)
+
+
+def test_password_reset_token_never_contains_the_password_hash():
+    user = _FakeUser(USER_ID, PASSWORD_HASH)
+    token = generate_password_reset_token(user)
+    assert PASSWORD_HASH not in token
+    assert "pbkdf2" not in token
 
 
 def test_password_reset_token_missing_colon_separator_rejected():

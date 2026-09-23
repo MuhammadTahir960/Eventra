@@ -6,8 +6,16 @@ from unittest.mock import patch
 import pytest
 from django.core import mail
 from django.utils import timezone
+from rest_framework.test import APIClient
+from rest_framework_simplejwt.token_blacklist.models import (
+    BlacklistedToken,
+)
+from rest_framework_simplejwt.tokens import RefreshToken
 
-from apps.users.tokens import verify_password_reset_token, verify_token
+from apps.users.tokens import (
+    verify_password_reset_token,
+    verify_token,
+)
 
 from ..factories import UserFactory
 from ..models import User
@@ -76,6 +84,7 @@ def test_register_user_creates_user_and_sends_email_after_commit():
             "password": "a-genuinely-strong-pass-1",
             "first_name": "New",
             "last_name": "User",
+            "gender": "other",
         }
     )
     assert serializer.is_valid(), serializer.errors
@@ -97,12 +106,13 @@ def test_register_user_survives_email_send_failure(caplog):
             "password": "a-genuinely-strong-pass-1",
             "first_name": "New",
             "last_name": "User",
+            "gender": "other",
         }
     )
     assert serializer.is_valid(), serializer.errors
 
     with patch(
-        "apps.users.services.send_verification_email",
+        "apps.users.tasks.send_verification_email",
         side_effect=RuntimeError("SMTP is down"),
     ), caplog.at_level("ERROR"):
         user = register_user(serializer)
@@ -110,7 +120,7 @@ def test_register_user_survives_email_send_failure(caplog):
     assert user.pk is not None
     assert User.objects.filter(email="resilient@example.com").exists()
     assert len(mail.outbox) == 0
-    assert "Failed to send verification email" in caplog.text
+    assert "on_commit" in caplog.text
 
 
 # ==================================================
@@ -242,13 +252,13 @@ def test_request_password_reset_does_not_email_inactive_unverified_user():
 def test_request_password_reset_survives_email_send_failure(caplog):
     user = UserFactory()
     with patch(
-        "apps.users.services.send_password_reset_email",
+        "apps.users.tasks.send_password_reset_email",
         side_effect=RuntimeError("SMTP is down"),
     ), caplog.at_level("ERROR"):
         request_password_reset(user.email)
 
     assert len(mail.outbox) == 0
-    assert "Failed to send password reset email" in caplog.text
+    assert "Failed to enqueue password reset" in caplog.text
 
 
 # ==================================================
@@ -397,3 +407,32 @@ def test_ws_ticket_two_concurrent_consumers_only_one_wins():
     winners = [r for r in results if r is not None]
     assert winners == [user.id]
     assert results.count(None) == 1
+
+
+@pytest.mark.django_db
+class TestPasswordResetHardening:
+    def test_reset_kills_previously_issued_refresh_tokens(self):
+        user = UserFactory()
+        refresh = RefreshToken.for_user(user)
+        token = generate_password_reset_token(user)
+
+        assert reset_password(token, "a-brand-new-Passw0rd!") is True
+
+        assert BlacklistedToken.objects.filter(token__jti=refresh["jti"]).exists()
+        response = APIClient().post(
+            "/auth/refresh/", {"refresh": str(refresh)}, format="json"
+        )
+        assert response.status_code == 401
+
+    def test_reset_link_is_single_use(self):
+        user = UserFactory()
+        token = generate_password_reset_token(user)
+        assert reset_password(token, "a-brand-new-Passw0rd!") is True
+        assert reset_password(token, "another-Passw0rd-2!") is False
+
+    def test_reset_email_is_sent_via_the_task_queue(self):
+        user = UserFactory()
+        request_password_reset(user.email)
+        assert len(mail.outbox) == 1
+        assert "reset-password?token=" in mail.outbox[0].body
+        assert user.password not in mail.outbox[0].body
