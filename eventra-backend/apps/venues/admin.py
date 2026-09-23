@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Seat, Venue
+from .models import Seat, Venue, VenueRequest
 
 
 @admin.register(Venue)
@@ -19,3 +19,11 @@ class SeatAdmin(admin.ModelAdmin):
     list_filter = ("venue",)
     search_fields = ("venue__name", "section")
     list_select_related = ("venue",)
+
+
+@admin.register(VenueRequest)
+class VenueRequestAdmin(admin.ModelAdmin):
+    list_display = ("venue_name", "city", "requested_by", "status", "created_at")
+    list_filter = ("status",)
+    search_fields = ("venue_name", "city", "requested_by__email")
+    list_select_related = ("requested_by",)
