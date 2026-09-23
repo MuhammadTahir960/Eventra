@@ -2,7 +2,7 @@ from rest_framework import serializers
 
 from apps.common.serializers import IntegrityErrorHandlingMixin
 
-from .models import Seat, Venue
+from .models import Seat, Venue, VenueRequest
 
 
 class VenueSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
@@ -18,6 +18,7 @@ class VenueSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
             "city",
             "country",
             "capacity",
+            "photo",
             "created_at",
             "updated_at",
         ]
@@ -91,3 +92,28 @@ class BulkSeatTemplateSerializer(serializers.Serializer):
                 f"Payload would create {total_seats} seats — over the 2000-seat sanity limit."
             )
         return sections
+
+
+class VenueRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VenueRequest
+        fields = [
+            "id",
+            "requested_by",
+            "venue_name",
+            "city",
+            "notes",
+            "status",
+            "admin_notes",
+            "created_at",
+            "reviewed_at",
+        ]
+        extra_kwargs = {"notes": {"max_length": 2000}}
+        read_only_fields = [
+            "id",
+            "requested_by",
+            "status",
+            "admin_notes",
+            "created_at",
+            "reviewed_at",
+        ]
