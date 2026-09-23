@@ -1,22 +1,33 @@
 import django_filters
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import status, viewsets
+from rest_framework import generics, permissions, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.common.constants import Roles
 from apps.common.mixins import SoftDeleteDestroyMixin, SoftDeleteRestoreMixin
 from apps.common.permissions import IsAdmin, IsAdminForWrite, IsOrganizer
 from apps.events.services import find_blocking_upcoming_event
 
-from .models import Venue
-from .serializers import BulkSeatTemplateSerializer, SeatSerializer, VenueSerializer
+from .models import Venue, VenueRequest
+from .serializers import (
+    BulkSeatTemplateSerializer,
+    SeatSerializer,
+    VenueRequestSerializer,
+    VenueSerializer,
+)
 from .services import (
     CapacityExceededError,
     DuplicateSeatError,
     SeatTemplateExistsError,
     SeatTemplateInUseError,
+    VenueRequestAdminNotesRequiredError,
+    VenueRequestNotPendingError,
     bulk_create_seat_template,
+    fulfil_venue_request,
+    reject_venue_request,
 )
 
 
@@ -46,6 +57,7 @@ class VenueViewSet(
 
     serializer_class = VenueSerializer
     permission_classes = [IsAdminForWrite]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     filter_backends = [DjangoFilterBackend]
     filterset_class = VenueFilterSet
     http_method_names = ["get", "post", "patch", "delete"]
@@ -125,9 +137,65 @@ class VenueViewSet(
 
     def get_permissions(self):
         if self.action == "seats":
+            if self.request.method == "POST":
+                return [permissions.IsAuthenticated(), IsAdmin()]
             return [(IsOrganizer | IsAdmin)()]
 
         if self.action == "restore":
             return [IsAdmin()]
 
         return super().get_permissions()
+
+
+class VenueRequestListCreateView(generics.ListCreateAPIView):
+    serializer_class = VenueRequestSerializer
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [permissions.IsAuthenticated(), IsOrganizer()]
+        return [permissions.IsAuthenticated()]
+
+    def get_throttles(self):
+        self.throttle_scope = "venue-request" if self.request.method == "POST" else None
+        return super().get_throttles()
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = VenueRequest.objects.all().order_by("created_at", "id")
+        if user.role == Roles.ADMIN:
+            return queryset
+        return queryset.filter(requested_by=user)
+
+    def perform_create(self, serializer):
+        serializer.save(requested_by=self.request.user)
+
+
+class VenueRequestRejectView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def post(self, request, request_id):
+        venue_request = generics.get_object_or_404(VenueRequest, pk=request_id)
+        try:
+            notes = (
+                request.data.get("admin_notes")
+                if hasattr(request.data, "get")
+                else None
+            )
+            reject_venue_request(venue_request, notes if isinstance(notes, str) else "")
+        except VenueRequestNotPendingError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except VenueRequestAdminNotesRequiredError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(VenueRequestSerializer(venue_request).data)
+
+
+class VenueRequestFulfilView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def post(self, request, request_id):
+        venue_request = generics.get_object_or_404(VenueRequest, pk=request_id)
+        try:
+            fulfil_venue_request(venue_request)
+        except VenueRequestNotPendingError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        return Response(VenueRequestSerializer(venue_request).data)
