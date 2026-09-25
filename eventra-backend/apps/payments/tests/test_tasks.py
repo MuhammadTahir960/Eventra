@@ -69,5 +69,21 @@ class TestRefundEventBookingsTask:
         untouched_payment.refresh_from_db()
         assert stuck_booking.status == Booking.Status.REFUNDED
         assert stuck_payment.status == Payment.Status.REFUNDED
-        assert untouched_booking.status == Booking.Status.CONFIRMED
-        assert untouched_payment.status == Payment.Status.SUCCEEDED
+        assert untouched_booking.status == Booking.Status.REFUNDED
+        assert untouched_payment.status == Payment.Status.REFUNDED
+
+    def test_normal_run_leaves_refund_failed_bookings_alone(self, monkeypatch):
+        monkeypatch.setattr("apps.payments.services.stripe.Refund.create", MagicMock())
+        monkeypatch.setattr(
+            "apps.notifications.tasks.send_refund_email.delay", MagicMock()
+        )
+        event = EventFactory(status="cancelled")
+        stuck_booking, _ = _confirmed_booking_for_event(event)
+        Booking.objects.filter(id=stuck_booking.id).update(
+            status=Booking.Status.REFUND_FAILED
+        )
+
+        refund_event_bookings_task(str(event.id))
+
+        stuck_booking.refresh_from_db()
+        assert stuck_booking.status == Booking.Status.REFUND_FAILED

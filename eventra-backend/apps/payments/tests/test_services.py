@@ -1,15 +1,25 @@
 import threading
 import time
+from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
 import stripe
 from django.db import IntegrityError, connection
+from django.utils import timezone
 
 from apps.bookings.factories import BookingFactory
 from apps.bookings.models import Booking
+from apps.bookings.services import (
+    BookingExpiredError,
+    EventClosedError,
+    cancel_pending_bookings_for_event,
+    checkout_booking,
+    sweep_expired_pending_bookings,
+)
 from apps.events.factories import EventFactory
+from apps.events.models import Event
 from apps.seating.factories import EventSeatFactory
 from apps.seating.models import EventSeat
 from apps.tickets.models import Ticket
@@ -22,8 +32,10 @@ from ..services import (
     PaymentNotFoundError,
     WebhookSignatureError,
     _to_cents,
+    cancel_payment_intent_if_unpaid,
     confirm_payment_from_webhook,
     create_or_refresh_payment_intent,
+    mark_payment_from_webhook,
     refund_booking,
     refund_event_bookings,
     verify_stripe_webhook_signature,
@@ -493,3 +505,223 @@ class TestRefundEventBookings:
     def test_no_confirmed_bookings_is_a_safe_no_op(self):
         event = EventFactory(status="approved")
         refund_event_bookings(str(event.id))
+
+
+# ==================================================
+# Unfulfillable / late / cancelled-mid-checkout payments
+# ==================================================
+
+
+@pytest.fixture
+def stripe_mocks(monkeypatch):
+    refund = MagicMock()
+    monkeypatch.setattr("apps.payments.services.stripe.Refund.create", refund)
+    monkeypatch.setattr("apps.notifications.tasks.send_refund_email.delay", MagicMock())
+    monkeypatch.setattr("apps.payments.services.generate_ticket_pdf.delay", MagicMock())
+    monkeypatch.setattr(
+        "apps.payments.services._enqueue_confirmation_email", MagicMock()
+    )
+    monkeypatch.setattr("apps.payments.services.broadcast_seat_update", MagicMock())
+    return refund
+
+
+def _pending_booking(event=None, *, pi="pi_pending", age_minutes=0):
+    event = event or EventFactory(status=Event.Status.APPROVED)
+    booking = BookingFactory(status=Booking.Status.PENDING, total_amount=Decimal("25"))
+    if age_minutes:
+        Booking.objects.filter(id=booking.id).update(
+            created_at=timezone.now() - timedelta(minutes=age_minutes)
+        )
+        booking.refresh_from_db()
+    seat = EventSeatFactory(
+        event=event, status=EventSeat.Status.HELD, held_booking=booking
+    )
+    payment = PaymentFactory(
+        booking=booking, stripe_payment_intent_id=pi, status=Payment.Status.PENDING
+    )
+    return booking, seat, payment
+
+
+class TestWebhookForUnfulfillableBooking:
+    def test_late_payment_after_expiry_sweep_is_refunded_not_kept(self, stripe_mocks):
+        booking, seat, payment = _pending_booking(pi="pi_late")
+        Booking.objects.filter(id=booking.id).update(status=Booking.Status.CANCELLED)
+        EventSeat.objects.filter(id=seat.id).update(
+            status=EventSeat.Status.AVAILABLE, held_booking=None
+        )
+
+        confirm_payment_from_webhook("pi_late")
+
+        booking.refresh_from_db()
+        payment.refresh_from_db()
+        stripe_mocks.assert_called_once()
+        assert stripe_mocks.call_args.kwargs["payment_intent"] == "pi_late"
+        assert booking.status == Booking.Status.REFUNDED
+        assert payment.status == Payment.Status.REFUNDED
+        assert Ticket.objects.filter(booking=booking).count() == 0
+
+    def test_payment_for_event_cancelled_mid_checkout_is_refunded(self, stripe_mocks):
+        event = EventFactory(status=Event.Status.CANCELLED)
+        booking, seat, payment = _pending_booking(event, pi="pi_dead_event")
+
+        confirm_payment_from_webhook("pi_dead_event")
+
+        booking.refresh_from_db()
+        payment.refresh_from_db()
+        stripe_mocks.assert_called_once()
+        assert booking.status == Booking.Status.REFUNDED
+        assert payment.status == Payment.Status.REFUNDED
+        assert Ticket.objects.filter(booking=booking).count() == 0
+
+    def test_replayed_webhook_after_refund_does_not_refund_twice(self, stripe_mocks):
+        event = EventFactory(status=Event.Status.CANCELLED)
+        _pending_booking(event, pi="pi_replay")
+
+        confirm_payment_from_webhook("pi_replay")
+        confirm_payment_from_webhook("pi_replay")
+
+        stripe_mocks.assert_called_once()
+
+    def test_refund_failure_propagates_so_stripe_retries_the_webhook(self, monkeypatch):
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.Refund.create",
+            MagicMock(side_effect=stripe.error.APIConnectionError("down")),
+        )
+        event = EventFactory(status=Event.Status.CANCELLED)
+        booking, _, payment = _pending_booking(event, pi="pi_retry")
+
+        with pytest.raises(PaymentGatewayError):
+            confirm_payment_from_webhook("pi_retry")
+
+        payment.refresh_from_db()
+        assert payment.status == Payment.Status.SUCCEEDED
+
+    def test_normal_payment_still_confirms(self, stripe_mocks):
+        booking, seat, payment = _pending_booking(pi="pi_ok")
+
+        confirm_payment_from_webhook("pi_ok")
+
+        booking.refresh_from_db()
+        seat.refresh_from_db()
+        assert booking.status == Booking.Status.CONFIRMED
+        assert seat.status == EventSeat.Status.BOOKED
+        assert Ticket.objects.filter(booking=booking).count() == 1
+        stripe_mocks.assert_not_called()
+
+
+class TestSweepCancelsPaymentIntent:
+    def test_sweep_cancels_the_paymentintent_before_cancelling_the_booking(
+        self, monkeypatch
+    ):
+        cancel = MagicMock()
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.PaymentIntent.cancel", cancel
+        )
+        monkeypatch.setattr(
+            "apps.bookings.services.notify_internal_broadcast", MagicMock()
+        )
+        booking, seat, payment = _pending_booking(pi="pi_stale", age_minutes=6)
+
+        sweep_expired_pending_bookings()
+
+        cancel.assert_called_once_with("pi_stale")
+        booking.refresh_from_db()
+        payment.refresh_from_db()
+        assert booking.status == Booking.Status.CANCELLED
+        assert payment.status == Payment.Status.CANCELED
+
+    def test_sweep_leaves_a_booking_alone_when_the_customer_already_paid(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.PaymentIntent.cancel",
+            MagicMock(side_effect=stripe.error.InvalidRequestError("done", "id")),
+        )
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.PaymentIntent.retrieve",
+            MagicMock(return_value=MagicMock(status="succeeded")),
+        )
+        booking, seat, _ = _pending_booking(pi="pi_paid", age_minutes=6)
+
+        sweep_expired_pending_bookings()
+
+        booking.refresh_from_db()
+        seat.refresh_from_db()
+        assert booking.status == Booking.Status.PENDING
+        assert seat.held_booking_id == booking.id
+
+    def test_stripe_outage_defers_the_cancellation(self, monkeypatch):
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.PaymentIntent.cancel",
+            MagicMock(side_effect=stripe.error.APIConnectionError("down")),
+        )
+        booking, _, _ = _pending_booking(pi="pi_outage", age_minutes=6)
+
+        assert cancel_payment_intent_if_unpaid(booking) is False
+
+    def test_booking_without_a_paymentintent_is_freely_cancellable(self):
+        booking = BookingFactory(status=Booking.Status.PENDING)
+        assert cancel_payment_intent_if_unpaid(booking) is True
+
+
+class TestCheckoutGuards:
+    def test_checkout_of_an_expired_booking_is_refused(self):
+        booking, _, _ = _pending_booking(age_minutes=6)
+        with pytest.raises(BookingExpiredError):
+            checkout_booking(booking)
+
+    def test_checkout_for_a_cancelled_event_is_refused(self):
+        event = EventFactory(status=Event.Status.CANCELLED)
+        booking, _, _ = _pending_booking(event)
+        with pytest.raises(EventClosedError):
+            checkout_booking(booking)
+
+    def test_checkout_for_an_event_that_already_ended_is_refused(self):
+        event = EventFactory(status=Event.Status.APPROVED)
+        Event.objects.filter(id=event.id).update(
+            start_datetime=timezone.now() - timedelta(hours=5),
+            end_datetime=timezone.now() - timedelta(hours=2),
+        )
+        event.refresh_from_db()
+        booking, _, _ = _pending_booking(event)
+        with pytest.raises(EventClosedError):
+            checkout_booking(booking)
+
+
+class TestCancelPendingBookingsForEvent:
+    def test_unpaid_bookings_are_closed_and_their_paymentintent_cancelled(
+        self, monkeypatch
+    ):
+        cancel = MagicMock()
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.PaymentIntent.cancel", cancel
+        )
+        event = EventFactory(status=Event.Status.CANCELLED)
+        booking, seat, payment = _pending_booking(event, pi="pi_evt")
+
+        cancel_pending_bookings_for_event(event.id)
+
+        cancel.assert_called_once_with("pi_evt")
+        booking.refresh_from_db()
+        seat.refresh_from_db()
+        assert booking.status == Booking.Status.CANCELLED
+        assert seat.held_booking_id is None
+        assert seat.status == EventSeat.Status.HELD
+
+
+class TestMarkPaymentFromWebhook:
+    def test_failed_and_canceled_events_update_a_pending_payment(self):
+        payment = PaymentFactory(
+            stripe_payment_intent_id="pi_f", status=Payment.Status.PENDING
+        )
+        mark_payment_from_webhook("pi_f", Payment.Status.FAILED)
+        payment.refresh_from_db()
+        assert payment.status == Payment.Status.FAILED
+
+    def test_a_settled_payment_is_never_downgraded(self):
+        payment = PaymentFactory(
+            stripe_payment_intent_id="pi_s", status=Payment.Status.SUCCEEDED
+        )
+        mark_payment_from_webhook("pi_s", Payment.Status.FAILED)
+        payment.refresh_from_db()
+        assert payment.status == Payment.Status.SUCCEEDED
