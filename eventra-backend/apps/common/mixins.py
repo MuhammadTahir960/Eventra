@@ -1,5 +1,6 @@
 from django.core.exceptions import FieldDoesNotExist
 from django.db import transaction
+from django.db.models import ProtectedError
 from django.http import Http404
 from rest_framework import status
 from rest_framework.decorators import action
@@ -47,9 +48,20 @@ class SoftDeleteDestroyMixin:
         if guard_response is not None:
             return guard_response
 
-        with transaction.atomic():
-            locked_instance = model.all_objects.select_for_update().get(pk=instance.pk)
-            locked_instance.delete()
+        try:
+            with transaction.atomic():
+                locked_instance = model.all_objects.select_for_update().get(
+                    pk=instance.pk
+                )
+                locked_instance.delete()
+        except ProtectedError:
+            return Response(
+                {
+                    "detail": "Cannot permanently delete: this record is still "
+                    "referenced by other records. Soft-delete it instead."
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
