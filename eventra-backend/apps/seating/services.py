@@ -11,7 +11,11 @@ from django.utils import timezone
 
 from apps.events.models import Event
 
-from .constants import HOLD_DURATION_MINUTES, MAX_SEATS_PER_HOLD
+from .constants import (
+    HOLD_DURATION_MINUTES,
+    MAX_ACTIVE_SEATS_PER_USER,
+    MAX_SEATS_PER_HOLD,
+)
 from .models import EventSeat, SeatHold
 from .serializers import serialize_seats_for_ws
 
@@ -52,6 +56,16 @@ class TooManySeatsError(Exception):
         super().__init__(
             f"A single hold request can cover at most {MAX_SEATS_PER_HOLD} seats "
             f"(requested {requested})."
+        )
+
+
+class TooManyActiveSeatsError(Exception):
+    """Raised when a user would exceed MAX_ACTIVE_SEATS_PER_USER reserved seats."""
+
+    def __init__(self):
+        super().__init__(
+            f"You can have at most {MAX_ACTIVE_SEATS_PER_USER} seats reserved at once. "
+            "Complete or wait out your current reservation first."
         )
 
 
@@ -130,6 +144,8 @@ def hold_seats(
         raise EventNotHoldableError(
             "Seats can only be held against an approved, currently-running event."
         )
+    if event.end_datetime <= timezone.now():
+        raise EventNotHoldableError("This event has already ended.")
 
     group_id = uuid.uuid4()
     expires_at = timezone.now() + timedelta(minutes=HOLD_DURATION_MINUTES)
@@ -168,6 +184,19 @@ def hold_seats(
             if conflict_ids:
                 raise SeatsUnavailableError(conflict_ids)
 
+            active_elsewhere = (
+                SeatHold.objects.filter(user=user, expires_at__gte=now)
+                .exclude(event_seat_id__in=found_ids)
+                .count()
+                + EventSeat.objects.filter(
+                    held_booking__user=user, held_booking__status="pending"
+                )
+                .exclude(id__in=found_ids)
+                .count()
+            )
+            if active_elsewhere + len(found_ids) > MAX_ACTIVE_SEATS_PER_USER:
+                raise TooManyActiveSeatsError()
+
             SeatHold.objects.filter(event_seat__in=locked_seats).delete()
             EventSeat.objects.filter(id__in=found_ids).update(
                 status=EventSeat.Status.HELD
@@ -186,7 +215,8 @@ def hold_seats(
                 seat.status = EventSeat.Status.HELD
 
             transaction.on_commit(
-                lambda: broadcast_seat_update(event=event, seats=locked_seats)
+                lambda: broadcast_seat_update(event=event, seats=locked_seats),
+                robust=True,
             )
     except OperationalError as exc:
         raise SeatLockConflictError(
@@ -232,31 +262,38 @@ def notify_internal_broadcast(
 
 def release_expired_holds() -> None:
     now = timezone.now()
+    candidate_seat_ids = list(
+        SeatHold.objects.filter(expires_at__lt=now).values_list(
+            "event_seat_id", flat=True
+        )
+    )
+    if not candidate_seat_ids:
+        return
 
     with transaction.atomic():
+        seats = list(
+            EventSeat.objects.select_for_update(skip_locked=True, of=("self",))
+            .filter(id__in=candidate_seat_ids)
+            .select_related("event")
+            .order_by("id")
+        )
         expired_holds = list(
-            SeatHold.objects.select_for_update(of=("self",))
-            .filter(expires_at__lt=now)
-            .select_related("event_seat__event")
+            SeatHold.objects.select_for_update(of=("self",)).filter(
+                event_seat_id__in=[seat.id for seat in seats], expires_at__lt=now
+            )
         )
         if not expired_holds:
             return
 
-        event_seat_ids = [hold.event_seat_id for hold in expired_holds]
-        seats = list(
-            EventSeat.objects.select_for_update(of=("self",)).filter(
-                id__in=event_seat_ids
-            )
-        )
-        for seat in seats:
+        expired_seat_ids = {hold.event_seat_id for hold in expired_holds}
+        released = [seat for seat in seats if seat.id in expired_seat_ids]
+        for seat in released:
             seat.status = EventSeat.Status.AVAILABLE
-        EventSeat.objects.bulk_update(seats, ["status"])
+        EventSeat.objects.bulk_update(released, ["status"])
 
         seat_ids_by_event_slug: dict[str, list] = {}
-        for hold in expired_holds:
-            seat_ids_by_event_slug.setdefault(hold.event_seat.event.slug, []).append(
-                hold.event_seat_id
-            )
+        for seat in released:
+            seat_ids_by_event_slug.setdefault(seat.event.slug, []).append(seat.id)
 
         SeatHold.objects.filter(id__in=[hold.id for hold in expired_holds]).delete()
 
@@ -264,5 +301,6 @@ def release_expired_holds() -> None:
             transaction.on_commit(
                 lambda event_slug=event_slug, seat_ids=seat_ids: notify_internal_broadcast(
                     event_slug=event_slug, seat_ids=seat_ids, status_label="available"
-                )
+                ),
+                robust=True,
             )
