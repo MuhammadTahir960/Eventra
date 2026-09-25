@@ -5,8 +5,9 @@ from unittest.mock import MagicMock
 
 import pytest
 import requests
-from django.db import connection
+from django.db import connection, transaction
 from django.utils import timezone
+from rest_framework.test import APIClient
 
 from apps.events.factories import (
     EventFactory,
@@ -17,6 +18,8 @@ from apps.events.models import Event
 from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory, VenueFactory
 
+from ..constants import MAX_ACTIVE_SEATS_PER_USER
+from ..factories import EventSeatFactory, SeatHoldFactory
 from ..models import EventSeat, SeatHold
 from ..services import (
     MAX_SEATS_PER_HOLD,
@@ -27,11 +30,13 @@ from ..services import (
     SeatLockConflictError,
     SeatsNotFoundError,
     SeatsUnavailableError,
+    TooManyActiveSeatsError,
     TooManySeatsError,
     UncoveredSectionsError,
     hold_seats,
     instantiate_event_seats,
     notify_internal_broadcast,
+    release_expired_holds,
 )
 
 pytestmark = pytest.mark.django_db
@@ -521,3 +526,209 @@ class TestNotifyInternalBroadcast:
             )
 
         assert "Internal broadcast call failed" not in caplog.text
+
+
+def _seat(event, **kwargs):
+    return EventSeatFactory(
+        event=event,
+        ticket_tier=TicketTierFactory(event=event),
+        seat=SeatFactory(venue=event.venue),
+        **kwargs,
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+class TestHoldEndpointResilience:
+    def test_broadcast_failure_does_not_turn_a_committed_hold_into_a_500(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "apps.seating.services.broadcast_seat_update",
+            MagicMock(side_effect=RuntimeError("channel layer down")),
+        )
+        event = EventFactory(status=Event.Status.APPROVED)
+        seat = _seat(event)
+        client = APIClient(raise_request_exception=False)
+        client.force_authenticate(UserFactory())
+
+        response = client.post(
+            f"/events/{event.id}/seats/hold/",
+            {"seat_ids": [str(seat.id)]},
+            format="json",
+        )
+
+        assert response.status_code == 200
+        seat.refresh_from_db()
+        assert seat.status == EventSeat.Status.HELD
+
+
+@pytest.mark.django_db
+class TestHoldLimits:
+    def test_a_user_cannot_reserve_more_than_the_active_seat_cap(self):
+        user = UserFactory()
+        event = EventFactory(status=Event.Status.APPROVED)
+        for _ in range(MAX_ACTIVE_SEATS_PER_USER):
+            seat = _seat(event, status=EventSeat.Status.HELD)
+            SeatHoldFactory(
+                event_seat=seat,
+                user=user,
+                expires_at=timezone.now() + timedelta(minutes=5),
+            )
+        extra = _seat(event)
+
+        with pytest.raises(TooManyActiveSeatsError):
+            hold_seats(event=event, seat_ids=[extra.id], user=user)
+
+    def test_refreshing_an_existing_hold_does_not_count_twice(self):
+        user = UserFactory()
+        event = EventFactory(status=Event.Status.APPROVED)
+        seats = []
+        for _ in range(MAX_ACTIVE_SEATS_PER_USER):
+            seat = _seat(event, status=EventSeat.Status.HELD)
+            SeatHoldFactory(
+                event_seat=seat,
+                user=user,
+                expires_at=timezone.now() + timedelta(minutes=5),
+            )
+            seats.append(seat)
+
+        hold_seats(event=event, seat_ids=[seats[0].id], user=user)
+
+    def test_expired_holds_do_not_count_toward_the_cap(self):
+        user = UserFactory()
+        event = EventFactory(status=Event.Status.APPROVED)
+        for _ in range(MAX_ACTIVE_SEATS_PER_USER):
+            seat = _seat(event, status=EventSeat.Status.HELD)
+            SeatHoldFactory(
+                event_seat=seat,
+                user=user,
+                expires_at=timezone.now() - timedelta(minutes=1),
+            )
+        fresh = _seat(event)
+
+        hold_seats(event=event, seat_ids=[fresh.id], user=user)
+
+    def test_cannot_hold_seats_for_an_event_that_already_ended(self):
+        event = EventFactory(status=Event.Status.APPROVED)
+        Event.objects.filter(id=event.id).update(
+            start_datetime=timezone.now() - timedelta(hours=5),
+            end_datetime=timezone.now() - timedelta(hours=1),
+        )
+        event.refresh_from_db()
+        seat = _seat(event)
+
+        with pytest.raises(EventNotHoldableError):
+            hold_seats(event=event, seat_ids=[seat.id], user=UserFactory())
+
+
+# ==================================================
+# release_expired_holds()
+# ==================================================
+
+
+class TestReleaseExpiredHolds:
+    def test_expired_hold_releases_seat_and_deletes_hold_row(self, monkeypatch):
+        monkeypatch.setattr(
+            "apps.seating.services.notify_internal_broadcast", MagicMock()
+        )
+        event = EventFactory(status="approved")
+        seat = EventSeatFactory(event=event, status=EventSeat.Status.HELD)
+        hold = SeatHoldFactory(
+            event_seat=seat, expires_at=timezone.now() - timedelta(minutes=1)
+        )
+
+        release_expired_holds()
+
+        seat.refresh_from_db()
+        assert seat.status == EventSeat.Status.AVAILABLE
+        assert not SeatHold.objects.filter(id=hold.id).exists()
+
+    def test_non_expired_hold_is_left_alone(self, monkeypatch):
+        monkeypatch.setattr(
+            "apps.seating.services.notify_internal_broadcast", MagicMock()
+        )
+        event = EventFactory(status="approved")
+        seat = EventSeatFactory(event=event, status=EventSeat.Status.HELD)
+        hold = SeatHoldFactory(
+            event_seat=seat, expires_at=timezone.now() + timedelta(minutes=5)
+        )
+
+        release_expired_holds()
+
+        seat.refresh_from_db()
+        assert seat.status == EventSeat.Status.HELD
+        assert SeatHold.objects.filter(id=hold.id).exists()
+
+    def test_broadcasts_release_per_affected_event(
+        self, monkeypatch, django_capture_on_commit_callbacks
+    ):
+        mock_notify = MagicMock()
+        monkeypatch.setattr(
+            "apps.seating.services.notify_internal_broadcast", mock_notify
+        )
+
+        event = EventFactory(status="approved")
+        seat = EventSeatFactory(event=event, status=EventSeat.Status.HELD)
+        SeatHoldFactory(
+            event_seat=seat, expires_at=timezone.now() - timedelta(minutes=1)
+        )
+
+        with django_capture_on_commit_callbacks(execute=True):
+            release_expired_holds()
+
+        mock_notify.assert_called_once_with(
+            event_slug=event.slug, seat_ids=[seat.id], status_label="available"
+        )
+
+    def test_no_expired_holds_is_a_no_op(self, monkeypatch):
+        mock_notify = MagicMock()
+        monkeypatch.setattr(
+            "apps.seating.services.notify_internal_broadcast", mock_notify
+        )
+
+        release_expired_holds()
+
+        mock_notify.assert_not_called()
+
+
+@pytest.mark.django_db(transaction=True)
+class TestReleaseExpiredHoldsLockOrder:
+    def test_seat_locked_by_a_live_request_is_skipped_not_waited_on(self, monkeypatch):
+        monkeypatch.setattr(
+            "apps.seating.services.notify_internal_broadcast", MagicMock()
+        )
+        event = EventFactory(status=Event.Status.APPROVED)
+        seat = EventSeatFactory(event=event, status=EventSeat.Status.HELD)
+        SeatHoldFactory(
+            event_seat=seat, expires_at=timezone.now() - timedelta(minutes=1)
+        )
+
+        locked = threading.Event()
+        release = threading.Event()
+
+        def hold_the_seat_lock():
+            try:
+                with transaction.atomic():
+                    EventSeat.objects.select_for_update().get(id=seat.id)
+                    locked.set()
+                    release.wait(timeout=10)
+            finally:
+                connection.close()
+
+        thread = threading.Thread(target=hold_the_seat_lock)
+        thread.start()
+        assert locked.wait(timeout=10)
+
+        try:
+            release_expired_holds()
+        finally:
+            release.set()
+            thread.join(timeout=10)
+
+        seat.refresh_from_db()
+        assert seat.status == EventSeat.Status.HELD
+        assert SeatHold.objects.filter(event_seat=seat).exists()
+
+        release_expired_holds()
+        seat.refresh_from_db()
+        assert seat.status == EventSeat.Status.AVAILABLE
