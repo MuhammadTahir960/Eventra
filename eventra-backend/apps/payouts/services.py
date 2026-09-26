@@ -116,7 +116,9 @@ def create_payout(event: Event) -> tuple[OrganizerPayout, bool]:
         created = False
 
     if created:
-        transaction.on_commit(lambda: _enqueue_payout_ready_notification(payout.id))
+        transaction.on_commit(
+            lambda: _enqueue_payout_ready_notification(payout.id), robust=True
+        )
 
     return payout, created
 
@@ -155,7 +157,7 @@ def request_payout_settlement(payout: OrganizerPayout) -> OrganizerPayout:
         payout.status = OrganizerPayout.Status.PROCESSING
         payout.save(update_fields=["status", "updated_at"])
 
-        transaction.on_commit(lambda: _enqueue_settle_payout(payout.id))
+        transaction.on_commit(lambda: _enqueue_settle_payout(payout.id), robust=True)
 
     return payout
 
@@ -187,7 +189,9 @@ def settle_payout(payout_id) -> None:
         payout.settled_at = timezone.now()
         payout.save(update_fields=["status", "settled_at", "updated_at"])
 
-        transaction.on_commit(lambda: _enqueue_payout_settled_notification(payout.id))
+        transaction.on_commit(
+            lambda: _enqueue_payout_settled_notification(payout.id), robust=True
+        )
 
 
 def _enqueue_payout_ready_notification(payout_id) -> None:
