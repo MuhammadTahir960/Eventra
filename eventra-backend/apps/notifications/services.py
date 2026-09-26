@@ -1,9 +1,11 @@
 import logging
+from datetime import timedelta
 
 from django.conf import settings
-from django.core.mail import EmailMessage
+from django.core.mail import EmailMessage, send_mail
 from django.utils import timezone
 
+from apps.tickets.models import Ticket
 from apps.tickets.services import get_or_render_ticket_pdf
 
 from .models import Notification
@@ -122,7 +124,7 @@ def send_payout_settled_email(payout) -> None:
         notification.save()
 
 
-def send_refund_confirmation_email(booking) -> None:
+def send_refund_confirmation_email(booking, *, event_cancelled: bool = True) -> None:
     notification = Notification(
         user=booking.user,
         type=Notification.NotificationType.EVENT_CANCELLED_REFUND,
@@ -133,8 +135,13 @@ def send_refund_confirmation_email(booking) -> None:
             subject="Your Eventra booking has been refunded",
             body=(
                 f"Hi {booking.user.first_name or booking.user.email},\n\n"
-                "The event you booked has been cancelled by the organizer. "
-                f"Your payment of ${booking.total_amount} has been refunded."
+                + (
+                    "The event you booked has been cancelled by the organizer. "
+                    if event_cancelled
+                    else "We couldn't complete your booking (the reservation "
+                    "expired or the event is no longer available). "
+                )
+                + f"Your payment of ${booking.total_amount} has been refunded."
             ),
             from_email=settings.DEFAULT_FROM_EMAIL,
             to=[booking.user.email],
@@ -153,3 +160,66 @@ def send_refund_confirmation_email(booking) -> None:
         raise
     else:
         notification.save()
+
+
+REMINDER_WINDOW_HOURS = 24
+
+
+def send_event_reminders_batch() -> int:
+    now = timezone.now()
+    tickets = Ticket.objects.filter(
+        status=Ticket.Status.VALID,
+        event_seat__event__status="approved",
+        event_seat__event__start_datetime__gt=now,
+        event_seat__event__start_datetime__lte=now
+        + timedelta(hours=REMINDER_WINDOW_HOURS),
+    ).select_related("booking__user", "event_seat__event")
+
+    pairs = {}
+    for ticket in tickets:
+        event = ticket.event_seat.event
+        pairs.setdefault(
+            (ticket.booking.user_id, event.id), (ticket.booking.user, event)
+        )
+
+    sent = 0
+    for (user_id, event_id), (user, event) in pairs.items():
+        key = f"Event reminder: {event_id}"
+        already_sent = Notification.objects.filter(
+            user_id=user_id,
+            type=Notification.NotificationType.EVENT_REMINDER,
+            message=key,
+            status=Notification.Status.SENT,
+        ).exists()
+        if already_sent:
+            continue
+        try:
+            send_mail(
+                subject=f"Reminder: {event.title} is coming up",
+                message=(
+                    f"Hi {user.first_name or user.email},\n\n"
+                    f'"{event.title}" starts on {event.start_datetime:%Y-%m-%d %H:%M} '
+                    "UTC. Your e-tickets are in your Eventra account."
+                ),
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[user.email],
+                fail_silently=False,
+            )
+        except Exception:
+            logger.exception("Failed to send reminder for event %s", event_id)
+            Notification.objects.create(
+                user=user,
+                type=Notification.NotificationType.EVENT_REMINDER,
+                status=Notification.Status.FAILED,
+                message=f"Failed: {key}",
+            )
+            continue
+        Notification.objects.create(
+            user=user,
+            type=Notification.NotificationType.EVENT_REMINDER,
+            status=Notification.Status.SENT,
+            sent_at=timezone.now(),
+            message=key,
+        )
+        sent += 1
+    return sent
