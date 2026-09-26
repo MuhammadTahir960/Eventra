@@ -158,6 +158,12 @@ MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "mediafiles"
 
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@eventra.local")
+
+EMAIL_HOST = env("EMAIL_HOST", default="")
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
 BACKEND_BASE_URL = env("BACKEND_BASE_URL", default="http://localhost:8000")
 
@@ -174,6 +180,8 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
 
 CELERY_BEAT_SCHEDULE = {
     "complete-past-events": {
@@ -187,6 +195,10 @@ CELERY_BEAT_SCHEDULE = {
     "release-expired-bookings": {
         "task": "apps.bookings.tasks.release_expired_bookings",
         "schedule": 60.0,
+    },
+    "send-event-reminders": {
+        "task": "apps.notifications.tasks.send_event_reminders",
+        "schedule": crontab(minute=15),
     },
     "create-payouts-for-completed-events": {
         "task": "apps.payouts.tasks.create_payouts_for_completed_events",
@@ -232,9 +244,12 @@ REST_FRAMEWORK = {
         "auth-verify-email": "20/hour",
         "auth-password-reset": "5/hour",
         "auth-ws-ticket": "20/min",
+        "ticket-download": "30/min",
+        "venue-request": "10/hour",
         "anon": "100/min",
         "user": "300/min",
     },
+    "NUM_PROXIES": 1,
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
 }
