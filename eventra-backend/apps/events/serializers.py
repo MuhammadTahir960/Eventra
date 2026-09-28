@@ -155,9 +155,7 @@ class EventSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
             if field in validated_data
             and validated_data[field] != getattr(instance, field)
         }
-        if should_retrigger_approval(event=instance, changed_fields=changed_fields):
-            validated_data["status"] = Event.Status.PENDING_APPROVAL
-        elif (
+        if should_retrigger_approval(event=instance, changed_fields=changed_fields) or (
             instance.status == Event.Status.REJECTED
             and instance.organizer.role != Roles.ADMIN
         ):
