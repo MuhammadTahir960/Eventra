@@ -31,6 +31,7 @@ def _register_payload(**overrides):
         "first_name": "New",
         "last_name": "User",
         "gender": "other",
+        "role": "attendee",
     }
     payload.update(overrides)
     return payload
@@ -134,10 +135,9 @@ def test_register_serializer_rejects_last_name_over_max_length():
     assert "last_name" in serializer.errors
 
 
-def test_register_serializer_ignores_privileged_field_injection():
+def test_register_serializer_ignores_other_privileged_field_injection():
     payload = _register_payload(
         email="attacker@example.com",
-        role=Roles.ADMIN,
         is_staff=True,
         is_superuser=True,
         is_active=True,
@@ -145,16 +145,20 @@ def test_register_serializer_ignores_privileged_field_injection():
     serializer = RegisterSerializer(data=payload)
     assert serializer.is_valid(), serializer.errors
 
-    assert "role" not in serializer.validated_data
     assert "is_staff" not in serializer.validated_data
     assert "is_superuser" not in serializer.validated_data
     assert "is_active" not in serializer.validated_data
 
     user = serializer.save()
-    assert user.role == Roles.ATTENDEE
     assert user.is_staff is False
     assert user.is_superuser is False
     assert user.is_active is False
+
+
+def test_register_serializer_rejects_admin_role():
+    serializer = RegisterSerializer(data=_register_payload(role=Roles.ADMIN))
+    assert not serializer.is_valid()
+    assert "role" in serializer.errors
 
 
 # ==================================================
@@ -389,3 +393,8 @@ def test_gender_is_writable_via_serializer():
     assert serializer.is_valid(), serializer.errors
     updated = serializer.save()
     assert updated.gender == "female"
+
+
+def test_avatar_is_null_when_gender_is_unset_not_silently_other():
+    user = UserFactory(gender="")
+    assert UserSerializer(user).data["avatar"] is None

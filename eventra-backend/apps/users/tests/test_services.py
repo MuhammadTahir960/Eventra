@@ -85,6 +85,7 @@ def test_register_user_creates_user_and_sends_email_after_commit():
             "first_name": "New",
             "last_name": "User",
             "gender": "other",
+            "role": "attendee",
         }
     )
     assert serializer.is_valid(), serializer.errors
@@ -107,6 +108,7 @@ def test_register_user_survives_email_send_failure(caplog):
             "first_name": "New",
             "last_name": "User",
             "gender": "other",
+            "role": "attendee",
         }
     )
     assert serializer.is_valid(), serializer.errors
