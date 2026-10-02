@@ -287,7 +287,7 @@ class EventRetryRefundsView(views.APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        refund_event_bookings_task.delay(str(event.id), True)
+        refund_event_bookings_task.delay(str(event.id), retry_failed=True)
 
         return Response(status=status.HTTP_202_ACCEPTED)
 
