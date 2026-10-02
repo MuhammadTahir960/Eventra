@@ -108,7 +108,7 @@ class TestEventRetryRefundsAction:
         response = client.post(f"/admin/events/{event.id}/retry-refunds/")
 
         assert response.status_code == 202
-        mock_delay.assert_called_once_with(str(event.id), True)
+        mock_delay.assert_called_once_with(str(event.id), retry_failed=True)
 
     def test_non_admin_is_rejected(self, monkeypatch):
         monkeypatch.setattr(
