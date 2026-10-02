@@ -204,6 +204,27 @@ def cancel_pending_bookings_for_event(event_id) -> None:
             locked = Booking.objects.select_for_update().get(id=booking_id)
             if locked.status != Booking.Status.PENDING:
                 continue
-            EventSeat.objects.filter(held_booking=locked).update(held_booking=None)
+            seats = list(
+                EventSeat.objects.select_for_update(of=("self",))
+                .filter(held_booking=locked)
+                .select_related("event")
+            )
+            for seat in seats:
+                seat.status = EventSeat.Status.AVAILABLE
+                seat.held_booking = None
+            EventSeat.objects.bulk_update(seats, ["status", "held_booking"])
             locked.status = Booking.Status.CANCELLED
             locked.save(update_fields=["status", "updated_at"])
+
+            seat_ids_by_event_slug: dict[str, list] = {}
+            for seat in seats:
+                seat_ids_by_event_slug.setdefault(seat.event.slug, []).append(seat.id)
+            for event_slug, seat_ids in seat_ids_by_event_slug.items():
+                transaction.on_commit(
+                    lambda event_slug=event_slug, seat_ids=seat_ids: notify_internal_broadcast(
+                        event_slug=event_slug,
+                        seat_ids=seat_ids,
+                        status_label="available",
+                    ),
+                    robust=True,
+                )

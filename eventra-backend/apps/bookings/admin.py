@@ -15,3 +15,6 @@ class BookingAdmin(admin.ModelAdmin):
     )
     readonly_fields = ("created_at", "updated_at")
     ordering = ("-created_at",)
+
+    def has_add_permission(self, request):
+        return False
