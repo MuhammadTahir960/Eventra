@@ -16,7 +16,6 @@ class Venue(SoftDeleteModel):
     photo = models.ImageField(
         upload_to="venue_photos/",
         blank=True,
-        null=True,
         validators=[IMAGE_EXTENSION_VALIDATOR, validate_image_upload_size],
     )
     created_at = models.DateTimeField(auto_now_add=True)
