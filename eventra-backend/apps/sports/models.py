@@ -7,7 +7,6 @@ from apps.common.validators import IMAGE_EXTENSION_VALIDATOR, validate_image_upl
 _LOGO_KWARGS = {
     "upload_to": "team_league_logos/",
     "blank": True,
-    "null": True,
     "validators": [IMAGE_EXTENSION_VALIDATOR, validate_image_upload_size],
 }
 
