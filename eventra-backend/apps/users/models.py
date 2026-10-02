@@ -73,8 +73,17 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     objects = UserManager()
 
+    def save(self, *args, **kwargs):
+        if self.role != Roles.ADMIN and (self.is_staff or self.is_superuser):
+            self.is_staff = False
+            self.is_superuser = False
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None:
+                kwargs["update_fields"] = {*update_fields, "is_staff", "is_superuser"}
+        super().save(*args, **kwargs)
+
     USERNAME_FIELD = "email"
-    REQUIRED_FIELDS = []  # email + password are already required by AbstractBaseUser
+    REQUIRED_FIELDS = []
 
     def __str__(self):
         return f"{self.first_name} {self.last_name}"
