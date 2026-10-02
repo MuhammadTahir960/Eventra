@@ -165,32 +165,5 @@ class AdminUserListView(generics.ListAPIView):
     queryset = User.objects.all().order_by("-created_at")
 
 
-class AdminUserRoleUpdateView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsAdmin]
-
-    def patch(self, request, user_id):
-        target_user = generics.get_object_or_404(User, pk=user_id)
-        new_role = request.data.get("role") if hasattr(request.data, "get") else None
-        valid_roles = {choice for choice, _ in Roles.choices}
-        if not isinstance(new_role, str) or new_role not in valid_roles:
-            return Response(
-                {"detail": f"'role' must be one of {sorted(valid_roles)}."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if target_user.id == request.user.id and new_role != Roles.ADMIN:
-            return Response(
-                {"detail": "Cannot change your own admin role."},
-                status=status.HTTP_409_CONFLICT,
-            )
-        target_user.role = new_role
-        update_fields = ["role", "last_updated"]
-        if new_role != Roles.ADMIN:
-            target_user.is_staff = False
-            target_user.is_superuser = False
-            update_fields += ["is_staff", "is_superuser"]
-        target_user.save(update_fields=update_fields)
-        return Response(UserSerializer(target_user).data)
-
-
 class SafeTokenRefreshView(TokenRefreshView):
     serializer_class = SafeTokenRefreshSerializer

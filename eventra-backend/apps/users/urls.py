@@ -2,7 +2,6 @@ from django.urls import path
 
 from .views import (
     AdminUserListView,
-    AdminUserRoleUpdateView,
     LoginView,
     LogoutView,
     MeView,
@@ -33,9 +32,4 @@ urlpatterns = [
     ),
     path("auth/ws-ticket/", WsTicketView.as_view(), name="ws-ticket"),
     path("admin/users/", AdminUserListView.as_view(), name="admin-users-list"),
-    path(
-        "admin/users/<uuid:user_id>/role/",
-        AdminUserRoleUpdateView.as_view(),
-        name="admin-user-role",
-    ),
 ]
