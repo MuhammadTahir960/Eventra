@@ -459,7 +459,7 @@ class TestRefundEventBookings:
         assert booking.status == Booking.Status.REFUND_FAILED
         assert booking.updated_at > old_updated_at
 
-    def test_only_failed_scopes_to_refund_failed_bookings_only(self, monkeypatch):
+    def test_retry_failed_scopes_to_refund_failed_bookings_only(self, monkeypatch):
         monkeypatch.setattr("apps.payments.services.stripe.Refund.create", MagicMock())
         monkeypatch.setattr(
             "apps.notifications.tasks.send_refund_email.delay", MagicMock()
@@ -495,7 +495,7 @@ class TestRefundEventBookings:
             status=Payment.Status.REFUNDED,
         )
 
-        refund_event_bookings(str(event.id), only_failed=True)
+        refund_event_bookings(str(event.id), retry_failed=True)
 
         stuck_booking.refresh_from_db()
         already_refunded_booking.refresh_from_db()
@@ -690,23 +690,44 @@ class TestCheckoutGuards:
 
 class TestCancelPendingBookingsForEvent:
     def test_unpaid_bookings_are_closed_and_their_paymentintent_cancelled(
-        self, monkeypatch
+        self, monkeypatch, django_capture_on_commit_callbacks
     ):
         cancel = MagicMock()
+        broadcast = MagicMock()
         monkeypatch.setattr(
             "apps.payments.services.stripe.PaymentIntent.cancel", cancel
+        )
+        monkeypatch.setattr(
+            "apps.bookings.services.notify_internal_broadcast", broadcast
         )
         event = EventFactory(status=Event.Status.CANCELLED)
         booking, seat, payment = _pending_booking(event, pi="pi_evt")
 
-        cancel_pending_bookings_for_event(event.id)
+        with django_capture_on_commit_callbacks(execute=True):
+            cancel_pending_bookings_for_event(event.id)
 
         cancel.assert_called_once_with("pi_evt")
         booking.refresh_from_db()
         seat.refresh_from_db()
         assert booking.status == Booking.Status.CANCELLED
         assert seat.held_booking_id is None
-        assert seat.status == EventSeat.Status.HELD
+        assert seat.status == EventSeat.Status.AVAILABLE
+        broadcast.assert_called_once_with(
+            event_slug=event.slug, seat_ids=[seat.id], status_label="available"
+        )
+
+    def test_booked_seats_on_the_cancelled_event_stay_frozen(self, monkeypatch):
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.PaymentIntent.cancel", MagicMock()
+        )
+        event = EventFactory(status=Event.Status.CANCELLED)
+        _pending_booking(event, pi="pi_x")
+        sold = EventSeatFactory(event=event, status=EventSeat.Status.BOOKED)
+
+        cancel_pending_bookings_for_event(event.id)
+
+        sold.refresh_from_db()
+        assert sold.status == EventSeat.Status.BOOKED
 
 
 class TestMarkPaymentFromWebhook:
