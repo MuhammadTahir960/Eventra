@@ -3,6 +3,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.core.mail import EmailMessage, send_mail
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.tickets.models import Ticket
@@ -163,6 +164,38 @@ def send_refund_confirmation_email(booking, *, event_cancelled: bool = True) -> 
 
 
 REMINDER_WINDOW_HOURS = 24
+REMINDER_CLAIM_STALE_MINUTES = 15
+REMINDER_MAX_ATTEMPTS = 3
+
+
+def _claim_reminder(user, event):
+    key = f"Event reminder: {event.id}"
+    try:
+        with transaction.atomic():
+            return Notification.objects.create(
+                user=user,
+                event=event,
+                type=Notification.NotificationType.EVENT_REMINDER,
+                status=Notification.Status.PENDING,
+                message=key,
+            )
+    except IntegrityError:
+        pass
+
+    now = timezone.now()
+    stale = Notification.objects.filter(
+        user=user,
+        event=event,
+        type=Notification.NotificationType.EVENT_REMINDER,
+        status=Notification.Status.PENDING,
+        created_at__lt=now - timedelta(minutes=REMINDER_CLAIM_STALE_MINUTES),
+    ).first()
+    if stale is None:
+        return None
+    won = Notification.objects.filter(
+        pk=stale.pk, status=Notification.Status.PENDING, created_at=stale.created_at
+    ).update(created_at=now)
+    return stale if won == 1 else None
 
 
 def send_event_reminders_batch() -> int:
@@ -183,15 +216,17 @@ def send_event_reminders_batch() -> int:
         )
 
     sent = 0
-    for (user_id, event_id), (user, event) in pairs.items():
-        key = f"Event reminder: {event_id}"
-        already_sent = Notification.objects.filter(
-            user_id=user_id,
+    for (_user_id, event_id), (user, event) in pairs.items():
+        failed_attempts = Notification.objects.filter(
+            user=user,
+            event=event,
             type=Notification.NotificationType.EVENT_REMINDER,
-            message=key,
-            status=Notification.Status.SENT,
-        ).exists()
-        if already_sent:
+            status=Notification.Status.FAILED,
+        ).count()
+        if failed_attempts >= REMINDER_MAX_ATTEMPTS:
+            continue
+        claim = _claim_reminder(user, event)
+        if claim is None:
             continue
         try:
             send_mail(
@@ -207,19 +242,12 @@ def send_event_reminders_batch() -> int:
             )
         except Exception:
             logger.exception("Failed to send reminder for event %s", event_id)
-            Notification.objects.create(
-                user=user,
-                type=Notification.NotificationType.EVENT_REMINDER,
-                status=Notification.Status.FAILED,
-                message=f"Failed: {key}",
-            )
+            claim.status = Notification.Status.FAILED
+            claim.message = f"Failed: {claim.message}"
+            claim.save(update_fields=["status", "message"])
             continue
-        Notification.objects.create(
-            user=user,
-            type=Notification.NotificationType.EVENT_REMINDER,
-            status=Notification.Status.SENT,
-            sent_at=timezone.now(),
-            message=key,
-        )
+        claim.status = Notification.Status.SENT
+        claim.sent_at = timezone.now()
+        claim.save(update_fields=["status", "sent_at"])
         sent += 1
     return sent
