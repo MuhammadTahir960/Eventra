@@ -255,3 +255,74 @@ def test_a_failed_send_is_retried_on_the_next_run(monkeypatch):
 
     monkeypatch.undo()
     assert send_event_reminders_batch() == 1
+
+
+def _pending_claim(event, minutes_old):
+    ticket = _ticket_for(event)
+    claim = Notification.objects.create(
+        user=ticket.booking.user,
+        event=event,
+        type=Notification.NotificationType.EVENT_REMINDER,
+        status=Notification.Status.PENDING,
+        message=f"Event reminder: {event.id}",
+    )
+    Notification.objects.filter(pk=claim.pk).update(
+        created_at=timezone.now() - timedelta(minutes=minutes_old)
+    )
+    return claim
+
+
+def test_fresh_pending_claim_blocks_a_concurrent_runner():
+    _pending_claim(_event_starting_in(10), minutes_old=1)
+
+    assert send_event_reminders_batch() == 0
+    assert len(mail.outbox) == 0
+
+
+def test_stale_pending_claim_from_a_crashed_runner_is_retried():
+    claim = _pending_claim(_event_starting_in(10), minutes_old=60)
+
+    assert send_event_reminders_batch() == 1
+    assert len(mail.outbox) == 1
+    claim.refresh_from_db()
+    assert claim.status == Notification.Status.SENT
+    assert Notification.objects.filter(type="event_reminder").count() == 1
+
+
+def test_database_rejects_a_second_active_reminder_for_the_same_pair():
+    from django.db import IntegrityError, transaction
+
+    event = _event_starting_in(10)
+    claim = _pending_claim(event, minutes_old=1)
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        Notification.objects.create(
+            user=claim.user,
+            event=event,
+            type=Notification.NotificationType.EVENT_REMINDER,
+            status=Notification.Status.SENT,
+        )
+
+
+def test_reminder_gives_up_after_max_failed_attempts(monkeypatch):
+    from apps.notifications.services import REMINDER_MAX_ATTEMPTS
+
+    _ticket_for(_event_starting_in(10))
+    calls = []
+
+    def boom(*a, **k):
+        calls.append(1)
+        raise RuntimeError("bad address")
+
+    monkeypatch.setattr("apps.notifications.services.send_mail", boom)
+
+    for _ in range(REMINDER_MAX_ATTEMPTS + 3):
+        assert send_event_reminders_batch() == 0
+
+    assert len(calls) == REMINDER_MAX_ATTEMPTS
+    assert (
+        Notification.objects.filter(
+            type=Notification.NotificationType.EVENT_REMINDER, status="failed"
+        ).count()
+        == REMINDER_MAX_ATTEMPTS
+    )
