@@ -1,8 +1,10 @@
 import logging
+from datetime import timedelta
 
 import stripe
 from django.conf import settings
 from django.db import IntegrityError, transaction
+from django.db.models import F
 from django.utils import timezone
 
 from apps.bookings.models import Booking
@@ -241,10 +243,10 @@ def refund_booking(booking: Booking) -> None:
         booking.save(update_fields=["status", "updated_at"])
 
 
-def refund_event_bookings(event_id, *, only_failed: bool = False) -> None:
+def refund_event_bookings(event_id, *, retry_failed: bool = False) -> None:
     statuses = (
         [Booking.Status.REFUND_FAILED, Booking.Status.CONFIRMED]
-        if only_failed
+        if retry_failed
         else [Booking.Status.CONFIRMED]
     )
     bookings = Booking.objects.filter(
@@ -272,3 +274,67 @@ def refund_event_bookings(event_id, *, only_failed: bool = False) -> None:
                 "Refund succeeded but confirmation email failed for booking %s",
                 booking.id,
             )
+
+
+def event_ids_with_unrefunded_bookings() -> list:
+    return list(
+        Booking.objects.filter(
+            status=Booking.Status.CONFIRMED,
+            tickets__event_seat__event__status="cancelled",
+        )
+        .values_list("tickets__event_seat__event_id", flat=True)
+        .distinct()
+    )
+
+
+ORPHANED_PAYMENT_GRACE_MINUTES = 5
+ORPHANED_PAYMENT_MAX_ATTEMPTS = 5
+
+
+def refund_orphaned_payments() -> int:
+    cutoff = timezone.now() - timedelta(minutes=ORPHANED_PAYMENT_GRACE_MINUTES)
+    orphaned = Payment.objects.filter(
+        status=Payment.Status.SUCCEEDED,
+        booking__status__in=[Booking.Status.PENDING, Booking.Status.CANCELLED],
+        updated_at__lt=cutoff,
+        refund_attempts__lt=ORPHANED_PAYMENT_MAX_ATTEMPTS,
+    ).select_related("booking")
+
+    refunded = 0
+    for payment in orphaned:
+        logger.error(
+            "Orphaned captured payment %s (booking %s, status %s): refunding",
+            payment.id,
+            payment.booking_id,
+            payment.booking.status,
+        )
+        try:
+            refund_booking(payment.booking)
+        except Exception:
+            Payment.objects.filter(pk=payment.pk).update(
+                refund_attempts=F("refund_attempts") + 1
+            )
+            attempts = payment.refund_attempts + 1
+            if attempts >= ORPHANED_PAYMENT_MAX_ATTEMPTS:
+                logger.exception(
+                    "Orphaned payment %s refund failed %s times: GIVING UP. "
+                    "Reset refund_attempts to 0 in Django admin to retry.",
+                    payment.id,
+                    attempts,
+                )
+            else:
+                logger.exception(
+                    "Orphaned payment %s refund failed (attempt %s of %s)",
+                    payment.id,
+                    attempts,
+                    ORPHANED_PAYMENT_MAX_ATTEMPTS,
+                )
+            continue
+        refunded += 1
+        try:
+            from apps.notifications.tasks import send_refund_email
+
+            send_refund_email.delay(str(payment.booking_id), False)
+        except Exception:
+            logger.exception("Refund notice enqueue failed for %s", payment.booking_id)
+    return refunded
