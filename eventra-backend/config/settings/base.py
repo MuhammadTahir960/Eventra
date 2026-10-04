@@ -196,6 +196,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.bookings.tasks.release_expired_bookings",
         "schedule": 60.0,
     },
+    "sweep-unrefunded-cancelled-events": {
+        "task": "apps.payments.tasks.sweep_unrefunded_cancelled_events",
+        "schedule": 300.0,
+    },
     "send-event-reminders": {
         "task": "apps.notifications.tasks.send_event_reminders",
         "schedule": crontab(minute=15),
