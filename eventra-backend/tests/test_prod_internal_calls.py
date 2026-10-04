@@ -12,7 +12,10 @@ SCRIPT = textwrap.dedent("""
     r2 = c.post("/internal/seats/broadcast/", data="{}",
                 content_type="application/json", HTTP_HOST="web:8000")
     r3 = c.get("/events/", HTTP_HOST="example.com")
-    print(r1.status_code, r2.status_code, r3.status_code)
+    # Private Hosts must NOT work on public paths.
+    r4 = c.get("/events/", HTTP_HOST="localhost")
+    r5 = c.get("/events/", HTTP_HOST="web:8000")
+    print(r1.status_code, r2.status_code, r3.status_code, r4.status_code, r5.status_code)
     """)
 
 
@@ -22,11 +25,13 @@ def test_internal_endpoints_are_not_redirected_but_public_ones_are():
         "DJANGO_SETTINGS_MODULE": "config.settings.prod",
         "ALLOWED_HOSTS": "example.com",
         "CSRF_TRUSTED_ORIGINS": "https://example.com",
+        "CORS_ALLOWED_ORIGINS": "https://example.com",
         "EMAIL_HOST": "smtp.example.com",
         "R2_ACCOUNT_ID": "a",
         "R2_ACCESS_KEY_ID": "b",
         "R2_SECRET_ACCESS_KEY": "c",
         "R2_BUCKET_NAME": "d",
+        "R2_PUBLIC_DOMAIN": "media.example.com",
     }
     result = subprocess.run(
         [sys.executable, "-c", SCRIPT],
@@ -36,10 +41,12 @@ def test_internal_endpoints_are_not_redirected_but_public_ones_are():
         timeout=60,
     )
     assert result.returncode == 0, result.stderr
-    healthz, internal, public = result.stdout.split()[-3:]
+    healthz, internal, public, localhost_public, web_public = result.stdout.split()[-5:]
     assert healthz == "200"
     assert internal != "301"
     assert public == "301"
+    assert localhost_public == "400"
+    assert web_public == "400"
 
 
 def test_prod_refuses_to_boot_without_an_email_host():
@@ -48,11 +55,13 @@ def test_prod_refuses_to_boot_without_an_email_host():
         "DJANGO_SETTINGS_MODULE": "config.settings.prod",
         "ALLOWED_HOSTS": "example.com",
         "CSRF_TRUSTED_ORIGINS": "https://example.com",
+        "CORS_ALLOWED_ORIGINS": "https://example.com",
         "EMAIL_HOST": "",
         "R2_ACCOUNT_ID": "a",
         "R2_ACCESS_KEY_ID": "b",
         "R2_SECRET_ACCESS_KEY": "c",
         "R2_BUCKET_NAME": "d",
+        "R2_PUBLIC_DOMAIN": "media.example.com",
     }
     result = subprocess.run(
         [sys.executable, "-c", "import django; django.setup()"],
