@@ -7,7 +7,13 @@ DEBUG = False
 if not ALLOWED_HOSTS:
     raise ImproperlyConfigured("ALLOWED_HOSTS must be set explicitly in production.")
 
-ALLOWED_HOSTS = [*ALLOWED_HOSTS, "localhost", "web"]
+_CANONICAL_HOST = next((h for h in ALLOWED_HOSTS if not h.startswith((".", "*"))), None)
+if _CANONICAL_HOST is None:
+    raise ImproperlyConfigured(
+        "ALLOWED_HOSTS must contain at least one exact hostname in production."
+    )
+MIDDLEWARE = ["apps.common.middleware.InternalHostMiddleware", *MIDDLEWARE]
+INTERNAL_CANONICAL_HOST = _CANONICAL_HOST
 SECURE_REDIRECT_EXEMPT = [r"^healthz/$", r"^internal/"]
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
@@ -24,6 +30,12 @@ CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
 if not CSRF_TRUSTED_ORIGINS:
     raise ImproperlyConfigured(
         "CSRF_TRUSTED_ORIGINS must be set explicitly in production."
+    )
+
+if not CORS_ALLOWED_ORIGINS:
+    raise ImproperlyConfigured(
+        "CORS_ALLOWED_ORIGINS must be set explicitly in production "
+        "(it also gates WebSocket origins)."
     )
 
 if not EMAIL_HOST:
@@ -45,6 +57,7 @@ _missing_r2_vars = [
         "R2_ACCESS_KEY_ID": R2_ACCESS_KEY_ID,
         "R2_SECRET_ACCESS_KEY": R2_SECRET_ACCESS_KEY,
         "R2_BUCKET_NAME": R2_BUCKET_NAME,
+        "R2_PUBLIC_DOMAIN": R2_PUBLIC_DOMAIN,
     }.items()
     if not value
 ]
@@ -54,11 +67,18 @@ if _missing_r2_vars:
         f"{', '.join(_missing_r2_vars)}."
     )
 
+if "://" in R2_PUBLIC_DOMAIN or "/" in R2_PUBLIC_DOMAIN:
+    raise ImproperlyConfigured(
+        "R2_PUBLIC_DOMAIN must be a bare hostname such as media.example.com, "
+        "without a scheme or path."
+    )
+
 AWS_ACCESS_KEY_ID = R2_ACCESS_KEY_ID
 AWS_SECRET_ACCESS_KEY = R2_SECRET_ACCESS_KEY
 AWS_STORAGE_BUCKET_NAME = R2_BUCKET_NAME
 AWS_S3_ENDPOINT_URL = f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-AWS_S3_CUSTOM_DOMAIN = R2_PUBLIC_DOMAIN or None
+AWS_S3_CUSTOM_DOMAIN = R2_PUBLIC_DOMAIN
+AWS_S3_REGION_NAME = "auto"
 AWS_DEFAULT_ACL = None
 AWS_QUERYSTRING_AUTH = False
 AWS_S3_FILE_OVERWRITE = False
