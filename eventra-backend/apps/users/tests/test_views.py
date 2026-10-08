@@ -712,6 +712,31 @@ class TestRefreshForDeletedUser:
         assert response.status_code == 401
 
 
+class TestRefreshForDeactivatedUser:
+    def test_refresh_token_of_a_deactivated_user_is_rejected(self):
+        user = UserFactory()
+        refresh = str(RefreshToken.for_user(user))
+        User.objects.filter(pk=user.pk).update(is_active=False)
+
+        response = APIClient(raise_request_exception=False).post(
+            "/auth/refresh/", {"refresh": refresh}, format="json"
+        )
+
+        assert response.status_code == 401
+        assert "access" not in response.data
+
+    def test_reactivated_user_can_refresh_again(self):
+        user = UserFactory()
+        refresh = str(RefreshToken.for_user(user))
+        User.objects.filter(pk=user.pk).update(is_active=False)
+        User.objects.filter(pk=user.pk).update(is_active=True)
+
+        response = APIClient().post("/auth/refresh/", {"refresh": refresh})
+
+        assert response.status_code == 200
+        assert "access" in response.data
+
+
 class TestProfile:
     def test_gender_cannot_be_blanked_through_patch(self):
         user = UserFactory(gender="male")
