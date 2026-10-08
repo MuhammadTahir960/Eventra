@@ -609,6 +609,64 @@ class TestWebhookForUnfulfillableBooking:
         stripe_mocks.assert_not_called()
 
 
+class TestUnfulfillableWebhookReleasesSeats:
+    @pytest.mark.parametrize(
+        "event_status", [Event.Status.CANCELLED, Event.Status.REJECTED]
+    )
+    def test_held_seats_go_back_to_available_and_are_broadcast(
+        self,
+        event_status,
+        stripe_mocks,
+        monkeypatch,
+        django_capture_on_commit_callbacks,
+    ):
+        broadcast = MagicMock()
+        monkeypatch.setattr("apps.payments.services.broadcast_seat_update", broadcast)
+        event = EventFactory(status=event_status)
+        booking, seat, _ = _pending_booking(event, pi="pi_release")
+
+        with django_capture_on_commit_callbacks(execute=True):
+            confirm_payment_from_webhook("pi_release")
+
+        seat.refresh_from_db()
+        assert seat.status == EventSeat.Status.AVAILABLE
+        assert seat.held_booking_id is None
+        broadcast.assert_called_once()
+        assert broadcast.call_args.kwargs["event"].id == event.id
+        assert [s.id for s in broadcast.call_args.kwargs["seats"]] == [seat.id]
+
+    def test_seats_already_sold_on_the_event_are_left_alone(
+        self, stripe_mocks, django_capture_on_commit_callbacks
+    ):
+        event = EventFactory(status=Event.Status.CANCELLED)
+        _, held_seat, _ = _pending_booking(event, pi="pi_mixed")
+        sold_seat = EventSeatFactory(event=event, status=EventSeat.Status.BOOKED)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            confirm_payment_from_webhook("pi_mixed")
+
+        held_seat.refresh_from_db()
+        sold_seat.refresh_from_db()
+        assert held_seat.status == EventSeat.Status.AVAILABLE
+        assert sold_seat.status == EventSeat.Status.BOOKED
+
+    def test_no_broadcast_when_the_booking_holds_no_seats(
+        self, stripe_mocks, monkeypatch, django_capture_on_commit_callbacks
+    ):
+        broadcast = MagicMock()
+        monkeypatch.setattr("apps.payments.services.broadcast_seat_update", broadcast)
+        booking, seat, _ = _pending_booking(pi="pi_noseats")
+        Booking.objects.filter(id=booking.id).update(status=Booking.Status.CANCELLED)
+        EventSeat.objects.filter(id=seat.id).update(
+            status=EventSeat.Status.AVAILABLE, held_booking=None
+        )
+
+        with django_capture_on_commit_callbacks(execute=True):
+            confirm_payment_from_webhook("pi_noseats")
+
+        broadcast.assert_not_called()
+
+
 class TestSweepCancelsPaymentIntent:
     def test_sweep_cancels_the_paymentintent_before_cancelling_the_booking(
         self, monkeypatch

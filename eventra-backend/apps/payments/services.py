@@ -136,7 +136,14 @@ def confirm_payment_from_webhook(payment_intent_id: str) -> Booking:
             payment.save(update_fields=["status", "updated_at"])
             for seat in seats:
                 seat.held_booking = None
-            EventSeat.objects.bulk_update(seats, ["held_booking"])
+                seat.status = EventSeat.Status.AVAILABLE
+            EventSeat.objects.bulk_update(seats, ["held_booking", "status"])
+            if seats:
+                released_event = seats[0].event
+                transaction.on_commit(
+                    lambda: broadcast_seat_update(event=released_event, seats=seats),
+                    robust=True,
+                )
         else:
             booking.status = Booking.Status.CONFIRMED
             booking.save(update_fields=["status", "updated_at"])
