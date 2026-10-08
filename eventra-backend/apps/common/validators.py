@@ -24,6 +24,8 @@ def _check_pixel_count(file) -> None:
     try:
         with Image.open(file) as img:
             width, height = img.size
+    except Image.DecompressionBombError as exc:
+        raise ValidationError("Image dimensions are too large.") from exc
     except Exception:
         return
     finally:

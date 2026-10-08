@@ -126,3 +126,15 @@ class TestImagePixelCap:
         validators.validate_image_upload_size(
             SimpleUploadedFile("x.png", b"not an image")
         )
+
+    def test_decompression_bomb_is_rejected_not_swallowed(self, monkeypatch):
+        monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1_000)
+        with pytest.raises(ValidationError):
+            validators.validate_image_upload_size(_png(100, 100))
+
+    def test_file_pointer_is_rewound_after_a_rejected_image(self, monkeypatch):
+        monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1_000)
+        bomb = _png(100, 100)
+        with pytest.raises(ValidationError):
+            validators.validate_image_upload_size(bomb)
+        assert bomb.tell() == 0
