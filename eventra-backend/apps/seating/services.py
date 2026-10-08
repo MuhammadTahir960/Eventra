@@ -6,6 +6,7 @@ import requests
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db import IntegrityError, OperationalError, transaction
 from django.utils import timezone
 
@@ -152,6 +153,8 @@ def hold_seats(
 
     try:
         with transaction.atomic():
+            get_user_model().objects.select_for_update().only("id").get(pk=user.pk)
+
             locked_seats = list(
                 EventSeat.objects.select_for_update(nowait=True, of=("self",))
                 .select_related("seat", "ticket_tier")

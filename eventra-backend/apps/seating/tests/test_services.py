@@ -621,6 +621,43 @@ class TestHoldLimits:
             hold_seats(event=event, seat_ids=[seat.id], user=UserFactory())
 
 
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_holds_by_one_user_cannot_exceed_the_active_seat_cap():
+    event = EventFactory(status=Event.Status.APPROVED)
+    per_request = MAX_ACTIVE_SEATS_PER_USER // 2 + 1
+    assert per_request <= MAX_SEATS_PER_HOLD
+    assert per_request * 2 > MAX_ACTIVE_SEATS_PER_USER
+    batch_a = [_seat(event).id for _ in range(per_request)]
+    batch_b = [_seat(event).id for _ in range(per_request)]
+    user = UserFactory(role="attendee")
+
+    outcomes = {}
+    barrier = threading.Barrier(2)
+
+    def attempt(key, seat_ids):
+        barrier.wait()
+        try:
+            hold_seats(event=event, seat_ids=seat_ids, user=user)
+            outcomes[key] = "success"
+        except TooManyActiveSeatsError:
+            outcomes[key] = "cap"
+        finally:
+            connection.close()
+
+    threads = [
+        threading.Thread(target=attempt, args=("a", batch_a)),
+        threading.Thread(target=attempt, args=("b", batch_b)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+
+    assert not any(t.is_alive() for t in threads), "a thread hung"
+    assert sorted(outcomes.values()) == ["cap", "success"]
+    assert SeatHold.objects.filter(user=user).count() == per_request
+
+
 # ==================================================
 # release_expired_holds()
 # ==================================================
