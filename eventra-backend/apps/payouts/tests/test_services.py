@@ -398,6 +398,24 @@ class TestRequestPayoutSettlement:
         assert payout.status == OrganizerPayout.Status.PROCESSING
         mock_task.delay.assert_called_once_with(str(payout.id))
 
+    def test_enqueue_failure_leaves_a_recoverable_failed_payout(
+        self, monkeypatch, django_capture_on_commit_callbacks
+    ):
+        mock_task = MagicMock()
+        mock_task.delay.side_effect = ConnectionError("broker down")
+        monkeypatch.setattr("apps.payouts.tasks.settle_payout", mock_task)
+        payout = OrganizerPayoutFactory(status=OrganizerPayout.Status.PENDING)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            request_payout_settlement(payout)
+
+        payout.refresh_from_db()
+        assert payout.status == OrganizerPayout.Status.FAILED
+        assert (
+            request_payout_settlement(payout).status
+            == OrganizerPayout.Status.PROCESSING
+        )
+
     def test_failed_can_be_re_settled(self):
         payout = OrganizerPayoutFactory(status=OrganizerPayout.Status.FAILED)
 
