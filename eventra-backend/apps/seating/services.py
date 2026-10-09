@@ -9,6 +9,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, OperationalError, transaction
 from django.utils import timezone
+from psycopg import errors as pg_errors
 
 from apps.events.models import Event
 
@@ -222,6 +223,8 @@ def hold_seats(
                 robust=True,
             )
     except OperationalError as exc:
+        if not isinstance(exc.__cause__, pg_errors.LockNotAvailable):
+            raise
         raise SeatLockConflictError(
             "One or more of these seats are being processed by another request right now. "
             "Please try again."

@@ -5,8 +5,9 @@ from unittest.mock import MagicMock
 
 import pytest
 import requests
-from django.db import connection, transaction
+from django.db import OperationalError, connection, transaction
 from django.utils import timezone
+from psycopg import errors as pg_errors
 from rest_framework.test import APIClient
 
 from apps.events.factories import (
@@ -618,6 +619,44 @@ class TestHoldLimits:
         seat = _seat(event)
 
         with pytest.raises(EventNotHoldableError):
+            hold_seats(event=event, seat_ids=[seat.id], user=UserFactory())
+
+
+class TestHoldSeatsDatabaseErrors:
+    def _failing_user_model(self, error):
+        class _Manager:
+            @staticmethod
+            def select_for_update():
+                raise error
+
+        class _User:
+            objects = _Manager
+
+        return lambda: _User
+
+    def test_lock_not_available_becomes_a_seat_conflict(self, monkeypatch):
+        event = EventFactory(status=Event.Status.APPROVED)
+        seat = _seat(event)
+        error = OperationalError("could not obtain lock")
+        error.__cause__ = pg_errors.LockNotAvailable()
+        monkeypatch.setattr(
+            "apps.seating.services.get_user_model", self._failing_user_model(error)
+        )
+
+        with pytest.raises(SeatLockConflictError):
+            hold_seats(event=event, seat_ids=[seat.id], user=UserFactory())
+
+    def test_other_database_errors_are_not_reported_as_a_seat_conflict(
+        self, monkeypatch
+    ):
+        event = EventFactory(status=Event.Status.APPROVED)
+        seat = _seat(event)
+        monkeypatch.setattr(
+            "apps.seating.services.get_user_model",
+            self._failing_user_model(OperationalError("connection lost")),
+        )
+
+        with pytest.raises(OperationalError, match="connection lost"):
             hold_seats(event=event, seat_ids=[seat.id], user=UserFactory())
 
 
