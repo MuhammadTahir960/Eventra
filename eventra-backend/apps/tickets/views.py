@@ -41,6 +41,7 @@ class TicketDetailView(generics.RetrieveAPIView):
 
 class TicketDownloadView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = "ticket-download"
 
     def get(self, request, id):
         ticket = generics.get_object_or_404(

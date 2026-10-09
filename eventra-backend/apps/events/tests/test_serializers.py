@@ -124,8 +124,9 @@ def test_missing_required_fields_rejected():
     assert "end_datetime" in serializer.errors
 
 
-def test_duplicate_slug_becomes_clean_validation_error_not_500():
-    EventFactory(title="Same Title Event")
+def test_duplicate_slug_becomes_clean_validation_error_not_500(monkeypatch):
+    monkeypatch.setattr(Event, "_generate_unique_slug", lambda self: "same-title-event")
+    EventFactory(title="Same Title Event", slug="same-title-event")
     organizer = UserFactory(role=Roles.ORGANIZER)
     start = timezone.now() + timedelta(days=10)
     serializer = EventSerializer(context={"request": _request_for(organizer)})

@@ -22,6 +22,7 @@ from .services import (
     SeatLockConflictError,
     SeatsNotFoundError,
     SeatsUnavailableError,
+    TooManyActiveSeatsError,
     TooManySeatsError,
     UncoveredSectionsError,
     broadcast_seat_update,
@@ -95,7 +96,7 @@ class EventSeatHoldView(APIView):
                 {"detail": str(exc), "seat_ids": exc.seat_ids},
                 status=status.HTTP_409_CONFLICT,
             )
-        except SeatLockConflictError as exc:
+        except (SeatLockConflictError, TooManyActiveSeatsError) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
         return Response(
@@ -111,6 +112,7 @@ class EventSeatHoldView(APIView):
 class InternalSeatsBroadcastView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
+    throttle_classes = []
 
     def post(self, request):
         payload = InternalBroadcastRequestSerializer(data=request.data)

@@ -43,6 +43,11 @@ class UserManager(BaseUserManager):
 
 
 class User(AbstractBaseUser, PermissionsMixin):
+    class Gender(models.TextChoices):
+        MALE = "male", "Male"
+        FEMALE = "female", "Female"
+        OTHER = "other", "Other"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     email = models.EmailField(unique=True, db_index=True)
@@ -50,6 +55,9 @@ class User(AbstractBaseUser, PermissionsMixin):
     last_name = models.CharField(max_length=30)
     role = models.CharField(
         max_length=20, choices=Roles.choices, default=Roles.ATTENDEE
+    )
+    gender = models.CharField(
+        max_length=10, choices=Gender.choices, blank=True, default=""
     )
 
     # False until GET /auth/verify-email/ flips it
@@ -65,8 +73,17 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     objects = UserManager()
 
+    def save(self, *args, **kwargs):
+        if self.role != Roles.ADMIN and (self.is_staff or self.is_superuser):
+            self.is_staff = False
+            self.is_superuser = False
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None:
+                kwargs["update_fields"] = {*update_fields, "is_staff", "is_superuser"}
+        super().save(*args, **kwargs)
+
     USERNAME_FIELD = "email"
-    REQUIRED_FIELDS = []  # email + password are already required by AbstractBaseUser
+    REQUIRED_FIELDS = []
 
     def __str__(self):
         return f"{self.first_name} {self.last_name}"

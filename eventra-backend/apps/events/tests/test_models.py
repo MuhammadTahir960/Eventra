@@ -62,9 +62,25 @@ def test_explicit_slug_is_not_overwritten_on_create():
 
 
 def test_duplicate_active_slug_rejected_at_db_level():
-    EventFactory(title="Popular Event")
+    EventFactory(title="Popular Event", slug="popular-event")
     with pytest.raises(IntegrityError), transaction.atomic():
-        EventFactory(title="Popular Event")
+        EventFactory(title="Popular Event", slug="popular-event")
+
+
+def test_same_title_gets_a_distinct_generated_slug():
+    first = EventFactory(title="Summer Concert")
+    second = EventFactory(title="Summer Concert")
+    assert first.slug == "summer-concert"
+    assert second.slug != first.slug
+    assert second.slug.startswith("summer-concert-")
+
+
+def test_generated_slug_is_ascii_and_short_enough_for_a_channels_group_name():
+    unicode_event = EventFactory(title="موسیقی کنسرٹ 2026")
+    long_event = EventFactory(title="A" * 200)
+    for event in (unicode_event, long_event):
+        assert event.slug.isascii()
+        assert len(f"seats_{event.slug}") < 100
 
 
 def test_duplicate_slug_allowed_if_original_is_soft_deleted():

@@ -1,7 +1,8 @@
 import factory
 from factory.django import DjangoModelFactory
 
-from apps.venues.models import Seat, Venue
+from apps.users.factories import UserFactory
+from apps.venues.models import Seat, Venue, VenueRequest
 
 
 class VenueFactory(DjangoModelFactory):
@@ -24,3 +25,14 @@ class SeatFactory(DjangoModelFactory):
     section = "Main"
     row_label = "A"
     seat_number = factory.Sequence(lambda n: n + 1)
+
+
+class VenueRequestFactory(DjangoModelFactory):
+    class Meta:
+        model = VenueRequest
+
+    requested_by = factory.SubFactory(UserFactory, role="organizer")
+    venue_name = factory.Sequence(lambda n: f"Requested Venue {n}")
+    city = "Nairobi"
+    notes = ""
+    status = VenueRequest.Status.PENDING

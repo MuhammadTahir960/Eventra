@@ -7,6 +7,11 @@ from django.conf import settings
 from django.core.mail import send_mail
 from django.db import transaction
 from django.utils import timezone
+from django.utils.crypto import constant_time_compare
+from rest_framework_simplejwt.token_blacklist.models import (
+    BlacklistedToken,
+    OutstandingToken,
+)
 
 from apps.common.redis import get_redis_client
 
@@ -14,6 +19,7 @@ from .models import User
 from .tokens import (
     generate_password_reset_token,
     generate_verification_token,
+    password_fingerprint,
     verify_password_reset_token,
     verify_token,
 )
@@ -52,17 +58,13 @@ def register_user(serializer) -> User:
     is caught and logged so post-commit failures do not crash the request.
     """
 
-    def _safe_send():
-        try:
-            send_verification_email(user)
-        except Exception as exc:
-            logger.error(
-                "Failed to send verification email for user %s: %s", user.id, exc
-            )
+    from .tasks import send_verification_email_task
 
     with transaction.atomic():
         user = serializer.save()
-        transaction.on_commit(_safe_send)
+        transaction.on_commit(
+            lambda: send_verification_email_task.delay(str(user.id)), robust=True
+        )
     return user
 
 
@@ -85,23 +87,23 @@ def send_password_reset_email(user: User) -> None:
 
 
 def request_password_reset(email: str) -> None:
+    from .tasks import send_password_reset_email_task
+
     user = User.objects.filter(email__iexact=email.strip(), is_active=True).first()
     if user is None:
         return
 
     try:
-        send_password_reset_email(user)
+        send_password_reset_email_task.delay(str(user.id))
     except Exception as exc:
-        logger.error(
-            "Failed to send password reset email for user %s: %s", user.id, exc
-        )
+        logger.error("Failed to enqueue password reset for user %s: %s", user.id, exc)
 
 
 def reset_password(token: str, new_password: str) -> bool:
     decoded = verify_password_reset_token(token)
     if decoded is None:
         return False
-    user_id, password_hash_at_issue = decoded
+    user_id, fingerprint_at_issue = decoded
 
     with transaction.atomic():
         try:
@@ -109,11 +111,14 @@ def reset_password(token: str, new_password: str) -> bool:
         except User.DoesNotExist:
             return False
 
-        if user.password != password_hash_at_issue:
+        if not constant_time_compare(fingerprint_at_issue, password_fingerprint(user)):
             return False
 
         user.set_password(new_password)
         user.save(update_fields=["password", "last_updated"])
+
+        for outstanding in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=outstanding)
         return True
 
 

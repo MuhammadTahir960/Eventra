@@ -1,14 +1,20 @@
+import django_filters
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
+from apps.common.constants import Roles
+from apps.common.permissions import IsAdmin
+
+from .models import User
 from .serializers import (
     ActiveUserTokenObtainPairSerializer,
     LogoutSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     RegisterSerializer,
+    SafeTokenRefreshSerializer,
     UserSerializer,
 )
 from .services import (
@@ -138,3 +144,26 @@ class WsTicketView(generics.GenericAPIView):
             {"ticket": ticket, "expires_at": expires_at.isoformat()},
             status=status.HTTP_200_OK,
         )
+
+
+class AdminUserFilterSet(django_filters.FilterSet):
+    search = django_filters.CharFilter(method="filter_search")
+    role = django_filters.ChoiceFilter(choices=Roles.choices)
+
+    class Meta:
+        model = User
+        fields = ["search", "role"]
+
+    def filter_search(self, queryset, name, value):
+        return queryset.filter(email__icontains=value)
+
+
+class AdminUserListView(generics.ListAPIView):
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    filterset_class = AdminUserFilterSet
+    queryset = User.objects.all().order_by("-created_at")
+
+
+class SafeTokenRefreshView(TokenRefreshView):
+    serializer_class = SafeTokenRefreshSerializer

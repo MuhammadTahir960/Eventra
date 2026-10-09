@@ -2,15 +2,22 @@ from datetime import timedelta
 
 import pytest
 from django.core import mail
+from django.core.cache import cache
+from django.urls import resolve
 from rest_framework import status
 from rest_framework.test import APIClient
+from rest_framework_simplejwt.token_blacklist.models import (
+    OutstandingToken,
+)
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 
 from apps.common.constants import Roles
+from tests.helpers import results
 
 from ..factories import UserFactory
 from ..models import User
 from ..tokens import generate_password_reset_token, generate_verification_token
+from ..views import AdminUserListView
 
 pytestmark = pytest.mark.django_db
 
@@ -47,6 +54,8 @@ class TestRegister:
             "password": "a-genuinely-strong-pass-1",
             "first_name": "New",
             "last_name": "User",
+            "gender": "female",
+            "role": "attendee",
         }
         response = api_client.post(self.url, payload)
 
@@ -56,6 +65,7 @@ class TestRegister:
 
         user = User.objects.get(email="newuser@example.com")
         assert user.is_active is False
+        assert user.gender == "female"
         assert len(mail.outbox) == 1
         assert mail.outbox[0].to == [user.email]
 
@@ -66,6 +76,8 @@ class TestRegister:
             "password": "a-genuinely-strong-pass-1",
             "first_name": "New",
             "last_name": "User",
+            "gender": "other",
+            "role": "attendee",
         }
         response = api_client.post(self.url, payload)
         assert response.status_code == status.HTTP_400_BAD_REQUEST
@@ -76,6 +88,8 @@ class TestRegister:
             "password": "12345",
             "first_name": "New",
             "last_name": "User",
+            "gender": "other",
+            "role": "attendee",
         }
         response = api_client.post(self.url, payload)
         assert response.status_code == status.HTTP_400_BAD_REQUEST
@@ -85,24 +99,93 @@ class TestRegister:
         response = api_client.post(self.url, {"email": "incomplete@example.com"})
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    @pytest.mark.django_db(transaction=True)
-    def test_privileged_field_injection_is_ignored(self, api_client):
+    def test_missing_gender_rejected(self, api_client):
         payload = {
-            "email": "attacker@example.com",
+            "email": "nogender@example.com",
             "password": "a-genuinely-strong-pass-1",
-            "first_name": "Att",
-            "last_name": "Acker",
-            "role": Roles.ADMIN,
-            "is_staff": True,
-            "is_superuser": True,
+            "first_name": "No",
+            "last_name": "Gender",
+            "role": "attendee",
         }
         response = api_client.post(self.url, payload)
-        assert response.status_code == status.HTTP_201_CREATED
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "gender" in response.data
+        assert User.objects.filter(email="nogender@example.com").exists() is False
 
-        user = User.objects.get(email="attacker@example.com")
-        assert user.role == Roles.ATTENDEE
+    def test_invalid_gender_value_rejected(self, api_client):
+        payload = {
+            "email": "badgender@example.com",
+            "password": "a-genuinely-strong-pass-1",
+            "first_name": "Bad",
+            "last_name": "Gender",
+            "gender": "not-a-real-choice",
+            "role": "attendee",
+        }
+        response = api_client.post(self.url, payload)
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def _payload(self, **overrides):
+        payload = {
+            "email": "newuser@example.com",
+            "password": "a-genuinely-strong-pass-1",
+            "first_name": "New",
+            "last_name": "User",
+            "gender": "male",
+            "role": "attendee",
+        }
+        payload.update(overrides)
+        return payload
+
+    @pytest.mark.django_db(transaction=True)
+    @pytest.mark.parametrize("role", [Roles.ATTENDEE, Roles.ORGANIZER])
+    def test_can_register_as_attendee_or_organizer(self, api_client, role):
+        response = api_client.post(self.url, self._payload(role=role))
+        assert response.status_code == status.HTTP_201_CREATED
+        assert response.data["role"] == role
+        user = User.objects.get(email="newuser@example.com")
+        assert user.role == role
         assert user.is_staff is False
         assert user.is_superuser is False
+
+    @pytest.mark.parametrize("role", [Roles.ADMIN, "superuser", "", None])
+    def test_cannot_register_as_admin_or_unknown_role(self, api_client, role):
+        response = api_client.post(self.url, self._payload(role=role), format="json")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "role" in response.data
+        assert User.objects.filter(email="newuser@example.com").exists() is False
+
+    def test_role_is_required(self, api_client):
+        payload = self._payload()
+        del payload["role"]
+        response = api_client.post(self.url, payload)
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "role" in response.data
+
+    @pytest.mark.parametrize("gender", ["", " ", None])
+    def test_blank_gender_rejected(self, api_client, gender):
+        response = api_client.post(
+            self.url, self._payload(gender=gender), format="json"
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "gender" in response.data
+        assert User.objects.filter(email="newuser@example.com").exists() is False
+
+    @pytest.mark.django_db(transaction=True)
+    def test_other_privileged_fields_are_ignored(self, api_client):
+        response = api_client.post(
+            self.url,
+            self._payload(
+                email="attacker@example.com",
+                is_staff=True,
+                is_superuser=True,
+                is_active=True,
+            ),
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        user = User.objects.get(email="attacker@example.com")
+        assert user.is_staff is False
+        assert user.is_superuser is False
+        assert user.is_active is False
 
     def test_get_not_allowed(self, api_client):
         response = api_client.get(self.url)
@@ -117,6 +200,8 @@ class TestRegister:
                     "password": "a-genuinely-strong-pass-1",
                     "first_name": "Rate",
                     "last_name": "Limit",
+                    "gender": "other",
+                    "role": "attendee",
                 },
             )
         response = api_client.post(
@@ -126,6 +211,8 @@ class TestRegister:
                 "password": "a-genuinely-strong-pass-1",
                 "first_name": "Rate",
                 "last_name": "Limit",
+                "gender": "other",
+                "role": "attendee",
             },
         )
         assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
@@ -206,6 +293,18 @@ class TestLogin:
         assert response.status_code == status.HTTP_200_OK
         assert "access" in response.data
         assert "refresh" in response.data
+
+    @pytest.mark.parametrize("role", [Roles.ATTENDEE, Roles.ORGANIZER, Roles.ADMIN])
+    def test_same_login_endpoint_identifies_every_role(self, api_client, role):
+        from rest_framework_simplejwt.tokens import AccessToken
+
+        UserFactory(email="who@example.com", is_active=True, role=role)
+        response = api_client.post(
+            self.url, {"email": "who@example.com", "password": "testpass123"}
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["role"] == role
+        assert AccessToken(response.data["access"])["role"] == role
 
     def test_inactive_user_rejected(self, api_client):
         UserFactory(email="unverified@example.com", is_active=False)
@@ -591,3 +690,151 @@ class TestWsTicket:
         response = client.post(self.url)
 
         assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+
+
+def _client(user):
+    client = APIClient(raise_request_exception=False)
+    client.force_authenticate(user)
+    return client
+
+
+class TestRefreshForDeletedUser:
+    def test_refresh_token_of_a_deleted_user_is_a_401_not_a_500(self):
+        user = UserFactory()
+        refresh = str(RefreshToken.for_user(user))
+        OutstandingToken.objects.filter(user=user).delete()
+        user.delete()
+
+        response = APIClient(raise_request_exception=False).post(
+            "/auth/refresh/", {"refresh": refresh}, format="json"
+        )
+
+        assert response.status_code == 401
+
+
+class TestRefreshForDeactivatedUser:
+    def test_refresh_token_of_a_deactivated_user_is_rejected(self):
+        user = UserFactory()
+        refresh = str(RefreshToken.for_user(user))
+        User.objects.filter(pk=user.pk).update(is_active=False)
+
+        response = APIClient(raise_request_exception=False).post(
+            "/auth/refresh/", {"refresh": refresh}, format="json"
+        )
+
+        assert response.status_code == 401
+        assert "access" not in response.data
+
+    def test_reactivated_user_can_refresh_again(self):
+        user = UserFactory()
+        refresh = str(RefreshToken.for_user(user))
+        User.objects.filter(pk=user.pk).update(is_active=False)
+        User.objects.filter(pk=user.pk).update(is_active=True)
+
+        response = APIClient().post("/auth/refresh/", {"refresh": refresh})
+
+        assert response.status_code == 200
+        assert "access" in response.data
+
+
+class TestProfile:
+    def test_gender_cannot_be_blanked_through_patch(self):
+        user = UserFactory(gender="male")
+        response = _client(user).patch("/auth/me/", {"gender": ""}, format="json")
+        assert response.status_code == 400
+
+
+class TestThrottleIdentity:
+    def test_rotating_a_forged_x_forwarded_for_prefix_does_not_reset_the_login_limit(
+        self,
+    ):
+        cache.clear()
+        user = UserFactory()
+        client = APIClient()
+        codes = []
+        for i in range(14):
+            codes.append(
+                client.post(
+                    "/auth/login/",
+                    {"email": user.email, "password": "wrong"},
+                    format="json",
+                    HTTP_X_FORWARDED_FOR=f"10.0.0.{i}, 203.0.113.7",
+                ).status_code
+            )
+        assert codes[:10] == [401] * 10
+        assert 429 in codes[10:]
+
+
+# ==================================================
+# GET /admin/users/
+# ==================================================
+
+
+class TestAdminUserList:
+    url = "/admin/users/"
+
+    def test_admin_can_list_users(self, admin_client):
+        UserFactory.create_batch(3)
+        response = admin_client.get(self.url)
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_non_admin_rejected(self):
+        client = auth_client(UserFactory(role=Roles.ORGANIZER))
+        response = client.get(self.url)
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_anonymous_rejected(self, api_client):
+        response = api_client.get(self.url)
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_search_matches_partial_email_case_insensitively(self, admin_client):
+        UserFactory(email="jane.doe@example.com")
+        UserFactory(email="someone-else@example.com")
+
+        response = admin_client.get(self.url, {"search": "JANE.DOE"})
+
+        emails = {row["email"] for row in results(response)}
+        assert emails == {"jane.doe@example.com"}
+
+    def test_role_filter_returns_only_matching_role(self, admin_client):
+        UserFactory(role=Roles.ORGANIZER)
+        UserFactory(role=Roles.ATTENDEE)
+
+        response = admin_client.get(self.url, {"role": Roles.ORGANIZER})
+
+        roles = {row["role"] for row in results(response)}
+        assert roles == {Roles.ORGANIZER}
+
+    def test_invalid_role_filter_value_rejected(self, admin_client):
+        response = admin_client.get(self.url, {"role": "not-a-real-role"})
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_default_ordering_is_newest_first(self, admin_client):
+        first = UserFactory()
+        second = UserFactory()
+
+        response = admin_client.get(self.url)
+
+        ids = [row["id"] for row in results(response)]
+        assert ids.index(str(second.pk)) < ids.index(str(first.pk))
+
+
+# ==================================================
+# Roles are not changeable through the API
+# ==================================================
+
+
+class TestRolesAreNotChangeableViaApi:
+    @pytest.mark.parametrize("method", ["patch", "put", "post"])
+    def test_role_endpoint_no_longer_exists(self, admin_client, method):
+        target = UserFactory(role=Roles.ATTENDEE)
+        response = getattr(admin_client, method)(
+            f"/admin/users/{target.pk}/role/", {"role": Roles.ADMIN}
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        target.refresh_from_db()
+        assert target.role == Roles.ATTENDEE
+
+
+def test_admin_routes_resolve_to_dedicated_views(admin_user):
+    assert resolve("/admin/users/").func.cls == AdminUserListView

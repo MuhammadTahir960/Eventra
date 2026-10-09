@@ -9,9 +9,11 @@ from apps.seating.views import (
 
 from .views import (
     EventApproveView,
+    EventPendingListView,
     EventRejectView,
     EventRetryRefundsView,
     EventViewSet,
+    OrganizerEventListView,
 )
 
 router = DefaultRouter()
@@ -32,6 +34,16 @@ urlpatterns = router.urls + [
         "events/<uuid:event_id>/seats/hold/",
         EventSeatHoldView.as_view(),
         name="event-seats-hold",
+    ),
+    path(
+        "organizer/events/",
+        OrganizerEventListView.as_view(),
+        name="organizer-events",
+    ),
+    path(
+        "admin/events/pending/",
+        EventPendingListView.as_view(),
+        name="admin-events-pending",
     ),
     path(
         "admin/events/<uuid:event_id>/approve/",

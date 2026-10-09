@@ -37,18 +37,9 @@ class Booking(UUIDBaseModel):
         ),
     )
 
-    source_hold_group_id = models.UUIDField(
-        unique=True,
-        null=True,
-        blank=True,
-    )
+    source_hold_group_id = models.UUIDField(unique=True)
 
-    idempotency_key = models.CharField(
-        max_length=64,
-        unique=True,
-        null=True,
-        blank=True,
-    )
+    idempotency_key = models.CharField(max_length=64, unique=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -1,8 +1,10 @@
 import logging
+from datetime import timedelta
 
 import stripe
 from django.conf import settings
 from django.db import IntegrityError, transaction
+from django.db.models import F
 from django.utils import timezone
 
 from apps.bookings.models import Booking
@@ -99,12 +101,17 @@ def verify_stripe_webhook_signature(payload: bytes, sig_header: str):
         raise WebhookSignatureError("Invalid webhook signature or payload") from exc
 
 
+_UNFULFILLABLE_EVENT_STATUSES = ("cancelled", "completed", "rejected")
+
+
 def confirm_payment_from_webhook(payment_intent_id: str) -> Booking:
     payment = Payment.objects.filter(stripe_payment_intent_id=payment_intent_id).first()
     if payment is None:
         raise PaymentNotFoundError(
             f"No Payment row for PaymentIntent {payment_intent_id}"
         )
+    if payment.status == Payment.Status.REFUNDED:
+        return Booking.objects.get(id=payment.booking_id)
 
     with transaction.atomic():
         booking = Booking.objects.select_for_update().get(id=payment.booking_id)
@@ -112,35 +119,99 @@ def confirm_payment_from_webhook(payment_intent_id: str) -> Booking:
         if booking.status == Booking.Status.CONFIRMED:
             return booking
 
-        booking.status = Booking.Status.CONFIRMED
-        booking.save(update_fields=["status", "updated_at"])
-
         seats = list(
             EventSeat.objects.select_for_update(of=("self",))
             .filter(held_booking=booking)
             .select_related("event", "seat", "ticket_tier")
         )
-        for seat in seats:
-            seat.status = EventSeat.Status.BOOKED
-            seat.held_booking = None
-            seat.save(update_fields=["status", "held_booking"])
 
-        Ticket.objects.bulk_create(
-            [Ticket(booking=booking, event_seat=seat) for seat in seats]
+        fulfillable = (
+            booking.status == Booking.Status.PENDING
+            and bool(seats)
+            and all(s.event.status not in _UNFULFILLABLE_EVENT_STATUSES for s in seats)
         )
 
-        payment.status = Payment.Status.SUCCEEDED
-        payment.save(update_fields=["status", "updated_at"])
+        if not fulfillable:
+            payment.status = Payment.Status.SUCCEEDED
+            payment.save(update_fields=["status", "updated_at"])
+            for seat in seats:
+                seat.held_booking = None
+                seat.status = EventSeat.Status.AVAILABLE
+            EventSeat.objects.bulk_update(seats, ["held_booking", "status"])
+            if seats:
+                released_event = seats[0].event
+                transaction.on_commit(
+                    lambda: broadcast_seat_update(event=released_event, seats=seats),
+                    robust=True,
+                )
+        else:
+            booking.status = Booking.Status.CONFIRMED
+            booking.save(update_fields=["status", "updated_at"])
 
-        if seats:
+            for seat in seats:
+                seat.status = EventSeat.Status.BOOKED
+                seat.held_booking = None
+                seat.save(update_fields=["status", "held_booking"])
+
+            Ticket.objects.bulk_create(
+                [Ticket(booking=booking, event_seat=seat) for seat in seats]
+            )
+
+            payment.status = Payment.Status.SUCCEEDED
+            payment.save(update_fields=["status", "updated_at"])
+
             event = seats[0].event
             transaction.on_commit(
-                lambda: broadcast_seat_update(event=event, seats=seats)
+                lambda: broadcast_seat_update(event=event, seats=seats), robust=True
             )
-        transaction.on_commit(lambda: generate_ticket_pdf.delay(str(booking.id)))
-        transaction.on_commit(lambda: _enqueue_confirmation_email(str(booking.id)))
+            transaction.on_commit(
+                lambda: generate_ticket_pdf.delay(str(booking.id)), robust=True
+            )
+            transaction.on_commit(
+                lambda: _enqueue_confirmation_email(str(booking.id)), robust=True
+            )
+
+    if not fulfillable:
+        refund_booking(booking)
+        try:
+            from apps.notifications.tasks import send_refund_email
+
+            send_refund_email.delay(str(booking.id), False)
+        except Exception:
+            logger.exception("Refund notice enqueue failed for booking %s", booking.id)
+        booking.refresh_from_db()
 
     return booking
+
+
+def mark_payment_from_webhook(payment_intent_id: str, new_status: str) -> None:
+    Payment.objects.filter(
+        stripe_payment_intent_id=payment_intent_id, status=Payment.Status.PENDING
+    ).update(status=new_status, updated_at=timezone.now())
+
+
+def cancel_payment_intent_if_unpaid(booking: Booking) -> bool:
+    payment = Payment.objects.filter(booking=booking).first()
+    if payment is None or not payment.stripe_payment_intent_id:
+        return True
+
+    try:
+        stripe.PaymentIntent.cancel(payment.stripe_payment_intent_id)
+    except stripe.error.InvalidRequestError:
+        try:
+            intent = stripe.PaymentIntent.retrieve(payment.stripe_payment_intent_id)
+        except stripe.error.StripeError:
+            return False
+        if intent.status != "canceled":
+            return False
+    except stripe.error.StripeError:
+        logger.exception("Could not cancel PaymentIntent for booking %s", booking.id)
+        return False
+
+    Payment.objects.filter(id=payment.id).exclude(
+        status=Payment.Status.SUCCEEDED
+    ).update(status=Payment.Status.CANCELED, updated_at=timezone.now())
+    return True
 
 
 def _enqueue_confirmation_email(booking_id: str) -> None:
@@ -179,12 +250,14 @@ def refund_booking(booking: Booking) -> None:
         booking.save(update_fields=["status", "updated_at"])
 
 
-def refund_event_bookings(event_id, *, only_failed: bool = False) -> None:
-    status_filter = (
-        Booking.Status.REFUND_FAILED if only_failed else Booking.Status.CONFIRMED
+def refund_event_bookings(event_id, *, retry_failed: bool = False) -> None:
+    statuses = (
+        [Booking.Status.REFUND_FAILED, Booking.Status.CONFIRMED]
+        if retry_failed
+        else [Booking.Status.CONFIRMED]
     )
     bookings = Booking.objects.filter(
-        tickets__event_seat__event_id=event_id, status=status_filter
+        tickets__event_seat__event_id=event_id, status__in=statuses
     ).distinct()
 
     for booking in bookings:
@@ -208,3 +281,67 @@ def refund_event_bookings(event_id, *, only_failed: bool = False) -> None:
                 "Refund succeeded but confirmation email failed for booking %s",
                 booking.id,
             )
+
+
+def event_ids_with_unrefunded_bookings() -> list:
+    return list(
+        Booking.objects.filter(
+            status=Booking.Status.CONFIRMED,
+            tickets__event_seat__event__status="cancelled",
+        )
+        .values_list("tickets__event_seat__event_id", flat=True)
+        .distinct()
+    )
+
+
+ORPHANED_PAYMENT_GRACE_MINUTES = 5
+ORPHANED_PAYMENT_MAX_ATTEMPTS = 5
+
+
+def refund_orphaned_payments() -> int:
+    cutoff = timezone.now() - timedelta(minutes=ORPHANED_PAYMENT_GRACE_MINUTES)
+    orphaned = Payment.objects.filter(
+        status=Payment.Status.SUCCEEDED,
+        booking__status__in=[Booking.Status.PENDING, Booking.Status.CANCELLED],
+        updated_at__lt=cutoff,
+        refund_attempts__lt=ORPHANED_PAYMENT_MAX_ATTEMPTS,
+    ).select_related("booking")
+
+    refunded = 0
+    for payment in orphaned:
+        logger.error(
+            "Orphaned captured payment %s (booking %s, status %s): refunding",
+            payment.id,
+            payment.booking_id,
+            payment.booking.status,
+        )
+        try:
+            refund_booking(payment.booking)
+        except Exception:
+            Payment.objects.filter(pk=payment.pk).update(
+                refund_attempts=F("refund_attempts") + 1
+            )
+            attempts = payment.refund_attempts + 1
+            if attempts >= ORPHANED_PAYMENT_MAX_ATTEMPTS:
+                logger.exception(
+                    "Orphaned payment %s refund failed %s times: GIVING UP. "
+                    "Reset refund_attempts to 0 in Django admin to retry.",
+                    payment.id,
+                    attempts,
+                )
+            else:
+                logger.exception(
+                    "Orphaned payment %s refund failed (attempt %s of %s)",
+                    payment.id,
+                    attempts,
+                    ORPHANED_PAYMENT_MAX_ATTEMPTS,
+                )
+            continue
+        refunded += 1
+        try:
+            from apps.notifications.tasks import send_refund_email
+
+            send_refund_email.delay(str(payment.booking_id), False)
+        except Exception:
+            logger.exception("Refund notice enqueue failed for %s", payment.booking_id)
+    return refunded

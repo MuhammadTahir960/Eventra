@@ -172,6 +172,22 @@ async def test_client_sent_message_closes_connection():
     assert closed_frame["code"] == CLOSE_UNEXPECTED_MESSAGE
 
 
+async def test_binary_frame_closes_connection_instead_of_crashing():
+    user = await database_sync_to_async(UserFactory)()
+    event = await database_sync_to_async(EventFactory)()
+    ticket, _ = await database_sync_to_async(issue_ws_ticket)(user)
+
+    communicator, connected, _ = await _connect(event.slug, ticket)
+    assert connected
+    await communicator.receive_json_from()
+
+    await communicator.send_to(bytes_data=b"\x00\x01")
+
+    closed_frame = await communicator.receive_output(timeout=1)
+    assert closed_frame["type"] == "websocket.close"
+    assert closed_frame["code"] == CLOSE_UNEXPECTED_MESSAGE
+
+
 async def test_disconnect_after_rejected_connect_does_not_raise():
     event = await database_sync_to_async(EventFactory)()
 
@@ -266,13 +282,22 @@ async def test_hold_seats_broadcasts_to_connected_clients():
     await communicator.disconnect()
 
 
-def test_get_client_ip_prefers_x_forwarded_for_over_everything_else():
+def test_get_client_ip_prefers_x_real_ip_because_nginx_overwrites_it():
     consumer = SeatConsumer()
     consumer.scope = {
         "headers": [
-            (b"x-forwarded-for", b"203.0.113.5, 10.0.0.1"),
-            (b"x-real-ip", b"10.0.0.1"),
+            (b"x-forwarded-for", b"6.6.6.6, 203.0.113.5"),
+            (b"x-real-ip", b"203.0.113.5"),
         ],
+        "client": ("10.0.0.1", 12345),
+    }
+    assert consumer._get_client_ip() == "203.0.113.5"
+
+
+def test_get_client_ip_ignores_a_client_forged_leftmost_forwarded_for_entry():
+    consumer = SeatConsumer()
+    consumer.scope = {
+        "headers": [(b"x-forwarded-for", b"6.6.6.6, 203.0.113.5")],
         "client": ("10.0.0.1", 12345),
     }
     assert consumer._get_client_ip() == "203.0.113.5"

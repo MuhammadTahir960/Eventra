@@ -60,7 +60,7 @@ class SeatConsumer(AsyncJsonWebsocketConsumer):
         if self.group_name is not None:
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
-    async def receive_json(self, content, **kwargs):
+    async def receive(self, text_data=None, bytes_data=None, **kwargs):
         await self.close(code=CLOSE_UNEXPECTED_MESSAGE)
 
     async def seat_update(self, event):
@@ -71,13 +71,13 @@ class SeatConsumer(AsyncJsonWebsocketConsumer):
     def _get_client_ip(self):
         headers = dict(self.scope.get("headers", []))
 
-        forwarded_for = headers.get(b"x-forwarded-for")
-        if forwarded_for:
-            return forwarded_for.decode("utf-8").split(",")[0].strip()
-
         real_ip = headers.get(b"x-real-ip")
         if real_ip:
             return real_ip.decode("utf-8").strip()
+
+        forwarded_for = headers.get(b"x-forwarded-for")
+        if forwarded_for:
+            return forwarded_for.decode("utf-8").split(",")[-1].strip()
 
         client = self.scope.get("client")
         if client:

@@ -116,7 +116,9 @@ def create_payout(event: Event) -> tuple[OrganizerPayout, bool]:
         created = False
 
     if created:
-        transaction.on_commit(lambda: _enqueue_payout_ready_notification(payout.id))
+        transaction.on_commit(
+            lambda: _enqueue_payout_ready_notification(payout.id), robust=True
+        )
 
     return payout, created
 
@@ -155,7 +157,7 @@ def request_payout_settlement(payout: OrganizerPayout) -> OrganizerPayout:
         payout.status = OrganizerPayout.Status.PROCESSING
         payout.save(update_fields=["status", "updated_at"])
 
-        transaction.on_commit(lambda: _enqueue_settle_payout(payout.id))
+        transaction.on_commit(lambda: _enqueue_settle_payout_or_fail(payout.id))
 
     return payout
 
@@ -187,7 +189,9 @@ def settle_payout(payout_id) -> None:
         payout.settled_at = timezone.now()
         payout.save(update_fields=["status", "settled_at", "updated_at"])
 
-        transaction.on_commit(lambda: _enqueue_payout_settled_notification(payout.id))
+        transaction.on_commit(
+            lambda: _enqueue_payout_settled_notification(payout.id), robust=True
+        )
 
 
 def _enqueue_payout_ready_notification(payout_id) -> None:
@@ -206,3 +210,15 @@ def _enqueue_settle_payout(payout_id) -> None:
     from apps.payouts.tasks import settle_payout
 
     settle_payout.delay(str(payout_id))
+
+
+def _enqueue_settle_payout_or_fail(payout_id) -> None:
+    try:
+        _enqueue_settle_payout(payout_id)
+    except Exception:
+        logger.exception(
+            "Could not enqueue settlement for payout %s; marking it failed", payout_id
+        )
+        OrganizerPayout.objects.filter(
+            id=payout_id, status=OrganizerPayout.Status.PROCESSING
+        ).update(status=OrganizerPayout.Status.FAILED, updated_at=timezone.now())

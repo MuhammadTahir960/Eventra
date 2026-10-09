@@ -46,7 +46,7 @@ async def test_connection_with_allowed_origin_is_accepted():
     communicator = WebsocketCommunicator(
         application,
         f"/ws/seats/{event.slug}/?ticket={ticket}",
-        headers=[(b"origin", b"http://localhost")],
+        headers=[(b"origin", b"http://localhost:5173")],
     )
     connected, _ = await communicator.connect()
 

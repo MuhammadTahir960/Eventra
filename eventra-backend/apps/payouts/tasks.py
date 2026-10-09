@@ -22,7 +22,12 @@ def settle_payout(payout_id) -> None:
     _settle_payout(payout_id)
 
 
-@shared_task(name="apps.payouts.tasks.send_payout_ready_notification")
+@shared_task(
+    name="apps.payouts.tasks.send_payout_ready_notification",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    max_retries=3,
+)
 def send_payout_ready_notification(payout_id) -> None:
     payout = OrganizerPayout.objects.select_related("event__organizer").get(
         id=payout_id
@@ -30,7 +35,12 @@ def send_payout_ready_notification(payout_id) -> None:
     send_payout_ready_email(payout)
 
 
-@shared_task(name="apps.payouts.tasks.send_payout_settled_notification")
+@shared_task(
+    name="apps.payouts.tasks.send_payout_settled_notification",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    max_retries=3,
+)
 def send_payout_settled_notification(payout_id) -> None:
     payout = OrganizerPayout.objects.select_related("event__organizer").get(
         id=payout_id

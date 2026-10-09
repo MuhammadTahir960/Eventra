@@ -30,6 +30,8 @@ def _register_payload(**overrides):
         "password": "a-genuinely-strong-pass-1",
         "first_name": "New",
         "last_name": "User",
+        "gender": "other",
+        "role": "attendee",
     }
     payload.update(overrides)
     return payload
@@ -133,10 +135,9 @@ def test_register_serializer_rejects_last_name_over_max_length():
     assert "last_name" in serializer.errors
 
 
-def test_register_serializer_ignores_privileged_field_injection():
+def test_register_serializer_ignores_other_privileged_field_injection():
     payload = _register_payload(
         email="attacker@example.com",
-        role=Roles.ADMIN,
         is_staff=True,
         is_superuser=True,
         is_active=True,
@@ -144,16 +145,20 @@ def test_register_serializer_ignores_privileged_field_injection():
     serializer = RegisterSerializer(data=payload)
     assert serializer.is_valid(), serializer.errors
 
-    assert "role" not in serializer.validated_data
     assert "is_staff" not in serializer.validated_data
     assert "is_superuser" not in serializer.validated_data
     assert "is_active" not in serializer.validated_data
 
     user = serializer.save()
-    assert user.role == Roles.ATTENDEE
     assert user.is_staff is False
     assert user.is_superuser is False
     assert user.is_active is False
+
+
+def test_register_serializer_rejects_admin_role():
+    serializer = RegisterSerializer(data=_register_payload(role=Roles.ADMIN))
+    assert not serializer.is_valid()
+    assert "role" in serializer.errors
 
 
 # ==================================================
@@ -352,3 +357,44 @@ def test_user_serializer_email_and_role_are_read_only():
     assert updated.email == "original@example.com"
     assert updated.role == Roles.ATTENDEE
     assert updated.first_name == "Changed"
+
+
+@pytest.mark.parametrize(
+    "gender, expected_avatar",
+    [
+        (User.Gender.MALE, "avatar-male"),
+        (User.Gender.FEMALE, "avatar-female"),
+        (User.Gender.OTHER, "avatar-other"),
+    ],
+)
+def test_avatar_derives_correctly_from_each_gender_value(gender, expected_avatar):
+    user = UserFactory(gender=gender)
+    data = UserSerializer(user).data
+    assert data["avatar"] == expected_avatar
+
+
+def test_other_gender_avatar_is_a_distinct_asset_not_a_reuse_of_male():
+    male_avatar = UserSerializer(UserFactory(gender=User.Gender.MALE)).data["avatar"]
+    other_avatar = UserSerializer(UserFactory(gender=User.Gender.OTHER)).data["avatar"]
+    assert male_avatar != other_avatar
+
+
+def test_avatar_is_read_only_and_ignored_on_write():
+    user = UserFactory(gender=User.Gender.MALE)
+    serializer = UserSerializer(user, data={"avatar": "avatar-female"}, partial=True)
+    assert serializer.is_valid(), serializer.errors
+    updated = serializer.save()
+    assert UserSerializer(updated).data["avatar"] == "avatar-male"
+
+
+def test_gender_is_writable_via_serializer():
+    user = UserFactory(gender=User.Gender.OTHER)
+    serializer = UserSerializer(user, data={"gender": "female"}, partial=True)
+    assert serializer.is_valid(), serializer.errors
+    updated = serializer.save()
+    assert updated.gender == "female"
+
+
+def test_avatar_is_null_when_gender_is_unset_not_silently_other():
+    user = UserFactory(gender="")
+    assert UserSerializer(user).data["avatar"] is None

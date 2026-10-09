@@ -1,25 +1,16 @@
+import uuid
 from decimal import Decimal
 
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVector
-from django.core.exceptions import ValidationError
-from django.core.validators import FileExtensionValidator, MinValueValidator
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.db.models import F, Q
 from django.utils.text import slugify
 
 from apps.common.models import SoftDeleteModel, UUIDBaseModel
 
-MAX_COVER_IMAGE_SIZE_MB = 5
 EVENT_SEARCH_CONFIG = "english"
-
-
-def validate_cover_image_size(file) -> None:
-    max_bytes = MAX_COVER_IMAGE_SIZE_MB * 1024 * 1024
-    if file.size > max_bytes:
-        raise ValidationError(
-            f"Cover image must be {MAX_COVER_IMAGE_SIZE_MB}MB or smaller."
-        )
 
 
 class Event(SoftDeleteModel):
@@ -77,15 +68,7 @@ class Event(SoftDeleteModel):
         max_length=20, choices=Status.choices, default=Status.PENDING_APPROVAL
     )
     is_seated = models.BooleanField(default=True)
-    cover_image = models.ImageField(
-        upload_to="event_covers/",
-        blank=True,
-        null=True,
-        validators=[
-            FileExtensionValidator(["jpg", "jpeg", "png", "webp"]),
-            validate_cover_image_size,
-        ],
-    )
+    rejection_reason = models.TextField(blank=True, default="")
     start_datetime = models.DateTimeField()
     end_datetime = models.DateTimeField()
     created_at = models.DateTimeField(auto_now_add=True)
@@ -123,10 +106,17 @@ class Event(SoftDeleteModel):
             ),
         ]
 
+    def _generate_unique_slug(self) -> str:
+        base = slugify(self.title)[:80].strip("-") or "event"
+        slug = base
+        while Event.all_objects.filter(slug=slug).exists():
+            slug = f"{base}-{uuid.uuid4().hex[:6]}"
+        return slug
+
     def save(self, *args, **kwargs):
         is_new = self._state.adding
         if is_new and not self.slug:
-            self.slug = slugify(self.title, allow_unicode=True) or str(self.id)
+            self.slug = self._generate_unique_slug()
 
         super().save(*args, **kwargs)
 

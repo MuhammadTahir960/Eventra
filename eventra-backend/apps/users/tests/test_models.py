@@ -105,3 +105,23 @@ def test_str_returns_full_name():
 def test_username_field_is_email():
     assert User.USERNAME_FIELD == "email"
     assert User.REQUIRED_FIELDS == []
+
+
+@pytest.mark.parametrize("role", [Roles.ATTENDEE, Roles.ORGANIZER])
+def test_save_strips_django_admin_access_from_non_admin_roles(role):
+    user = UserFactory(role=Roles.ADMIN, is_staff=True, is_superuser=True)
+
+    user.role = role
+    user.save(update_fields=["role"])
+
+    user.refresh_from_db()
+    assert user.is_staff is False
+    assert user.is_superuser is False
+
+
+def test_save_keeps_django_admin_access_for_admin_role():
+    user = UserFactory(role=Roles.ADMIN, is_staff=True, is_superuser=True)
+    user.save()
+    user.refresh_from_db()
+    assert user.is_staff is True
+    assert user.is_superuser is True

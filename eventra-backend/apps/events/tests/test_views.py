@@ -1,20 +1,21 @@
-import io
 from datetime import timedelta
+from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
-from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
-from PIL import Image
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.bookings.factories import BookingFactory
 from apps.categories.factories import CategoryFactory
 from apps.common.constants import Roles
+from apps.seating.factories import EventSeatFactory
 from apps.sports.factories import SportFactory, TeamFactory
+from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
-from apps.venues.factories import VenueFactory
+from apps.venues.factories import SeatFactory, VenueFactory
 from tests.helpers import results
 
 from ..factories import EventFactory, TicketTierFactory, TierSectionMappingFactory
@@ -344,18 +345,6 @@ class TestCreateEvent:
         )
         assert response.data["slug"] == "my-great-event"
 
-    def test_can_upload_cover_image(self, organizer_user):
-        client = auth_client(organizer_user)
-        buffer = io.BytesIO()
-        Image.new("RGB", (10, 10), color="blue").save(buffer, format="PNG")
-        buffer.seek(0)
-        image = SimpleUploadedFile("cover.png", buffer.read(), content_type="image/png")
-        payload = _event_payload()
-        payload["cover_image"] = image
-        response = client.post(self.url, payload, format="multipart")
-        assert response.status_code == status.HTTP_201_CREATED, response.data
-        assert response.data["cover_image"] is not None
-
 
 # ==================================================
 # POST /events/ with event_type=sports_match — admin-only
@@ -668,10 +657,12 @@ class TestRestoreEvent:
         assert response.status_code == status.HTTP_409_CONFLICT
 
     def test_restore_blocked_by_active_slug_collision(self, admin_client):
-        inactive = EventFactory(title="Shared Title", status=Event.Status.CANCELLED)
+        inactive = EventFactory(
+            title="Shared Title", slug="shared-title", status=Event.Status.CANCELLED
+        )
         inactive.is_active = False
         inactive.save(update_fields=["is_active"])
-        EventFactory(title="Shared Title")
+        EventFactory(title="Shared Title", slug="shared-title")
 
         response = admin_client.post(f"/events/{inactive.pk}/restore/")
         assert response.status_code == status.HTTP_409_CONFLICT
@@ -699,17 +690,104 @@ class TestApproveRejectEvent:
 
     def test_admin_can_reject_pending_event(self, admin_client):
         event = EventFactory(status=Event.Status.PENDING_APPROVAL)
-        response = admin_client.post(f"/admin/events/{event.pk}/reject/")
+        response = admin_client.post(
+            f"/admin/events/{event.pk}/reject/", {"reason": "Missing venue permit."}
+        )
         assert response.status_code == status.HTTP_200_OK
         event.refresh_from_db()
         assert event.status == Event.Status.REJECTED
+        assert event.rejection_reason == "Missing venue permit."
 
     def test_reject_bumps_updated_at(self, admin_client):
         event = EventFactory(status=Event.Status.PENDING_APPROVAL)
         original_updated_at = event.updated_at
-        admin_client.post(f"/admin/events/{event.pk}/reject/")
+        admin_client.post(
+            f"/admin/events/{event.pk}/reject/", {"reason": "Needs more detail."}
+        )
         event.refresh_from_db()
         assert event.updated_at > original_updated_at
+
+    def test_reject_without_reason_returns_400(self, admin_client):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        response = admin_client.post(f"/admin/events/{event.pk}/reject/")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        event.refresh_from_db()
+        assert event.status == Event.Status.PENDING_APPROVAL
+
+    def test_reject_with_blank_reason_returns_400(self, admin_client):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        response = admin_client.post(
+            f"/admin/events/{event.pk}/reject/", {"reason": "   "}
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_reject_reason_checked_after_permission_and_status(self, organizer_user):
+        event = EventFactory(status=Event.Status.APPROVED)
+        client = auth_client(organizer_user)
+        response = client.post(f"/admin/events/{event.pk}/reject/")
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_reject_reason_persists_through_resubmission_and_clears_on_approve(
+        self, admin_client, organizer_user
+    ):
+        event = EventFactory(
+            organizer=organizer_user, status=Event.Status.PENDING_APPROVAL
+        )
+        admin_client.post(
+            f"/admin/events/{event.pk}/reject/", {"reason": "Fix the start time."}
+        )
+        event.refresh_from_db()
+        assert event.status == Event.Status.REJECTED
+        assert event.rejection_reason == "Fix the start time."
+
+        organizer_client = auth_client(organizer_user)
+        new_start = event.start_datetime + timedelta(hours=1)
+        new_end = event.end_datetime + timedelta(hours=1)
+        organizer_client.patch(
+            f"/events/{event.pk}/",
+            {
+                "start_datetime": new_start.isoformat(),
+                "end_datetime": new_end.isoformat(),
+            },
+            format="json",
+        )
+        event.refresh_from_db()
+        assert event.status == Event.Status.PENDING_APPROVAL
+        assert event.rejection_reason == "Fix the start time."
+
+        admin_client.post(f"/admin/events/{event.pk}/approve/")
+        event.refresh_from_db()
+        assert event.status == Event.Status.APPROVED
+        assert event.rejection_reason == ""
+
+    def test_second_rejection_overwrites_first_reason(self, admin_client):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        admin_client.post(f"/admin/events/{event.pk}/reject/", {"reason": "First."})
+        admin_client.post(f"/admin/events/{event.pk}/approve/")
+
+        event.refresh_from_db()
+        event.status = Event.Status.PENDING_APPROVAL
+        event.save(update_fields=["status"])
+        admin_client.post(f"/admin/events/{event.pk}/reject/", {"reason": "Second."})
+
+        event.refresh_from_db()
+        assert event.rejection_reason == "Second."
+
+    def test_rejection_reason_visible_to_organizer_and_admin_only(
+        self, admin_client, organizer_user
+    ):
+        event = EventFactory(
+            organizer=organizer_user, status=Event.Status.PENDING_APPROVAL
+        )
+        admin_client.post(f"/admin/events/{event.pk}/reject/", {"reason": "Nope."})
+
+        organizer_client = auth_client(organizer_user)
+        own_response = organizer_client.get(f"/events/{event.pk}/")
+        assert own_response.data["rejection_reason"] == "Nope."
+
+        other_organizer = UserFactory(role=Roles.ORGANIZER)
+        other_response = auth_client(other_organizer).get(f"/events/{event.pk}/")
+        assert "rejection_reason" not in other_response.data
 
     def test_approve_already_approved_event_returns_409(self, admin_client):
         event = EventFactory(status=Event.Status.APPROVED)
@@ -720,7 +798,9 @@ class TestApproveRejectEvent:
 
     def test_reject_already_rejected_event_returns_409(self, admin_client):
         event = EventFactory(status=Event.Status.REJECTED)
-        response = admin_client.post(f"/admin/events/{event.pk}/reject/")
+        response = admin_client.post(
+            f"/admin/events/{event.pk}/reject/", {"reason": "Still no."}
+        )
         assert response.status_code == status.HTTP_409_CONFLICT
 
     def test_approve_cancelled_event_returns_409(self, admin_client):
@@ -737,13 +817,67 @@ class TestApproveRejectEvent:
     def test_organizer_cannot_reject(self, organizer_user):
         event = EventFactory(status=Event.Status.PENDING_APPROVAL)
         client = auth_client(organizer_user)
-        response = client.post(f"/admin/events/{event.pk}/reject/")
+        response = client.post(
+            f"/admin/events/{event.pk}/reject/", {"reason": "Trying anyway."}
+        )
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_anonymous_cannot_approve(self, api_client):
         event = EventFactory(status=Event.Status.PENDING_APPROVAL)
         response = api_client.post(f"/admin/events/{event.pk}/approve/")
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+# ==================================================
+# GET /admin/events/pending/ — the moderation queue
+# ==================================================
+
+
+class TestEventPendingListView:
+    url = "/admin/events/pending/"
+
+    def test_returns_only_pending_approval_events(self, admin_client):
+        pending = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        EventFactory(status=Event.Status.APPROVED)
+        EventFactory(status=Event.Status.REJECTED)
+
+        response = admin_client.get(self.url)
+
+        ids = {row["id"] for row in results(response)}
+        assert ids == {str(pending.pk)}
+
+    def test_excludes_soft_deleted_pending_event(self, admin_client):
+        pending = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        deleted = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        deleted.is_active = False
+        deleted.save(update_fields=["is_active"])
+
+        response = admin_client.get(self.url)
+
+        ids = {row["id"] for row in results(response)}
+        assert ids == {str(pending.pk)}
+
+    def test_ordered_oldest_first(self, admin_client):
+        first = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        second = EventFactory(status=Event.Status.PENDING_APPROVAL)
+
+        response = admin_client.get(self.url)
+
+        ids = [row["id"] for row in results(response)]
+        assert ids == [str(first.pk), str(second.pk)]
+
+    def test_non_admin_rejected(self, organizer_user):
+        EventFactory(status=Event.Status.PENDING_APPROVAL)
+        client = auth_client(organizer_user)
+        response = client.get(self.url)
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_route_resolves_to_dedicated_view(self):
+        from django.urls import resolve
+
+        from ..views import EventPendingListView
+
+        assert resolve("/admin/events/pending/").func.cls == EventPendingListView
 
 
 # ==================================================
@@ -1021,3 +1155,212 @@ class TestTierSectionMappings:
             format="json",
         )
         assert response.status_code == status.HTTP_409_CONFLICT
+
+
+def _client(user):
+    client = APIClient(raise_request_exception=False)
+    client.force_authenticate(user)
+    return client
+
+
+def _payload(**overrides):
+    start = timezone.now() + timedelta(days=5)
+    payload = {
+        "title": "Summer Concert",
+        "description": "An evening of music.",
+        "event_type": "general",
+        "start_datetime": start.isoformat(),
+        "end_datetime": (start + timedelta(hours=2)).isoformat(),
+        "venue": str(VenueFactory().id),
+        "category": str(CategoryFactory().id),
+    }
+    payload.update(overrides)
+    return payload
+
+
+@pytest.fixture
+def admin():
+    return UserFactory(role=Roles.ADMIN)
+
+
+@pytest.fixture
+def organizer():
+    return UserFactory(role=Roles.ORGANIZER)
+
+
+class TestCreateValidation:
+    def test_two_events_with_the_same_title_can_both_be_created(self, admin):
+        client = _client(admin)
+        first = client.post("/events/", _payload(), format="json")
+        second = client.post("/events/", _payload(), format="json")
+        assert first.status_code == 201
+        assert second.status_code == 201
+        assert first.json()["slug"] != second.json()["slug"]
+
+    def test_venue_and_category_are_required(self, admin):
+        payload = _payload()
+        del payload["venue"]
+        del payload["category"]
+        response = _client(admin).post("/events/", payload, format="json")
+        assert response.status_code == 400
+        assert {"venue", "category"} <= set(response.json())
+
+    def test_start_in_the_past_is_rejected(self, admin):
+        past = timezone.now() - timedelta(days=2)
+        response = _client(admin).post(
+            "/events/",
+            _payload(
+                start_datetime=past.isoformat(),
+                end_datetime=(past + timedelta(hours=2)).isoformat(),
+            ),
+            format="json",
+        )
+        assert response.status_code == 400
+        assert "start_datetime" in response.json()
+
+    def test_oversized_description_is_a_400_not_a_database_error(self, admin):
+        huge = " ".join(f"w{i}" for i in range(300_000))
+        response = _client(admin).post(
+            "/events/", _payload(description=huge), format="json"
+        )
+        assert response.status_code == 400
+        assert "description" in response.json()
+
+    def test_venue_cannot_be_nulled_on_patch(self, admin):
+        event = EventFactory(organizer=admin)
+        response = _client(admin).patch(
+            f"/events/{event.id}/", {"venue": None}, format="json"
+        )
+        assert response.status_code == 400
+
+
+class TestEditingTerminalAndSeatedEvents:
+    def test_cancelled_event_cannot_be_edited_back_to_life(self, organizer):
+        event = EventFactory(organizer=organizer, status=Event.Status.CANCELLED)
+        start = timezone.now() + timedelta(days=30)
+        response = _client(organizer).patch(
+            f"/events/{event.id}/",
+            {
+                "start_datetime": start.isoformat(),
+                "end_datetime": (start + timedelta(hours=2)).isoformat(),
+            },
+            format="json",
+        )
+        event.refresh_from_db()
+        assert response.status_code == 409
+        assert event.status == Event.Status.CANCELLED
+
+    def test_tiers_of_a_cancelled_event_are_frozen(self, organizer):
+        event = EventFactory(organizer=organizer, status=Event.Status.CANCELLED)
+        response = _client(organizer).post(
+            f"/events/{event.id}/ticket-tiers/",
+            {"name": "VIP", "price": "50.00"},
+            format="json",
+        )
+        assert response.status_code == 409
+
+    def test_editing_a_rejected_event_resubmits_it_for_approval(self, organizer):
+        event = EventFactory(
+            organizer=organizer,
+            status=Event.Status.REJECTED,
+            rejection_reason="Unclear description",
+        )
+        response = _client(organizer).patch(
+            f"/events/{event.id}/", {"description": "Now much clearer."}, format="json"
+        )
+        event.refresh_from_db()
+        assert response.status_code == 200
+        assert event.status == Event.Status.PENDING_APPROVAL
+        assert event.rejection_reason == "Unclear description"
+
+    def test_venue_cannot_change_once_seats_are_instantiated(self, admin):
+        event = EventFactory(organizer=admin)
+        EventSeatFactory(
+            event=event,
+            ticket_tier=TicketTierFactory(event=event),
+            seat=SeatFactory(venue=event.venue),
+        )
+        response = _client(admin).patch(
+            f"/events/{event.id}/", {"venue": str(VenueFactory().id)}, format="json"
+        )
+        assert response.status_code == 400
+        assert "venue" in response.json()
+
+
+class TestHardDelete:
+    def test_hard_delete_of_an_event_with_sold_tickets_is_a_409_not_a_500(
+        self, organizer
+    ):
+        event = EventFactory(organizer=organizer, status=Event.Status.COMPLETED)
+        seat = EventSeatFactory(
+            event=event,
+            ticket_tier=TicketTierFactory(event=event),
+            seat=SeatFactory(venue=event.venue),
+        )
+        Ticket.objects.create(booking=BookingFactory(), event_seat=seat)
+
+        response = _client(organizer).delete(f"/events/{event.id}/?hard=true")
+
+        assert response.status_code == 409
+        assert Event.objects.filter(id=event.id).exists()
+
+    def test_hard_delete_of_a_clean_cancelled_event_still_works(self, organizer):
+        event = EventFactory(organizer=organizer, status=Event.Status.CANCELLED)
+        response = _client(organizer).delete(f"/events/{event.id}/?hard=true")
+        assert response.status_code == 204
+
+
+class TestPriceFilter:
+    def test_min_and_max_must_match_the_same_tier(self, admin):
+        event = EventFactory(status=Event.Status.APPROVED)
+        TicketTierFactory(event=event, price=Decimal("10.00"))
+        TicketTierFactory(event=event, price=Decimal("100.00"))
+
+        response = APIClient().get("/events/?min_price=50&max_price=60")
+        ids = [row["id"] for row in response.json()["results"]]
+        assert str(event.id) not in ids
+
+        response = APIClient().get("/events/?min_price=5&max_price=20")
+        ids = [row["id"] for row in response.json()["results"]]
+        assert ids.count(str(event.id)) == 1
+
+
+class TestRejectInputHandling:
+    @pytest.mark.parametrize("body", [{"reason": 123}, {"reason": ["x"]}, ["x"], {}])
+    def test_non_string_or_missing_reason_is_a_400(self, admin, body):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        response = _client(admin).post(
+            f"/admin/events/{event.id}/reject/", body, format="json"
+        )
+        assert response.status_code == 400
+
+    def test_overlong_reason_is_a_400(self, admin):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        response = _client(admin).post(
+            f"/admin/events/{event.id}/reject/", {"reason": "x" * 2001}, format="json"
+        )
+        assert response.status_code == 400
+
+
+class TestOrganizerEventList:
+    def test_returns_only_own_events_at_every_status(self, organizer):
+        mine = [
+            EventFactory(organizer=organizer, status=status)
+            for status in (
+                Event.Status.PENDING_APPROVAL,
+                Event.Status.REJECTED,
+                Event.Status.APPROVED,
+            )
+        ]
+        EventFactory(organizer=UserFactory(role=Roles.ORGANIZER))
+
+        response = _client(organizer).get("/organizer/events/")
+
+        assert response.status_code == 200
+        assert {row["id"] for row in response.json()["results"]} == {
+            str(event.id) for event in mine
+        }
+
+    def test_attendee_and_anonymous_are_refused(self):
+        assert _client(UserFactory()).get("/organizer/events/").status_code == 403
+        assert APIClient().get("/organizer/events/").status_code == 401

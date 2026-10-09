@@ -1,9 +1,12 @@
 import logging
+from datetime import timedelta
 
 from django.conf import settings
-from django.core.mail import EmailMessage
+from django.core.mail import EmailMessage, send_mail
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
+from apps.tickets.models import Ticket
 from apps.tickets.services import get_or_render_ticket_pdf
 
 from .models import Notification
@@ -122,7 +125,7 @@ def send_payout_settled_email(payout) -> None:
         notification.save()
 
 
-def send_refund_confirmation_email(booking) -> None:
+def send_refund_confirmation_email(booking, *, event_cancelled: bool = True) -> None:
     notification = Notification(
         user=booking.user,
         type=Notification.NotificationType.EVENT_CANCELLED_REFUND,
@@ -133,8 +136,13 @@ def send_refund_confirmation_email(booking) -> None:
             subject="Your Eventra booking has been refunded",
             body=(
                 f"Hi {booking.user.first_name or booking.user.email},\n\n"
-                "The event you booked has been cancelled by the organizer. "
-                f"Your payment of ${booking.total_amount} has been refunded."
+                + (
+                    "The event you booked has been cancelled by the organizer. "
+                    if event_cancelled
+                    else "We couldn't complete your booking (the reservation "
+                    "expired or the event is no longer available). "
+                )
+                + f"Your payment of ${booking.total_amount} has been refunded."
             ),
             from_email=settings.DEFAULT_FROM_EMAIL,
             to=[booking.user.email],
@@ -153,3 +161,93 @@ def send_refund_confirmation_email(booking) -> None:
         raise
     else:
         notification.save()
+
+
+REMINDER_WINDOW_HOURS = 24
+REMINDER_CLAIM_STALE_MINUTES = 15
+REMINDER_MAX_ATTEMPTS = 3
+
+
+def _claim_reminder(user, event):
+    key = f"Event reminder: {event.id}"
+    try:
+        with transaction.atomic():
+            return Notification.objects.create(
+                user=user,
+                event=event,
+                type=Notification.NotificationType.EVENT_REMINDER,
+                status=Notification.Status.PENDING,
+                message=key,
+            )
+    except IntegrityError:
+        pass
+
+    now = timezone.now()
+    stale = Notification.objects.filter(
+        user=user,
+        event=event,
+        type=Notification.NotificationType.EVENT_REMINDER,
+        status=Notification.Status.PENDING,
+        created_at__lt=now - timedelta(minutes=REMINDER_CLAIM_STALE_MINUTES),
+    ).first()
+    if stale is None:
+        return None
+    won = Notification.objects.filter(
+        pk=stale.pk, status=Notification.Status.PENDING, created_at=stale.created_at
+    ).update(created_at=now)
+    return stale if won == 1 else None
+
+
+def send_event_reminders_batch() -> int:
+    now = timezone.now()
+    tickets = Ticket.objects.filter(
+        status=Ticket.Status.VALID,
+        event_seat__event__status="approved",
+        event_seat__event__start_datetime__gt=now,
+        event_seat__event__start_datetime__lte=now
+        + timedelta(hours=REMINDER_WINDOW_HOURS),
+    ).select_related("booking__user", "event_seat__event")
+
+    pairs = {}
+    for ticket in tickets:
+        event = ticket.event_seat.event
+        pairs.setdefault(
+            (ticket.booking.user_id, event.id), (ticket.booking.user, event)
+        )
+
+    sent = 0
+    for (_user_id, event_id), (user, event) in pairs.items():
+        failed_attempts = Notification.objects.filter(
+            user=user,
+            event=event,
+            type=Notification.NotificationType.EVENT_REMINDER,
+            status=Notification.Status.FAILED,
+        ).count()
+        if failed_attempts >= REMINDER_MAX_ATTEMPTS:
+            continue
+        claim = _claim_reminder(user, event)
+        if claim is None:
+            continue
+        try:
+            send_mail(
+                subject=f"Reminder: {event.title} is coming up",
+                message=(
+                    f"Hi {user.first_name or user.email},\n\n"
+                    f'"{event.title}" starts on {event.start_datetime:%Y-%m-%d %H:%M} '
+                    "UTC. Your e-tickets are in your Eventra account."
+                ),
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[user.email],
+                fail_silently=False,
+            )
+        except Exception:
+            logger.exception("Failed to send reminder for event %s", event_id)
+            claim.status = Notification.Status.FAILED
+            claim.message = f"Failed: {claim.message}"
+            claim.save(update_fields=["status", "message"])
+            continue
+        claim.status = Notification.Status.SENT
+        claim.sent_at = timezone.now()
+        claim.save(update_fields=["status", "sent_at"])
+        sent += 1
+    return sent
