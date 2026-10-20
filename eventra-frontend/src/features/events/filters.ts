@@ -62,8 +62,7 @@ export function toSearchParams(filters: EventFilters): URLSearchParams {
   return params
 }
 
-// Query for GET /events/. `now` is passed in (rounded to the hour by the
-// caller) so the request key stays stable between renders.
+// Query for GET /events/. `now` is passed in so tests can pin it.
 export function toApiQuery(filters: EventFilters, nowIso: string) {
   return {
     search: filters.search.trim(),

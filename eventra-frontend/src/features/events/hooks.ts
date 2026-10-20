@@ -14,7 +14,8 @@ export function useEvents(filters: EventFilters) {
     queryKey: ['events', 'list', filters, nowIso],
     queryFn: ({ signal }) =>
       apiFetch<Page<EventItem>>('/events/', {
-        query: toApiQuery(filters, nowIso),
+        // The key stays per-hour, but the lower bound is the real now so events that already started drop out
+        query: toApiQuery(filters, new Date().toISOString()),
         signal,
       }),
     // Keep the old results on screen while the next page or filter loads
