@@ -51,7 +51,7 @@ def test_send_verification_email_contains_working_token():
     assert len(mail.outbox) == 1
     sent = mail.outbox[0]
     assert sent.to == [user.email]
-    assert "verify-email/?token=" in sent.body
+    assert "/verify-email?token=" in sent.body
 
     token = sent.body.split("token=")[1].strip()
 
@@ -59,7 +59,7 @@ def test_send_verification_email_contains_working_token():
 
 
 @pytest.mark.django_db
-def test_verification_email_link_points_at_the_real_backend_endpoint(settings):
+def test_verification_email_link_points_at_the_frontend_page(settings):
     settings.BACKEND_BASE_URL = "http://api.example.test"
     settings.FRONTEND_URL = "http://app.example.test"
 
@@ -67,8 +67,8 @@ def test_verification_email_link_points_at_the_real_backend_endpoint(settings):
     send_verification_email(user)
 
     sent = mail.outbox[0]
-    assert "http://api.example.test/auth/verify-email/?token=" in sent.body
-    assert "app.example.test" not in sent.body
+    assert "http://app.example.test/verify-email?token=" in sent.body
+    assert "api.example.test" not in sent.body
 
 
 # ==================================================

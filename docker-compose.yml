@@ -71,6 +71,8 @@ services:
     restart: unless-stopped
     entrypoint: []
     command: celery -A config worker --loglevel=info
+    healthcheck:
+      disable: true
     volumes:
       - ./eventra-backend:/app
     env_file:
@@ -95,6 +97,8 @@ services:
     restart: unless-stopped
     entrypoint: []
     command: celery -A config beat --loglevel=info -s /tmp/celerybeat-schedule
+    healthcheck:
+      disable: true
     volumes:
       - ./eventra-backend:/app
     env_file:

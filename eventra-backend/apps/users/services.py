@@ -37,7 +37,7 @@ def send_verification_email(user: User) -> None:
     prints to your terminal, no real SMTP involved.
     """
     token = generate_verification_token(user.id)
-    verification_link = f"{settings.BACKEND_BASE_URL}/auth/verify-email/?token={token}"
+    verification_link = f"{settings.FRONTEND_URL}/verify-email?token={token}"
 
     send_mail(
         subject="Verify your Eventra account",
