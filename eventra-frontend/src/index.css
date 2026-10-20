@@ -4,7 +4,6 @@
 @import '@fontsource-variable/geist';
 @import '@fontsource/instrument-serif/400.css';
 
-
 @theme inline {
   --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
   --font-display: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
