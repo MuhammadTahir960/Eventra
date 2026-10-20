@@ -13,12 +13,18 @@ async function performRefresh(): Promise<string | null> {
 
   try {
     const data = await authApi.refresh(refreshToken)
+    // Signed out or signed in again while this was in flight: don't revive the old session
+    if (authStore.getState().refreshToken !== refreshToken) return null
     // Rotation returns a new refresh token; keep the old one if absent
     authStore.setTokens(data.access, data.refresh ?? refreshToken)
     return data.access
   } catch (error) {
     // Only a rejected token ends the session. A network blip shouldn't.
-    if (error instanceof ApiError && [400, 401].includes(error.status)) {
+    if (
+      authStore.getState().refreshToken === refreshToken &&
+      error instanceof ApiError &&
+      [400, 401].includes(error.status)
+    ) {
       authStore.clear()
     }
     return null
