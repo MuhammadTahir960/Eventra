@@ -18,6 +18,7 @@ class VenueSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
             "city",
             "country",
             "capacity",
+            "layout_shape",
             "photo",
             "created_at",
             "updated_at",
