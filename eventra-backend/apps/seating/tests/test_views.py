@@ -8,6 +8,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.bookings.models import Booking
 from apps.events.factories import (
     EventFactory,
     TicketTierFactory,
@@ -289,6 +290,69 @@ class TestHoldSeats:
         assert not locker.is_alive(), "locking thread hung — test setup is broken"
         assert response.status_code == status.HTTP_409_CONFLICT
         assert "being processed by another request" in response.data["detail"]
+
+    def _book(self, client, event, seat_id):
+        hold = client.post(f"/events/{event.id}/seats/hold/", {"seat_ids": [seat_id]})
+        booking = client.post("/bookings/", {"hold_id": hold.data["hold_id"]})
+        return Booking.objects.get(id=booking.data["id"])
+
+    def test_going_back_and_picking_the_same_seat_again_succeeds(
+        self, organizer_user, attendee_user
+    ):
+        event = self._instantiated_event(organizer_user)
+        seat_id = str(EventSeat.objects.filter(event=event).first().id)
+        client = auth_client(attendee_user)
+        first = self._book(client, event, seat_id)
+
+        response = client.post(
+            f"/events/{event.id}/seats/hold/", {"seat_ids": [seat_id]}
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        first.refresh_from_db()
+        assert first.status == Booking.Status.CANCELLED
+
+    def test_picking_a_different_seat_frees_the_first_one(
+        self, organizer_user, attendee_user
+    ):
+        event = self._instantiated_event(organizer_user)
+        seat_a, seat_b = EventSeat.objects.filter(event=event)[:2]
+        client = auth_client(attendee_user)
+        first = self._book(client, event, str(seat_a.id))
+
+        response = client.post(
+            f"/events/{event.id}/seats/hold/", {"seat_ids": [str(seat_b.id)]}
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        first.refresh_from_db()
+        seat_a.refresh_from_db()
+        assert first.status == Booking.Status.CANCELLED
+        assert seat_a.status == EventSeat.Status.AVAILABLE
+        assert seat_a.held_booking_id is None
+
+    def test_release_frees_the_users_unpaid_booking(
+        self, organizer_user, attendee_user
+    ):
+        event = self._instantiated_event(organizer_user)
+        seat = EventSeat.objects.filter(event=event).first()
+        client = auth_client(attendee_user)
+        booking = self._book(client, event, str(seat.id))
+
+        response = client.post(f"/events/{event.id}/seats/release/")
+
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+        booking.refresh_from_db()
+        seat.refresh_from_db()
+        assert booking.status == Booking.Status.CANCELLED
+        assert seat.status == EventSeat.Status.AVAILABLE
+
+    def test_release_requires_sign_in(self, api_client, organizer_user):
+        event = self._instantiated_event(organizer_user)
+
+        response = api_client.post(f"/events/{event.id}/seats/release/")
+
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
 # ==================================================

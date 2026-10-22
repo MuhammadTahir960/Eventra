@@ -4,6 +4,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.bookings.services import release_pending_bookings_for_event
 from apps.common.permissions import IsEventOwnerStrict
 from apps.events.models import Event
 from apps.events.services import get_visible_event_or_404
@@ -76,6 +77,8 @@ class EventSeatHoldView(APIView):
         payload_serializer = SeatHoldRequestSerializer(data=request.data)
         payload_serializer.is_valid(raise_exception=True)
 
+        release_pending_bookings_for_event(user=request.user, event=event)
+
         try:
             group_id, expires_at, held_seats = hold_seats(
                 event=event,
@@ -107,6 +110,15 @@ class EventSeatHoldView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class EventSeatReleaseView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, event_id):
+        event = get_visible_event_or_404(request.user, event_id)
+        release_pending_bookings_for_event(user=request.user, event=event)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class InternalSeatsBroadcastView(APIView):

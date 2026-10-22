@@ -5,6 +5,7 @@ from apps.seating.views import (
     EventSeatHoldView,
     EventSeatInstantiateView,
     EventSeatListView,
+    EventSeatReleaseView,
 )
 
 from .views import (
@@ -34,6 +35,11 @@ urlpatterns = router.urls + [
         "events/<uuid:event_id>/seats/hold/",
         EventSeatHoldView.as_view(),
         name="event-seats-hold",
+    ),
+    path(
+        "events/<uuid:event_id>/seats/release/",
+        EventSeatReleaseView.as_view(),
+        name="event-seats-release",
     ),
     path(
         "organizer/events/",

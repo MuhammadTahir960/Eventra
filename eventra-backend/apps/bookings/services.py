@@ -149,7 +149,24 @@ def sweep_expired_pending_bookings() -> None:
         ).values_list("id", flat=True)
     )
 
-    for booking_id in stale_booking_ids:
+    _release_unpaid_bookings(stale_booking_ids)
+
+
+def release_pending_bookings_for_event(*, user, event) -> None:
+    booking_ids = list(
+        Booking.objects.filter(
+            user=user,
+            status=Booking.Status.PENDING,
+            held_event_seats__event=event,
+        )
+        .values_list("id", flat=True)
+        .distinct()
+    )
+    _release_unpaid_bookings(booking_ids)
+
+
+def _release_unpaid_bookings(booking_ids) -> None:
+    for booking_id in booking_ids:
         booking = Booking.objects.filter(id=booking_id).first()
         if booking is None or not cancel_payment_intent_if_unpaid(booking):
             continue

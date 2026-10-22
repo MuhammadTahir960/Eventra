@@ -10,6 +10,7 @@ from django.db import IntegrityError, connection
 from django.utils import timezone
 
 from apps.events.factories import EventFactory
+from apps.payments.factories import PaymentFactory
 from apps.payments.models import Payment
 from apps.payments.services import PaymentGatewayError
 from apps.seating.factories import EventSeatFactory, SeatHoldFactory
@@ -24,6 +25,7 @@ from ..services import (
     HoldNotFoundError,
     checkout_booking,
     create_booking_from_hold,
+    release_pending_bookings_for_event,
     sweep_expired_pending_bookings,
 )
 
@@ -432,3 +434,48 @@ class TestSweepExpiredPendingBookings:
         booking_b.refresh_from_db()
         assert booking_a.status == Booking.Status.CANCELLED
         assert booking_b.status == Booking.Status.CANCELLED
+
+
+class TestReleasePendingBookingsForEvent:
+    def test_releases_only_this_users_pending_booking_for_this_event(self):
+        user = UserFactory()
+        event = EventFactory(status="approved")
+        group_id, seat = _held_seat_with_hold(user, event=event)
+        mine, _ = create_booking_from_hold(group_id, user)
+        other_event_group, _ = _held_seat_with_hold(user)
+        other_event, _ = create_booking_from_hold(other_event_group, user)
+        stranger = UserFactory()
+        stranger_group, _ = _held_seat_with_hold(stranger, event=event)
+        theirs, _ = create_booking_from_hold(stranger_group, stranger)
+
+        release_pending_bookings_for_event(user=user, event=event)
+
+        for booking in (mine, other_event, theirs):
+            booking.refresh_from_db()
+        seat.refresh_from_db()
+        assert mine.status == Booking.Status.CANCELLED
+        assert seat.status == EventSeat.Status.AVAILABLE
+        assert other_event.status == Booking.Status.PENDING
+        assert theirs.status == Booking.Status.PENDING
+
+    def test_keeps_a_booking_whose_payment_already_went_through(self, monkeypatch):
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.PaymentIntent.cancel",
+            MagicMock(side_effect=stripe.error.InvalidRequestError("done", "id")),
+        )
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.PaymentIntent.retrieve",
+            MagicMock(return_value=MagicMock(status="succeeded")),
+        )
+        user = UserFactory()
+        event = EventFactory(status="approved")
+        group_id, seat = _held_seat_with_hold(user, event=event)
+        booking, _ = create_booking_from_hold(group_id, user)
+        PaymentFactory(booking=booking)
+
+        release_pending_bookings_for_event(user=user, event=event)
+
+        booking.refresh_from_db()
+        seat.refresh_from_db()
+        assert booking.status == Booking.Status.PENDING
+        assert seat.status == EventSeat.Status.HELD

@@ -8,11 +8,21 @@ from apps.common.validators import IMAGE_EXTENSION_VALIDATOR, validate_image_upl
 
 
 class Venue(SoftDeleteModel):
+    class LayoutShape(models.TextChoices):
+        OVAL = "oval", "Oval"
+        CIRCLE = "circle", "Circle"
+        RECTANGLE = "rectangle", "Rectangle"
+        U_SHAPE = "u_shape", "U-shape"
+        SEMICIRCLE = "semicircle", "Semicircle"
+
     name = models.CharField(max_length=200, validators=[MinLengthValidator(2)])
     address = models.CharField(max_length=255)
     city = models.CharField(max_length=100, db_index=True)
     country = models.CharField(max_length=100)
     capacity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    layout_shape = models.CharField(
+        max_length=20, choices=LayoutShape.choices, default=LayoutShape.OVAL
+    )
     photo = models.ImageField(
         upload_to="venue_photos/",
         blank=True,
