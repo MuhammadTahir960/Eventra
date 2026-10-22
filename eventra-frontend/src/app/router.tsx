@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react'
-import { createBrowserRouter } from 'react-router-dom'
+import { Navigate, createBrowserRouter } from 'react-router-dom'
 import { AppShell } from './AppShell'
 import { RootLayout } from './RootLayout'
 import { RouteError } from './RouteError'
@@ -50,6 +50,22 @@ const loadEventDetail = page(
   () => import('@/features/events/pages/EventDetailPage'),
   (m) => m.EventDetailPage,
 )
+const loadSeats = page(
+  () => import('@/features/seating/pages/SeatsPage'),
+  (m) => m.SeatsPage,
+)
+const loadCheckout = page(
+  () => import('@/features/bookings/pages/CheckoutPage'),
+  (m) => m.CheckoutPage,
+)
+const loadMyTickets = page(
+  () => import('@/features/tickets/pages/MyTicketsPage'),
+  (m) => m.MyTicketsPage,
+)
+const loadTicket = page(
+  () => import('@/features/tickets/pages/TicketPage'),
+  (m) => m.TicketPage,
+)
 const loadProfile = page(
   () => import('@/features/auth/pages/ProfilePage'),
   (m) => m.ProfilePage,
@@ -80,7 +96,18 @@ export const router = createBrowserRouter([
           // Any signed-in role
           {
             element: <RequireRole roles={['attendee', 'organizer', 'admin']} />,
-            children: [{ path: 'profile', lazy: loadProfile }],
+            children: [
+              { path: 'events/:id/seats', lazy: loadSeats },
+              { path: 'checkout/:bookingId', lazy: loadCheckout },
+              { path: 'bookings', lazy: loadMyTickets },
+              // Orders are shown on My tickets; old order links land there
+              {
+                path: 'bookings/:id',
+                element: <Navigate to="/bookings" replace />,
+              },
+              { path: 'tickets/:id', lazy: loadTicket },
+              { path: 'profile', lazy: loadProfile },
+            ],
           },
 
           { path: '*', lazy: loadNotFound },
