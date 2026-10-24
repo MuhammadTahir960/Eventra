@@ -60,7 +60,7 @@ class Event(SoftDeleteModel):
         related_name="away_events",
     )
 
-    title = models.CharField(max_length=200)
+    title = models.CharField(max_length=100)
     slug = models.SlugField(max_length=220, blank=True, db_index=True)
     description = models.TextField()
     event_type = models.CharField(max_length=20, choices=EventType.choices)
