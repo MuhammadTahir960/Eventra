@@ -3,6 +3,7 @@ import { Navigate, createBrowserRouter } from 'react-router-dom'
 import { AppShell } from './AppShell'
 import { RootLayout } from './RootLayout'
 import { RouteError } from './RouteError'
+import { WorkspaceShell } from './WorkspaceShell'
 import { RequireRole } from '@/features/auth/RequireRole'
 
 // Every page is code-split so the first load only ships the shell.
@@ -70,6 +71,57 @@ const loadProfile = page(
   () => import('@/features/auth/pages/ProfilePage'),
   (m) => m.ProfilePage,
 )
+const loadOrganizerEvents = page(
+  () => import('@/features/organizer/pages/OrganizerEventsPage'),
+  (m) => m.OrganizerEventsPage,
+)
+const loadEditEvent = page(
+  () => import('@/features/organizer/pages/EditEventPage'),
+  (m) => m.EditEventPage,
+)
+const loadEventSales = page(
+  () => import('@/features/organizer/pages/EventSalesPage'),
+  (m) => m.EventSalesPage,
+)
+// Pages shared by both workspaces take the role they're shown to
+const loadPayouts = (scope: 'organizer' | 'admin') =>
+  page(
+    () => import('@/features/organizer/pages/PayoutsPage'),
+    (m) => () => <m.PayoutsPage scope={scope} />,
+  )
+const loadVenueRequests = (scope: 'organizer' | 'admin') =>
+  page(
+    () => import('@/features/organizer/pages/VenueRequestsPage'),
+    (m) => () => <m.VenueRequestsPage scope={scope} />,
+  )
+const loadModeration = page(
+  () => import('@/features/admin/pages/ModerationPage'),
+  (m) => m.ModerationPage,
+)
+const loadAdminEvents = page(
+  () => import('@/features/admin/pages/AdminEventsPage'),
+  (m) => m.AdminEventsPage,
+)
+const loadUsers = page(
+  () => import('@/features/admin/pages/UsersPage'),
+  (m) => m.UsersPage,
+)
+const loadAdminVenues = page(
+  () => import('@/features/admin/pages/AdminVenuesPage'),
+  (m) => m.AdminVenuesPage,
+)
+const loadAdminVenue = page(
+  () => import('@/features/admin/pages/AdminVenuePage'),
+  (m) => m.AdminVenuePage,
+)
+const loadAdminSports = page(
+  () => import('@/features/admin/pages/AdminSportsPage'),
+  (m) => m.AdminSportsPage,
+)
+const loadCreateEvent = page(
+  () => import('@/features/organizer/pages/CreateEventPage'),
+  (m) => m.CreateEventPage,
+)
 
 export const router = createBrowserRouter([
   {
@@ -111,6 +163,52 @@ export const router = createBrowserRouter([
           },
 
           { path: '*', lazy: loadNotFound },
+        ],
+      },
+
+      // Back office for organizers and admins
+      {
+        element: <RequireRole roles={['organizer', 'admin']} />,
+        children: [
+          {
+            element: <WorkspaceShell />,
+            children: [
+              // Organizers and admins can both create events (the backend allows both)
+              { path: 'organizer/events/new', lazy: loadCreateEvent },
+
+              {
+                element: <RequireRole roles={['organizer']} />,
+                children: [
+                  { path: 'organizer/events', lazy: loadOrganizerEvents },
+                  { path: 'organizer/events/:id', lazy: loadEditEvent },
+                  { path: 'organizer/events/:id/sales', lazy: loadEventSales },
+                  { path: 'organizer/payouts', lazy: loadPayouts('organizer') },
+                  {
+                    path: 'organizer/venue-requests',
+                    lazy: loadVenueRequests('organizer'),
+                  },
+                ],
+              },
+
+              {
+                element: <RequireRole roles={['admin']} />,
+                children: [
+                  { path: 'admin/moderation', lazy: loadModeration },
+                  { path: 'admin/events', lazy: loadAdminEvents },
+                  { path: 'admin/users', lazy: loadUsers },
+                  { path: 'admin/payouts', lazy: loadPayouts('admin') },
+                  { path: 'admin/venues', lazy: loadAdminVenues },
+                  { path: 'admin/venues/new', lazy: loadAdminVenue },
+                  { path: 'admin/venues/:id', lazy: loadAdminVenue },
+                  { path: 'admin/sports', lazy: loadAdminSports },
+                  {
+                    path: 'admin/venue-requests',
+                    lazy: loadVenueRequests('admin'),
+                  },
+                ],
+              },
+            ],
+          },
         ],
       },
     ],
