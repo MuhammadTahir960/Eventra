@@ -1,6 +1,7 @@
 import logging
 from datetime import timedelta
 
+import certifi
 import stripe
 from django.conf import settings
 from django.db import IntegrityError, transaction
@@ -16,6 +17,9 @@ from apps.tickets.tasks import generate_ticket_pdf
 from .models import Payment
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
+# stripe-python's bundled CA list still trusts the compromised eMudhra roots
+# (CVE-2026-111943); switch back to the default once stripe-python ships an updated bundle
+stripe.ca_bundle_path = certifi.where()
 
 CURRENCY = "usd"
 
