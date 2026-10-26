@@ -218,6 +218,11 @@ class TierSectionMappingSerializer(
         return attrs
 
     def create(self, validated_data):
-        validated_data["ticket_tier"] = self.context["ticket_tier"]
-        validated_data["event"] = self.context["event"]
+        ticket_tier = self.context["ticket_tier"]
+        event = self.context["event"]
+        validated_data["ticket_tier"] = ticket_tier
+        validated_data["event"] = event
+        if should_retrigger_approval_for_tier(ticket_tier):
+            event.status = Event.Status.PENDING_APPROVAL
+            event.save(update_fields=["status", "updated_at"])
         return super().create(validated_data)

@@ -10,6 +10,11 @@ class EventSeatAdmin(admin.ModelAdmin):
     search_fields = ("event__title", "seat__section")
     list_select_related = ("event", "seat", "ticket_tier")
 
+    def get_readonly_fields(self, request, obj=None):
+        if obj is not None and obj.status != EventSeat.Status.AVAILABLE:
+            return ("price_override",)
+        return ()
+
 
 @admin.register(SeatHold)
 class SeatHoldAdmin(admin.ModelAdmin):

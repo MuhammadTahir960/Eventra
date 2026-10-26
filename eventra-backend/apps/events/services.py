@@ -39,6 +39,10 @@ class EventHasPaidBookingsError(Exception):
     """Raised when rejecting an event that already has confirmed bookings."""
 
 
+class SeatMapLockedError(Exception):
+    """Raised when a section is mapped to a tier after the event's seats were created."""
+
+
 PUBLIC_STATUSES = [Event.Status.APPROVED, Event.Status.COMPLETED]
 DELETABLE_STATUSES = {Event.Status.CANCELLED, Event.Status.COMPLETED}
 SENSITIVE_EVENT_FIELDS = frozenset(
@@ -70,6 +74,14 @@ def ensure_tier_price_mutable(tier: TicketTier) -> None:
     if hasattr(tier, "event_seats") and tier.event_seats.exists():
         raise TierPriceImmutableError(
             "Price is immutable once seats have been instantiated for this tier."
+        )
+
+
+def ensure_sections_mappable(event: Event) -> None:
+    if event.event_seats.exists():
+        raise SeatMapLockedError(
+            "Seats have already been created for this event, "
+            "so sections can no longer be mapped to tiers."
         )
 
 

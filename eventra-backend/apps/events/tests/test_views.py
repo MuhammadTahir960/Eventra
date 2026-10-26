@@ -1263,6 +1263,54 @@ class TestTierSectionMappings:
         )
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
+    def test_mapping_on_approved_organizer_event_sends_it_back_to_review(
+        self, organizer_user
+    ):
+        event = EventFactory(organizer=organizer_user, status=Event.Status.APPROVED)
+        tier = TicketTierFactory(event=event, price=Decimal("999.99"))
+
+        response = auth_client(organizer_user).post(
+            f"/events/{event.pk}/ticket-tiers/{tier.pk}/sections/",
+            {"section": "Upper"},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        event.refresh_from_db()
+        assert event.status == Event.Status.PENDING_APPROVAL
+
+    def test_mapping_on_admin_event_keeps_it_approved(self, admin_user):
+        event = EventFactory(organizer=admin_user, status=Event.Status.APPROVED)
+        tier = TicketTierFactory(event=event)
+
+        response = auth_client(admin_user).post(
+            f"/events/{event.pk}/ticket-tiers/{tier.pk}/sections/",
+            {"section": "Upper"},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        event.refresh_from_db()
+        assert event.status == Event.Status.APPROVED
+
+    def test_mapping_after_seats_exist_returns_409(self, organizer_user):
+        event = EventFactory(organizer=organizer_user, status=Event.Status.APPROVED)
+        tier = TicketTierFactory(event=event)
+        EventSeatFactory(
+            event=event, ticket_tier=tier, seat=SeatFactory(venue=event.venue)
+        )
+
+        response = auth_client(organizer_user).post(
+            f"/events/{event.pk}/ticket-tiers/{tier.pk}/sections/",
+            {"section": "Upper"},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_409_CONFLICT
+        assert not TierSectionMapping.objects.filter(event=event).exists()
+        event.refresh_from_db()
+        assert event.status == Event.Status.APPROVED
+
     def test_cannot_add_section_mapping_on_completed_event(self, organizer_user):
         event = EventFactory(organizer=organizer_user, status=Event.Status.COMPLETED)
         tier = TicketTierFactory(event=event)

@@ -29,12 +29,14 @@ from .services import (
     EventNotEditableError,
     EventNotPendingApprovalError,
     EventRejectionReasonRequiredError,
+    SeatMapLockedError,
     TierPriceImmutableError,
     approve_event,
     cancel_event,
     ensure_can_restore_event,
     ensure_event_deletable,
     ensure_event_editable,
+    ensure_sections_mappable,
     paid_bookings,
     reject_event,
     visible_events_for_ticket_holder,
@@ -272,7 +274,8 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
 
         try:
             ensure_event_editable(event)
-        except EventNotEditableError as exc:
+            ensure_sections_mappable(event)
+        except (EventNotEditableError, SeatMapLockedError) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
         serializer = TierSectionMappingSerializer(

@@ -1,9 +1,12 @@
 import pytest
 from django.contrib.admin.sites import AdminSite
 
-from ..admin import EventAdmin
-from ..factories import EventFactory
-from ..models import Event
+from apps.seating.factories import EventSeatFactory
+from apps.venues.factories import SeatFactory
+
+from ..admin import EventAdmin, TicketTierAdmin
+from ..factories import EventFactory, TicketTierFactory
+from ..models import Event, TicketTier
 
 pytestmark = pytest.mark.django_db
 
@@ -18,3 +21,16 @@ def test_admin_queryset_includes_soft_deleted_events():
     titles = set(admin.get_queryset(request=None).values_list("title", flat=True))
 
     assert titles == {"Visible Event", "Archived Event"}
+
+
+def test_tier_price_is_editable_until_seats_exist():
+    tier = TicketTierFactory()
+    admin = TicketTierAdmin(TicketTier, AdminSite())
+
+    assert "price" not in admin.get_readonly_fields(request=None, obj=tier)
+    assert "price" not in admin.get_readonly_fields(request=None, obj=None)
+
+    EventSeatFactory(
+        event=tier.event, ticket_tier=tier, seat=SeatFactory(venue=tier.event.venue)
+    )
+    assert "price" in admin.get_readonly_fields(request=None, obj=tier)
