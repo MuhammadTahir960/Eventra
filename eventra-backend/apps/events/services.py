@@ -193,6 +193,16 @@ def visible_events_for_user(user) -> QuerySet:
     return qs.filter(status__in=PUBLIC_STATUSES)
 
 
+def visible_events_for_ticket_holder(user) -> QuerySet:
+    qs = visible_events_for_user(user)
+    if not user or not user.is_authenticated or user.role == Roles.ADMIN:
+        return qs
+    held = Booking.objects.filter(user=user, status=Booking.Status.CONFIRMED).values(
+        "tickets__event_seat__event"
+    )
+    return qs | Event.objects.filter(status=Event.Status.PENDING_APPROVAL, pk__in=held)
+
+
 def get_visible_event_or_404(user, pk) -> Event:
     return get_object_or_404(visible_events_for_user(user), pk=pk)
 

@@ -1,5 +1,6 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
+import { useAuth } from '@/features/auth/auth-store'
 import { apiFetch } from '@/lib/api-client'
 import { isUuid } from '@/lib/ids'
 import type { Page } from '@/lib/pagination'
@@ -23,21 +24,29 @@ export function useEvents(filters: EventFilters) {
   })
 }
 
+// Owners, admins and ticket holders can see some non-public events, so after a
+// reload wait for the saved session instead of asking as an anonymous visitor
+function useSessionReady() {
+  return useAuth().status === 'ready'
+}
+
 // The id comes from the address bar, so check its shape before calling the API
 export function useEvent(id: string | undefined) {
+  const ready = useSessionReady()
   return useQuery({
     queryKey: ['events', 'detail', id],
     queryFn: ({ signal }) => apiFetch<EventItem>(`/events/${id}/`, { signal }),
-    enabled: isUuid(id),
+    enabled: ready && isUuid(id),
     retry: false,
   })
 }
 
 export function useTicketTiers(id: string | undefined) {
+  const ready = useSessionReady()
   return useQuery({
     queryKey: ['events', 'tiers', id],
     queryFn: ({ signal }) =>
       apiFetch<TicketTier[]>(`/events/${id}/ticket-tiers/`, { signal }),
-    enabled: isUuid(id),
+    enabled: ready && isUuid(id),
   })
 }

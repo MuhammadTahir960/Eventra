@@ -252,6 +252,20 @@ class TestListEvents:
         assert titles == {"Jazz Night"}
 
 
+def _sell_ticket(event, booking_status=Booking.Status.CONFIRMED, user=None):
+    seat = EventSeatFactory(
+        event=event,
+        ticket_tier=TicketTierFactory(event=event),
+        seat=SeatFactory(venue=event.venue),
+    )
+    booking = (
+        BookingFactory(status=booking_status, user=user)
+        if user
+        else BookingFactory(status=booking_status)
+    )
+    Ticket.objects.create(booking=booking, event_seat=seat)
+
+
 # ==================================================
 # GET /events/{id}/ (retrieve)
 # ==================================================
@@ -292,6 +306,45 @@ class TestRetrieveEvent:
         event.save(update_fields=["is_active"])
         response = admin_client.get(f"/events/{event.pk}/")
         assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_ticket_holder_can_retrieve_pending_event_and_tiers(self, attendee_user):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(event, user=attendee_user)
+        client = auth_client(attendee_user)
+
+        assert client.get(f"/events/{event.pk}/").status_code == status.HTTP_200_OK
+        tiers = client.get(f"/events/{event.pk}/ticket-tiers/")
+        assert tiers.status_code == status.HTTP_200_OK
+        assert len(tiers.data) == 1
+
+    @pytest.mark.parametrize(
+        "booking_status", [Booking.Status.PENDING, Booking.Status.REFUNDED]
+    )
+    def test_unpaid_or_refunded_booking_does_not_reveal_pending_event(
+        self, attendee_user, booking_status
+    ):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(event, booking_status, user=attendee_user)
+        response = auth_client(attendee_user).get(f"/events/{event.pk}/")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_other_users_ticket_does_not_reveal_pending_event(self, attendee_user):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(event)
+        response = auth_client(attendee_user).get(f"/events/{event.pk}/")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_ticket_holder_cannot_see_rejected_event(self, attendee_user):
+        event = EventFactory(status=Event.Status.REJECTED)
+        _sell_ticket(event, user=attendee_user)
+        response = auth_client(attendee_user).get(f"/events/{event.pk}/")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_ticket_holder_pending_event_stays_out_of_list(self, attendee_user):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(event, user=attendee_user)
+        response = auth_client(attendee_user).get("/events/")
+        assert str(event.pk) not in {row["id"] for row in results(response)}
 
 
 # ==================================================
@@ -672,17 +725,6 @@ class TestRestoreEvent:
 # ==================================================
 # POST /admin/events/{id}/approve/, POST /admin/events/{id}/reject/
 # ==================================================
-
-
-def _sell_ticket(event, booking_status=Booking.Status.CONFIRMED):
-    seat = EventSeatFactory(
-        event=event,
-        ticket_tier=TicketTierFactory(event=event),
-        seat=SeatFactory(venue=event.venue),
-    )
-    Ticket.objects.create(
-        booking=BookingFactory(status=booking_status), event_seat=seat
-    )
 
 
 class TestApproveRejectEvent:

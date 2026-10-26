@@ -37,6 +37,7 @@ from .services import (
     ensure_event_editable,
     paid_bookings,
     reject_event,
+    visible_events_for_ticket_holder,
     visible_events_for_user,
 )
 
@@ -114,6 +115,10 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
             return Event.all_objects.select_related(
                 "venue", "category", "organizer", "league", "home_team", "away_team"
             ).order_by("-start_datetime", "id")
+        if self.action in ("retrieve", "ticket_tiers") and self.request.method == "GET":
+            return visible_events_for_ticket_holder(user).order_by(
+                "-start_datetime", "id"
+            )
         return visible_events_for_user(user).order_by("-start_datetime", "id")
 
     def get_permissions(self):
