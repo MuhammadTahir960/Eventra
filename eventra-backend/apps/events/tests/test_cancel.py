@@ -1,13 +1,21 @@
 from unittest.mock import MagicMock
 
 import pytest
+from django.core import mail
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.bookings.factories import BookingFactory
+from apps.bookings.models import Booking
 from apps.common.constants import Roles
+from apps.payments.factories import PaymentFactory
+from apps.payments.models import Payment
+from apps.seating.factories import EventSeatFactory
+from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
+from apps.venues.factories import SeatFactory
 
-from ..factories import EventFactory
+from ..factories import EventFactory, TicketTierFactory
 from ..models import Event
 
 pytestmark = pytest.mark.django_db
@@ -18,6 +26,57 @@ def auth_client(user):
     access = RefreshToken.for_user(user).access_token
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
     return client
+
+
+def _paid_booking(event, user, booking_status=Booking.Status.CONFIRMED):
+    seat = EventSeatFactory(
+        event=event,
+        ticket_tier=TicketTierFactory(event=event),
+        seat=SeatFactory(venue=event.venue),
+    )
+    booking = BookingFactory(user=user, status=booking_status)
+    Ticket.objects.create(booking=booking, event_seat=seat)
+    PaymentFactory(booking=booking, status=Payment.Status.SUCCEEDED)
+    return booking
+
+
+class TestCancelledEventEmails:
+    def test_buyers_get_the_notice_first_then_the_refund_email(
+        self, monkeypatch, django_capture_on_commit_callbacks
+    ):
+        monkeypatch.setattr("apps.payments.services.stripe.Refund.create", MagicMock())
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status=Event.Status.APPROVED, organizer=organizer)
+        buyer = UserFactory()
+        booking = _paid_booking(event, buyer)
+        _paid_booking(event, buyer)
+        _paid_booking(event, UserFactory(), Booking.Status.REFUNDED)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            response = auth_client(organizer).post(f"/events/{event.id}/cancel/")
+
+        assert response.status_code == 200
+        booking.refresh_from_db()
+        assert booking.status == Booking.Status.REFUNDED
+        assert [(m.to, m.subject) for m in mail.outbox] == [
+            ([buyer.email], "An event you booked has been cancelled"),
+            ([buyer.email], "Your Eventra booking has been refunded"),
+            ([buyer.email], "Your Eventra booking has been refunded"),
+        ]
+
+    def test_cancelling_an_unsold_event_sends_no_email(
+        self, monkeypatch, django_capture_on_commit_callbacks
+    ):
+        monkeypatch.setattr(
+            "apps.events.views.refund_event_bookings_task.delay", MagicMock()
+        )
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status=Event.Status.APPROVED, organizer=organizer)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            auth_client(organizer).post(f"/events/{event.id}/cancel/")
+
+        assert mail.outbox == []
 
 
 class TestEventCancelAction:

@@ -119,7 +119,33 @@ def _approve_locked(event: Event) -> Event:
     event.status = Event.Status.APPROVED
     event.rejection_reason = ""
     event.save(update_fields=["status", "rejection_reason", "updated_at"])
+    _email_buyers_on_commit("send_event_updated_email", event, _paid_buyer_ids(event))
     return event
+
+
+def _paid_buyer_ids(event: Event) -> list[str]:
+    return [
+        str(user_id)
+        for user_id in paid_bookings(event)
+        .order_by()
+        .values_list("user_id", flat=True)
+        .distinct()
+    ]
+
+
+def _email_buyers_on_commit(task_name: str, event: Event, user_ids: list[str]) -> None:
+    if not user_ids:
+        return
+    event_id = str(event.id)
+
+    def enqueue():
+        from apps.notifications import tasks
+
+        task = getattr(tasks, task_name)
+        for user_id in user_ids:
+            task.delay(event_id, user_id)
+
+    transaction.on_commit(enqueue, robust=True)
 
 
 def reject_event(event: Event, reason: str) -> Event:
@@ -167,8 +193,10 @@ def _cancel_locked(event: Event) -> Event:
     if event.status == Event.Status.CANCELLED:
         raise EventNotCancellableError("Event is already cancelled.")
 
+    buyer_ids = _paid_buyer_ids(event)
     event.status = Event.Status.CANCELLED
     event.save(update_fields=["status", "updated_at"])
+    _email_buyers_on_commit("send_event_cancelled_email", event, buyer_ids)
     return event
 
 

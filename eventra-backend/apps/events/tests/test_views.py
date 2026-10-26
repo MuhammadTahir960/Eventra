@@ -3,6 +3,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
+from django.core import mail
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -861,6 +862,30 @@ class TestApproveRejectEvent:
         event = EventFactory(status=Event.Status.CANCELLED)
         response = admin_client.post(f"/admin/events/{event.pk}/approve/")
         assert response.status_code == status.HTTP_409_CONFLICT
+
+    def test_approving_a_sold_event_emails_its_buyers(
+        self, admin_client, attendee_user, django_capture_on_commit_callbacks
+    ):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(event, user=attendee_user)
+        _sell_ticket(event, user=attendee_user)
+        _sell_ticket(event, Booking.Status.REFUNDED)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            response = admin_client.post(f"/admin/events/{event.pk}/approve/")
+
+        assert response.status_code == status.HTTP_200_OK
+        assert [m.to for m in mail.outbox] == [[attendee_user.email]]
+
+    def test_approving_an_unsold_event_sends_no_email(
+        self, admin_client, django_capture_on_commit_callbacks
+    ):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            admin_client.post(f"/admin/events/{event.pk}/approve/")
+
+        assert mail.outbox == []
 
     def test_reject_event_with_paid_bookings_returns_409(self, admin_client):
         event = EventFactory(status=Event.Status.PENDING_APPROVAL)
