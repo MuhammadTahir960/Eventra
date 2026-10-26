@@ -163,6 +163,13 @@ class EventSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
+class PendingEventSerializer(EventSerializer):
+    has_paid_bookings = serializers.BooleanField(read_only=True)
+
+    class Meta(EventSerializer.Meta):
+        fields = [*EventSerializer.Meta.fields, "has_paid_bookings"]
+
+
 class TicketTierSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
     class Meta:
         model = TicketTier

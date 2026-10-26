@@ -5,6 +5,7 @@ from django.db.models import Q, QuerySet
 from django.utils import timezone
 from rest_framework.generics import get_object_or_404
 
+from apps.bookings.models import Booking
 from apps.common.constants import Roles
 
 from .models import Event, TicketTier
@@ -32,6 +33,10 @@ class EventRejectionReasonRequiredError(Exception):
 
 class EventNotCancellableError(Exception):
     """Raised when cancel is attempted on an event that's completed or already cancelled."""
+
+
+class EventHasPaidBookingsError(Exception):
+    """Raised when rejecting an event that already has confirmed bookings."""
 
 
 PUBLIC_STATUSES = [Event.Status.APPROVED, Event.Status.COMPLETED]
@@ -89,6 +94,12 @@ def should_retrigger_approval_for_tier(tier: TicketTier) -> bool:
 MAX_REJECTION_REASON_LENGTH = 2000
 
 
+def paid_bookings(event) -> QuerySet:
+    return Booking.objects.filter(
+        tickets__event_seat__event=event, status=Booking.Status.CONFIRMED
+    )
+
+
 def _lock(event: Event) -> None:
     event.refresh_from_db(from_queryset=Event.all_objects.select_for_update())
 
@@ -131,6 +142,10 @@ def _reject_locked(event: Event, reason: str) -> Event:
     if len(reason) > MAX_REJECTION_REASON_LENGTH:
         raise EventRejectionReasonRequiredError(
             f"'reason' must be at most {MAX_REJECTION_REASON_LENGTH} characters."
+        )
+    if paid_bookings(event).exists():
+        raise EventHasPaidBookingsError(
+            "This event has paid bookings. Cancel it instead so attendees are refunded."
         )
     event.status = Event.Status.REJECTED
     event.rejection_reason = reason

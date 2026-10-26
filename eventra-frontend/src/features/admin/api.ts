@@ -7,11 +7,13 @@ import type { EventItem, EventStatus } from '@/features/events/types'
 
 // ---------- moderation ----------
 
+export type PendingEventItem = EventItem & { has_paid_bookings: boolean }
+
 export function usePendingEvents() {
   return useQuery({
     queryKey: ['admin', 'pending'],
     queryFn: ({ signal }) =>
-      apiFetch<Page<EventItem>>('/admin/events/pending/', { signal }),
+      apiFetch<Page<PendingEventItem>>('/admin/events/pending/', { signal }),
   })
 }
 

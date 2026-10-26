@@ -37,10 +37,7 @@ export function useTicketTiers(id: string | undefined) {
   return useQuery({
     queryKey: ['events', 'tiers', id],
     queryFn: ({ signal }) =>
-      apiFetch<TicketTier[]>(`/events/${id}/ticket-tiers/`, {
-        auth: false,
-        signal,
-      }),
+      apiFetch<TicketTier[]>(`/events/${id}/ticket-tiers/`, { signal }),
     enabled: isUuid(id),
   })
 }

@@ -9,6 +9,7 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.bookings.factories import BookingFactory
+from apps.bookings.models import Booking
 from apps.categories.factories import CategoryFactory
 from apps.common.constants import Roles
 from apps.seating.factories import EventSeatFactory
@@ -673,6 +674,17 @@ class TestRestoreEvent:
 # ==================================================
 
 
+def _sell_ticket(event, booking_status=Booking.Status.CONFIRMED):
+    seat = EventSeatFactory(
+        event=event,
+        ticket_tier=TicketTierFactory(event=event),
+        seat=SeatFactory(venue=event.venue),
+    )
+    Ticket.objects.create(
+        booking=BookingFactory(status=booking_status), event_seat=seat
+    )
+
+
 class TestApproveRejectEvent:
     def test_admin_can_approve_pending_event(self, admin_client):
         event = EventFactory(status=Event.Status.PENDING_APPROVAL)
@@ -808,6 +820,33 @@ class TestApproveRejectEvent:
         response = admin_client.post(f"/admin/events/{event.pk}/approve/")
         assert response.status_code == status.HTTP_409_CONFLICT
 
+    def test_reject_event_with_paid_bookings_returns_409(self, admin_client):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(event)
+
+        response = admin_client.post(
+            f"/admin/events/{event.pk}/reject/", {"reason": "Wrong date."}
+        )
+
+        assert response.status_code == status.HTTP_409_CONFLICT
+        assert "Cancel it instead" in response.data["detail"]
+        event.refresh_from_db()
+        assert event.status == Event.Status.PENDING_APPROVAL
+        assert event.rejection_reason == ""
+
+    def test_reject_allowed_when_bookings_are_not_confirmed(self, admin_client):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(event, Booking.Status.REFUNDED)
+        _sell_ticket(event, Booking.Status.PENDING)
+
+        response = admin_client.post(
+            f"/admin/events/{event.pk}/reject/", {"reason": "Wrong date."}
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        event.refresh_from_db()
+        assert event.status == Event.Status.REJECTED
+
     def test_organizer_cannot_approve(self, organizer_user):
         event = EventFactory(status=Event.Status.PENDING_APPROVAL)
         client = auth_client(organizer_user)
@@ -865,6 +904,18 @@ class TestEventPendingListView:
 
         ids = [row["id"] for row in results(response)]
         assert ids == [str(first.pk), str(second.pk)]
+
+    def test_flags_events_with_paid_bookings(self, admin_client):
+        sold = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(sold)
+        _sell_ticket(sold)
+        unsold = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(unsold, Booking.Status.REFUNDED)
+
+        response = admin_client.get(self.url)
+
+        flags = {row["id"]: row["has_paid_bookings"] for row in results(response)}
+        assert flags == {str(sold.pk): True, str(unsold.pk): False}
 
     def test_non_admin_rejected(self, organizer_user):
         EventFactory(status=Event.Status.PENDING_APPROVAL)

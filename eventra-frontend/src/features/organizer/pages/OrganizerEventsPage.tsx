@@ -20,7 +20,13 @@ import { usePageTitle } from '@/lib/use-page-title'
 const TERMINAL: EventItem['status'][] = ['cancelled', 'completed']
 
 // Cancelling refunds every buyer, so it always goes through a confirmation
-export function CancelEventButton({ event }: { event: EventItem }) {
+export function CancelEventButton({
+  event,
+  size = 'sm',
+}: {
+  event: EventItem
+  size?: 'sm' | 'default'
+}) {
   const [open, setOpen] = useState(false)
   const cancel = useCancelEvent()
   const [error, setError] = useState<string | null>(null)
@@ -55,7 +61,7 @@ export function CancelEventButton({ event }: { event: EventItem }) {
         if (!next) setError(null)
       }}
       trigger={
-        <Button variant="destructive" size="sm">
+        <Button variant="destructive" size={size}>
           Cancel
         </Button>
       }

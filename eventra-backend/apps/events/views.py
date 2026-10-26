@@ -1,7 +1,7 @@
 import django_filters
 from django.contrib.postgres.search import SearchQuery, SearchVector
 from django.db import transaction
-from django.db.models import ProtectedError
+from django.db.models import Exists, OuterRef, ProtectedError
 from rest_framework import generics, permissions, status, views, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotAuthenticated, PermissionDenied
@@ -17,11 +17,13 @@ from .models import EVENT_SEARCH_CONFIG, Event, TicketTier
 from .permissions import IsEventOwnerOrAdminForDelete
 from .serializers import (
     EventSerializer,
+    PendingEventSerializer,
     TicketTierSerializer,
     TierSectionMappingSerializer,
 )
 from .services import (
     DuplicateEventSlugError,
+    EventHasPaidBookingsError,
     EventNotCancellableError,
     EventNotDeletableError,
     EventNotEditableError,
@@ -33,6 +35,7 @@ from .services import (
     ensure_can_restore_event,
     ensure_event_deletable,
     ensure_event_editable,
+    paid_bookings,
     reject_event,
     visible_events_for_user,
 )
@@ -314,7 +317,7 @@ class EventRejectView(views.APIView):
                 request.data.get("reason") if hasattr(request.data, "get") else None
             )
             reject_event(event, reason if isinstance(reason, str) else "")
-        except EventNotPendingApprovalError as exc:
+        except (EventNotPendingApprovalError, EventHasPaidBookingsError) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         except EventRejectionReasonRequiredError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
@@ -322,12 +325,14 @@ class EventRejectView(views.APIView):
 
 
 class EventPendingListView(generics.ListAPIView):
-    serializer_class = EventSerializer
+    serializer_class = PendingEventSerializer
     permission_classes = [permissions.IsAuthenticated, IsAdmin]
 
     def get_queryset(self):
-        return Event.objects.filter(status=Event.Status.PENDING_APPROVAL).order_by(
-            "created_at"
+        return (
+            Event.objects.filter(status=Event.Status.PENDING_APPROVAL)
+            .annotate(has_paid_bookings=Exists(paid_bookings(OuterRef("pk"))))
+            .order_by("created_at")
         )
 
 
