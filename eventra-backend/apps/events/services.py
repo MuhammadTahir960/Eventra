@@ -112,7 +112,7 @@ def paid_bookings(event) -> QuerySet:
     )
 
 
-def _lock(event: Event) -> None:
+def lock_event(event: Event) -> None:
     event.refresh_from_db(from_queryset=Event.all_objects.select_for_update())
 
 
@@ -122,7 +122,7 @@ def approve_event(event: Event) -> Event:
 
 
 def _approve_locked(event: Event) -> Event:
-    _lock(event)
+    lock_event(event)
     if event.status != Event.Status.PENDING_APPROVAL:
         raise EventNotPendingApprovalError(
             "Only events awaiting approval can be approved "
@@ -166,7 +166,7 @@ def reject_event(event: Event, reason: str) -> Event:
 
 
 def _reject_locked(event: Event, reason: str) -> Event:
-    _lock(event)
+    lock_event(event)
     if event.status != Event.Status.PENDING_APPROVAL:
         raise EventNotPendingApprovalError(
             "Only events awaiting approval can be rejected "
@@ -197,7 +197,7 @@ def cancel_event(event: Event) -> Event:
 
 
 def _cancel_locked(event: Event) -> Event:
-    _lock(event)
+    lock_event(event)
     if event.status == Event.Status.COMPLETED:
         raise EventNotCancellableError(
             "Event is completed and can no longer be cancelled."

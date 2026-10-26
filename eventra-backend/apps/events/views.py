@@ -37,6 +37,7 @@ from .services import (
     ensure_event_deletable,
     ensure_event_editable,
     ensure_sections_mappable,
+    lock_event,
     paid_bookings,
     reject_event,
     visible_events_for_ticket_holder,
@@ -142,14 +143,18 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
 
-        try:
-            ensure_event_editable(instance)
-        except EventNotEditableError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        with transaction.atomic():
+            lock_event(instance)
+            try:
+                ensure_event_editable(instance)
+            except EventNotEditableError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
-        serializer = self.get_serializer(instance, data=request.data, partial=partial)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
+            serializer = self.get_serializer(
+                instance, data=request.data, partial=partial
+            )
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
         return Response(serializer.data)
 
     def destroy(self, request, *args, **kwargs):
@@ -256,8 +261,11 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
 
         try:
             with transaction.atomic():
+                lock_event(event)
+                ensure_event_editable(event)
+                tier.event = event
                 serializer.save()
-        except TierPriceImmutableError as exc:
+        except (EventNotEditableError, TierPriceImmutableError) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
         return Response(serializer.data)
@@ -282,7 +290,15 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
             data=request.data, context={"event": event, "ticket_tier": tier}
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        try:
+            with transaction.atomic():
+                lock_event(event)
+                ensure_event_editable(event)
+                ensure_sections_mappable(event)
+                tier.event = event
+                serializer.save()
+        except (EventNotEditableError, SeatMapLockedError) as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 

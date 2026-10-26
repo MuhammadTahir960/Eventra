@@ -1279,6 +1279,21 @@ class TestTierSectionMappings:
         event.refresh_from_db()
         assert event.status == Event.Status.PENDING_APPROVAL
 
+    def test_rejected_duplicate_mapping_leaves_the_status_alone(self, organizer_user):
+        event = EventFactory(organizer=organizer_user, status=Event.Status.APPROVED)
+        tier = TicketTierFactory(event=event)
+        TierSectionMappingFactory(event=event, ticket_tier=tier, section="A")
+
+        response = auth_client(organizer_user).post(
+            f"/events/{event.pk}/ticket-tiers/{tier.pk}/sections/",
+            {"section": "A"},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        event.refresh_from_db()
+        assert event.status == Event.Status.APPROVED
+
     def test_mapping_on_admin_event_keeps_it_approved(self, admin_user):
         event = EventFactory(organizer=admin_user, status=Event.Status.APPROVED)
         tier = TicketTierFactory(event=event)

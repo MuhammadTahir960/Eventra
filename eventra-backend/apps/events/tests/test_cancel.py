@@ -1,7 +1,9 @@
+import threading
 from unittest.mock import MagicMock
 
 import pytest
 from django.core import mail
+from django.db import connection
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -17,6 +19,7 @@ from apps.venues.factories import SeatFactory
 
 from ..factories import EventFactory, TicketTierFactory
 from ..models import Event
+from ..views import EventViewSet
 
 pytestmark = pytest.mark.django_db
 
@@ -194,3 +197,64 @@ class TestEventRetryRefundsAction:
 
         assert response.status_code == 409
         mock_delay.assert_not_called()
+
+
+class TestEditRacingCancel:
+    @pytest.mark.django_db(transaction=True)
+    @pytest.mark.parametrize("edit", ["event", "tier", "mapping"])
+    def test_edit_that_read_before_the_cancel_gets_409(self, monkeypatch, edit):
+        monkeypatch.setattr(
+            "apps.events.views.refund_event_bookings_task.delay", MagicMock()
+        )
+        owner = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(organizer=owner, status=Event.Status.APPROVED)
+        tier = TicketTierFactory(event=event)
+        request = {
+            "event": ("patch", f"/events/{event.id}/", {"description": "Edited"}),
+            "tier": (
+                "patch",
+                f"/events/{event.id}/ticket-tiers/{tier.id}/",
+                {"price": "12.00"},
+            ),
+            "mapping": (
+                "post",
+                f"/events/{event.id}/ticket-tiers/{tier.id}/sections/",
+                {"section": "Upper"},
+            ),
+        }[edit]
+
+        read_done, release = threading.Event(), threading.Event()
+        original_get_object = EventViewSet.get_object
+
+        def paused_get_object(self):
+            obj = original_get_object(self)
+            if self.request.user == owner:
+                read_done.set()
+                release.wait(10)
+            return obj
+
+        monkeypatch.setattr(EventViewSet, "get_object", paused_get_object)
+        out = {}
+
+        def owner_edit():
+            try:
+                method, url, data = request
+                out["response"] = getattr(auth_client(owner), method)(
+                    url, data, format="json"
+                )
+            finally:
+                connection.close()
+
+        thread = threading.Thread(target=owner_edit)
+        thread.start()
+        assert read_done.wait(10)
+        cancel = auth_client(UserFactory(role=Roles.ADMIN)).post(
+            f"/events/{event.id}/cancel/"
+        )
+        assert cancel.status_code == 200
+        release.set()
+        thread.join(15)
+
+        assert out["response"].status_code == 409
+        event.refresh_from_db()
+        assert event.status == Event.Status.CANCELLED
