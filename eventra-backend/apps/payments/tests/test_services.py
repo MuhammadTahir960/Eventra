@@ -20,6 +20,7 @@ from apps.bookings.services import (
 )
 from apps.events.factories import EventFactory
 from apps.events.models import Event
+from apps.events.services import EventHasPaidBookingsError, reject_event
 from apps.seating.factories import EventSeatFactory
 from apps.seating.models import EventSeat
 from apps.tickets.models import Ticket
@@ -253,6 +254,63 @@ class TestConfirmPaymentFromWebhook:
         mock_pdf.assert_called_once()
         mock_email.assert_called_once()
         mock_broadcast.assert_called_once()
+
+    @pytest.mark.django_db(transaction=True)
+    def test_reject_during_webhook_waits_and_sees_the_paid_booking(self, monkeypatch):
+        for target in (
+            "apps.payments.services.generate_ticket_pdf.delay",
+            "apps.payments.services._enqueue_confirmation_email",
+            "apps.payments.services.broadcast_seat_update",
+        ):
+            monkeypatch.setattr(target, MagicMock())
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        booking, _, payment = _pending_booking_with_held_seat(event=event)
+
+        webhook_inside, release_webhook = threading.Event(), threading.Event()
+        real_bulk_create = Ticket.objects.bulk_create
+
+        def paused_bulk_create(*args, **kwargs):
+            webhook_inside.set()
+            release_webhook.wait(10)
+            return real_bulk_create(*args, **kwargs)
+
+        monkeypatch.setattr(Ticket.objects, "bulk_create", paused_bulk_create)
+        errors = []
+
+        def run(fn):
+            try:
+                fn()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                connection.close()
+
+        webhook = threading.Thread(
+            target=run,
+            args=(
+                lambda: confirm_payment_from_webhook(payment.stripe_payment_intent_id),
+            ),
+        )
+        reject = threading.Thread(
+            target=run,
+            args=(lambda: reject_event(Event.objects.get(pk=event.pk), "No"),),
+        )
+        webhook.start()
+        try:
+            assert webhook_inside.wait(10)
+            reject.start()
+            reject.join(0.5)
+            assert reject.is_alive(), "reject did not wait for the webhook's lock"
+        finally:
+            release_webhook.set()
+            webhook.join(10)
+            reject.join(10)
+
+        assert [type(e) for e in errors] == [EventHasPaidBookingsError]
+        event.refresh_from_db()
+        booking.refresh_from_db()
+        assert event.status == Event.Status.PENDING_APPROVAL
+        assert booking.status == Booking.Status.CONFIRMED
 
     def test_unknown_payment_intent_raises(self):
         with pytest.raises(PaymentNotFoundError):

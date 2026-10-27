@@ -9,6 +9,7 @@ from django.db.models import F
 from django.utils import timezone
 
 from apps.bookings.models import Booking
+from apps.events.models import Event
 from apps.seating.models import EventSeat
 from apps.seating.services import broadcast_seat_update
 from apps.tickets.models import Ticket
@@ -129,10 +130,17 @@ def confirm_payment_from_webhook(payment_intent_id: str) -> Booking:
             .select_related("event", "seat", "ticket_tier")
         )
 
+        event_status = (
+            Event.all_objects.select_for_update()
+            .values_list("status", flat=True)
+            .get(pk=seats[0].event_id)
+            if seats
+            else None
+        )
         fulfillable = (
             booking.status == Booking.Status.PENDING
             and bool(seats)
-            and all(s.event.status not in _UNFULFILLABLE_EVENT_STATUSES for s in seats)
+            and event_status not in _UNFULFILLABLE_EVENT_STATUSES
         )
 
         if not fulfillable:
