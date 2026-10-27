@@ -5,6 +5,7 @@ from django.db.models import Q, QuerySet
 from django.utils import timezone
 from rest_framework.generics import get_object_or_404
 
+from apps.bookings.models import Booking
 from apps.common.constants import Roles
 
 from .models import Event, TicketTier
@@ -32,6 +33,14 @@ class EventRejectionReasonRequiredError(Exception):
 
 class EventNotCancellableError(Exception):
     """Raised when cancel is attempted on an event that's completed or already cancelled."""
+
+
+class EventHasPaidBookingsError(Exception):
+    """Raised when rejecting an event that already has confirmed bookings."""
+
+
+class SeatMapLockedError(Exception):
+    """Raised when a section is mapped to a tier after the event's seats were created."""
 
 
 PUBLIC_STATUSES = [Event.Status.APPROVED, Event.Status.COMPLETED]
@@ -68,6 +77,14 @@ def ensure_tier_price_mutable(tier: TicketTier) -> None:
         )
 
 
+def ensure_sections_mappable(event: Event) -> None:
+    if event.event_seats.exists():
+        raise SeatMapLockedError(
+            "Seats have already been created for this event, "
+            "so sections can no longer be mapped to tiers."
+        )
+
+
 def resolve_create_status(actor) -> str:
     return (
         Event.Status.APPROVED
@@ -89,7 +106,13 @@ def should_retrigger_approval_for_tier(tier: TicketTier) -> bool:
 MAX_REJECTION_REASON_LENGTH = 2000
 
 
-def _lock(event: Event) -> None:
+def paid_bookings(event) -> QuerySet:
+    return Booking.objects.filter(
+        tickets__event_seat__event=event, status=Booking.Status.CONFIRMED
+    )
+
+
+def lock_event(event: Event) -> None:
     event.refresh_from_db(from_queryset=Event.all_objects.select_for_update())
 
 
@@ -99,7 +122,7 @@ def approve_event(event: Event) -> Event:
 
 
 def _approve_locked(event: Event) -> Event:
-    _lock(event)
+    lock_event(event)
     if event.status != Event.Status.PENDING_APPROVAL:
         raise EventNotPendingApprovalError(
             "Only events awaiting approval can be approved "
@@ -108,7 +131,33 @@ def _approve_locked(event: Event) -> Event:
     event.status = Event.Status.APPROVED
     event.rejection_reason = ""
     event.save(update_fields=["status", "rejection_reason", "updated_at"])
+    _email_buyers_on_commit("send_event_updated_email", event, _paid_buyer_ids(event))
     return event
+
+
+def _paid_buyer_ids(event: Event) -> list[str]:
+    return [
+        str(user_id)
+        for user_id in paid_bookings(event)
+        .order_by()
+        .values_list("user_id", flat=True)
+        .distinct()
+    ]
+
+
+def _email_buyers_on_commit(task_name: str, event: Event, user_ids: list[str]) -> None:
+    if not user_ids:
+        return
+    event_id = str(event.id)
+
+    def enqueue():
+        from apps.notifications import tasks
+
+        task = getattr(tasks, task_name)
+        for user_id in user_ids:
+            task.delay(event_id, user_id)
+
+    transaction.on_commit(enqueue, robust=True)
 
 
 def reject_event(event: Event, reason: str) -> Event:
@@ -117,7 +166,7 @@ def reject_event(event: Event, reason: str) -> Event:
 
 
 def _reject_locked(event: Event, reason: str) -> Event:
-    _lock(event)
+    lock_event(event)
     if event.status != Event.Status.PENDING_APPROVAL:
         raise EventNotPendingApprovalError(
             "Only events awaiting approval can be rejected "
@@ -132,6 +181,10 @@ def _reject_locked(event: Event, reason: str) -> Event:
         raise EventRejectionReasonRequiredError(
             f"'reason' must be at most {MAX_REJECTION_REASON_LENGTH} characters."
         )
+    if paid_bookings(event).exists():
+        raise EventHasPaidBookingsError(
+            "This event has paid bookings. Cancel it instead so attendees are refunded."
+        )
     event.status = Event.Status.REJECTED
     event.rejection_reason = reason
     event.save(update_fields=["status", "rejection_reason", "updated_at"])
@@ -144,7 +197,7 @@ def cancel_event(event: Event) -> Event:
 
 
 def _cancel_locked(event: Event) -> Event:
-    _lock(event)
+    lock_event(event)
     if event.status == Event.Status.COMPLETED:
         raise EventNotCancellableError(
             "Event is completed and can no longer be cancelled."
@@ -152,8 +205,10 @@ def _cancel_locked(event: Event) -> Event:
     if event.status == Event.Status.CANCELLED:
         raise EventNotCancellableError("Event is already cancelled.")
 
+    buyer_ids = _paid_buyer_ids(event)
     event.status = Event.Status.CANCELLED
     event.save(update_fields=["status", "updated_at"])
+    _email_buyers_on_commit("send_event_cancelled_email", event, buyer_ids)
     return event
 
 
@@ -176,6 +231,16 @@ def visible_events_for_user(user) -> QuerySet:
     if user.role == Roles.ORGANIZER:
         return qs.filter(Q(organizer=user) | Q(status__in=PUBLIC_STATUSES))
     return qs.filter(status__in=PUBLIC_STATUSES)
+
+
+def visible_events_for_ticket_holder(user) -> QuerySet:
+    qs = visible_events_for_user(user)
+    if not user or not user.is_authenticated or user.role == Roles.ADMIN:
+        return qs
+    held = Booking.objects.filter(user=user, status=Booking.Status.CONFIRMED).values(
+        "tickets__event_seat__event"
+    )
+    return qs | Event.objects.filter(status=Event.Status.PENDING_APPROVAL, pk__in=held)
 
 
 def get_visible_event_or_404(user, pk) -> Event:

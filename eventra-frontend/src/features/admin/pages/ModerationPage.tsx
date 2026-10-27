@@ -5,21 +5,33 @@ import { EmptyState } from '@/components/EmptyState'
 import { FormField } from '@/components/FormField'
 import { Notice } from '@/components/Notice'
 import { PageHeader } from '@/components/PageHeader'
+import { StatusBadge } from '@/components/StatusBadge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useTicketTiers } from '@/features/events/hooks'
 import { useEventLookups, type EventRefs } from '@/features/events/lookups'
-import type { EventItem } from '@/features/events/types'
+import { CancelEventButton } from '@/features/organizer/pages/OrganizerEventsPage'
 import { ApiError } from '@/lib/api-client'
 import { formatDateTimeLong, formatMoney } from '@/lib/format'
-import { useApproveEvent, usePendingEvents, useRejectEvent } from '../api'
+import {
+  useApproveEvent,
+  usePendingEvents,
+  useRejectEvent,
+  type PendingEventItem,
+} from '../api'
 import { usePageTitle } from '@/lib/use-page-title'
 import { toast } from 'sonner'
 
 const errorText = (caught: unknown, fallback: string) =>
   caught instanceof ApiError ? caught.message : fallback
 
-function PendingEvent({ event, refs }: { event: EventItem; refs: EventRefs }) {
+function PendingEvent({
+  event,
+  refs,
+}: {
+  event: PendingEventItem
+  refs: EventRefs
+}) {
   const tiers = useTicketTiers(event.id)
   const approve = useApproveEvent()
   const reject = useRejectEvent()
@@ -52,63 +64,78 @@ function PendingEvent({ event, refs }: { event: EventItem; refs: EventRefs }) {
               .filter(Boolean)
               .join('. ')}
           </p>
+          {event.has_paid_bookings && (
+            <div className="mt-3 flex flex-col items-start gap-1.5">
+              <StatusBadge tone="warning">Has paid bookings</StatusBadge>
+              <p className="text-sm text-muted-foreground">
+                Rejecting would leave buyers without a refund. Approve the
+                changes, or cancel the event to refund every buyer.
+              </p>
+            </div>
+          )}
         </div>
         <div className="flex shrink-0 gap-2">
-          <ConfirmDialog
-            open={rejecting}
-            onOpenChange={(open) => {
-              setRejecting(open)
-              if (!open) reject.reset()
-            }}
-            trigger={<Button variant="destructive">Reject</Button>}
-            title="Reject this event?"
-            description="The organizer sees your reason and can edit the event and resubmit it."
-            confirmLabel="Reject event"
-            destructive
-            pending={reject.isPending}
-            onConfirm={() => {
-              // The backend requires a reason; say so here instead of
-              // showing its raw error message
-              if (!reason.trim()) return setReasonMissing(true)
-              reject.mutate(
-                { id: event.id, reason: reason.trim() },
-                {
-                  onSuccess: () => {
-                    setRejecting(false)
-                    toast.success('Event rejected', {
-                      description: 'The organizer can see your reason.',
-                    })
+          {event.has_paid_bookings ? (
+            <CancelEventButton event={event} size="default" />
+          ) : (
+            <ConfirmDialog
+              open={rejecting}
+              onOpenChange={(open) => {
+                setRejecting(open)
+                if (!open) reject.reset()
+              }}
+              trigger={<Button variant="destructive">Reject</Button>}
+              title="Reject this event?"
+              description="The organizer sees your reason and can edit the event and resubmit it."
+              confirmLabel="Reject event"
+              destructive
+              pending={reject.isPending}
+              onConfirm={() => {
+                // The backend requires a reason; say so here instead of
+                // showing its raw error message
+                if (!reason.trim()) return setReasonMissing(true)
+                reject.mutate(
+                  { id: event.id, reason: reason.trim() },
+                  {
+                    onSuccess: () => {
+                      setRejecting(false)
+                      toast.success('Event rejected', {
+                        description: 'The organizer can see your reason.',
+                      })
+                    },
                   },
-                },
-              )
-            }}
-          >
-            <FormField
-              id={`reason-${event.id}`}
-              label="Reason for the organizer"
-              error={
-                reasonMissing ? 'Tell the organizer what to change.' : undefined
-              }
+                )
+              }}
             >
-              {(control) => (
-                <Textarea
-                  {...control}
-                  rows={3}
-                  maxLength={2000}
-                  value={reason}
-                  onChange={(e) => {
-                    setReason(e.target.value)
-                    setReasonMissing(false)
-                  }}
-                />
+              <FormField
+                id={`reason-${event.id}`}
+                label="Reason for the organizer"
+                error={
+                  reasonMissing
+                    ? 'Tell the organizer what to change.'
+                    : undefined
+                }
+              >
+                {(control) => (
+                  <Textarea
+                    {...control}
+                    rows={3}
+                    maxLength={2000}
+                    value={reason}
+                    onChange={(e) => {
+                      setReason(e.target.value)
+                      setReasonMissing(false)
+                    }}
+                  />
+                )}
+              </FormField>
+              {reject.isError && (
+                <Notice tone="error" className="mt-3">
+                  {errorText(reject.error, 'The event could not be rejected.')}
+                </Notice>
               )}
-            </FormField>
-            {reject.isError && (
-              <Notice tone="error" className="mt-3">
-                {errorText(reject.error, 'The event could not be rejected.')}
-              </Notice>
-            )}
-          </ConfirmDialog>
+            </ConfirmDialog>
+          )}
           <Button
             variant="ink"
             disabled={approve.isPending}

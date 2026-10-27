@@ -20,6 +20,7 @@ from apps.bookings.services import (
 )
 from apps.events.factories import EventFactory
 from apps.events.models import Event
+from apps.events.services import EventHasPaidBookingsError, reject_event
 from apps.seating.factories import EventSeatFactory
 from apps.seating.models import EventSeat
 from apps.tickets.models import Ticket
@@ -254,6 +255,63 @@ class TestConfirmPaymentFromWebhook:
         mock_email.assert_called_once()
         mock_broadcast.assert_called_once()
 
+    @pytest.mark.django_db(transaction=True)
+    def test_reject_during_webhook_waits_and_sees_the_paid_booking(self, monkeypatch):
+        for target in (
+            "apps.payments.services.generate_ticket_pdf.delay",
+            "apps.payments.services._enqueue_confirmation_email",
+            "apps.payments.services.broadcast_seat_update",
+        ):
+            monkeypatch.setattr(target, MagicMock())
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        booking, _, payment = _pending_booking_with_held_seat(event=event)
+
+        webhook_inside, release_webhook = threading.Event(), threading.Event()
+        real_bulk_create = Ticket.objects.bulk_create
+
+        def paused_bulk_create(*args, **kwargs):
+            webhook_inside.set()
+            release_webhook.wait(10)
+            return real_bulk_create(*args, **kwargs)
+
+        monkeypatch.setattr(Ticket.objects, "bulk_create", paused_bulk_create)
+        errors = []
+
+        def run(fn):
+            try:
+                fn()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                connection.close()
+
+        webhook = threading.Thread(
+            target=run,
+            args=(
+                lambda: confirm_payment_from_webhook(payment.stripe_payment_intent_id),
+            ),
+        )
+        reject = threading.Thread(
+            target=run,
+            args=(lambda: reject_event(Event.objects.get(pk=event.pk), "No"),),
+        )
+        webhook.start()
+        try:
+            assert webhook_inside.wait(10)
+            reject.start()
+            reject.join(0.5)
+            assert reject.is_alive(), "reject did not wait for the webhook's lock"
+        finally:
+            release_webhook.set()
+            webhook.join(10)
+            reject.join(10)
+
+        assert [type(e) for e in errors] == [EventHasPaidBookingsError]
+        event.refresh_from_db()
+        booking.refresh_from_db()
+        assert event.status == Event.Status.PENDING_APPROVAL
+        assert booking.status == Booking.Status.CONFIRMED
+
     def test_unknown_payment_intent_raises(self):
         with pytest.raises(PaymentNotFoundError):
             confirm_payment_from_webhook("pi_does_not_exist")
@@ -379,11 +437,82 @@ class TestRefundBooking:
         monkeypatch.setattr("apps.payments.services.stripe.Refund.create", refund_mock)
         booking, payment = _confirmed_booking_with_payment()
 
-        refund_booking(booking)
+        assert refund_booking(booking) is True
         assert refund_mock.call_count == 1
 
-        refund_booking(booking)
+        assert refund_booking(booking) is False
         assert refund_mock.call_count == 1
+
+    def test_already_refunded_payment_repairs_a_failed_booking(self, monkeypatch):
+        refund_mock = MagicMock()
+        monkeypatch.setattr("apps.payments.services.stripe.Refund.create", refund_mock)
+        booking, payment = _confirmed_booking_with_payment()
+        Payment.objects.filter(pk=payment.pk).update(status=Payment.Status.REFUNDED)
+        Booking.objects.filter(pk=booking.pk).update(
+            status=Booking.Status.REFUND_FAILED
+        )
+
+        assert refund_booking(booking) is False
+
+        booking.refresh_from_db()
+        assert refund_mock.call_count == 0
+        assert booking.status == Booking.Status.REFUNDED
+        assert all(t.status == Ticket.Status.CANCELLED for t in booking.tickets.all())
+
+
+class TestOverlappingRefundBatches:
+    def _event_with_one_paid_booking(self):
+        event = EventFactory(status="cancelled")
+        booking, payment = _confirmed_booking_with_payment()
+        EventSeat.objects.filter(ticket__booking=booking).update(event=event)
+        return event, booking, payment
+
+    def test_one_refund_email_per_booking(self, monkeypatch):
+        event, booking, payment = self._event_with_one_paid_booking()
+        email = MagicMock()
+        monkeypatch.setattr("apps.notifications.tasks.send_refund_email.delay", email)
+        inner_ran = []
+
+        def stripe_refund(**kwargs):
+            if not inner_ran:
+                inner_ran.append(True)
+                refund_event_bookings(str(event.id))
+
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.Refund.create", stripe_refund
+        )
+
+        refund_event_bookings(str(event.id))
+
+        booking.refresh_from_db()
+        assert booking.status == Booking.Status.REFUNDED
+        assert email.call_count == 1
+
+    def test_a_failed_stripe_call_does_not_undo_the_other_runs_refund(
+        self, monkeypatch
+    ):
+        event, booking, payment = self._event_with_one_paid_booking()
+        email = MagicMock()
+        monkeypatch.setattr("apps.notifications.tasks.send_refund_email.delay", email)
+        calls = []
+
+        def stripe_refund(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                refund_event_bookings(str(event.id))
+                raise stripe.error.IdempotencyError("concurrent request")
+
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.Refund.create", stripe_refund
+        )
+
+        refund_event_bookings(str(event.id))
+
+        booking.refresh_from_db()
+        payment.refresh_from_db()
+        assert payment.status == Payment.Status.REFUNDED
+        assert booking.status == Booking.Status.REFUNDED
+        assert email.call_count == 1
 
 
 class TestRefundEventBookings:

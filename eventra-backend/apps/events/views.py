@@ -1,7 +1,7 @@
 import django_filters
 from django.contrib.postgres.search import SearchQuery, SearchVector
 from django.db import transaction
-from django.db.models import ProtectedError
+from django.db.models import Exists, OuterRef, ProtectedError
 from rest_framework import generics, permissions, status, views, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotAuthenticated, PermissionDenied
@@ -17,23 +17,30 @@ from .models import EVENT_SEARCH_CONFIG, Event, TicketTier
 from .permissions import IsEventOwnerOrAdminForDelete
 from .serializers import (
     EventSerializer,
+    PendingEventSerializer,
     TicketTierSerializer,
     TierSectionMappingSerializer,
 )
 from .services import (
     DuplicateEventSlugError,
+    EventHasPaidBookingsError,
     EventNotCancellableError,
     EventNotDeletableError,
     EventNotEditableError,
     EventNotPendingApprovalError,
     EventRejectionReasonRequiredError,
+    SeatMapLockedError,
     TierPriceImmutableError,
     approve_event,
     cancel_event,
     ensure_can_restore_event,
     ensure_event_deletable,
     ensure_event_editable,
+    ensure_sections_mappable,
+    lock_event,
+    paid_bookings,
     reject_event,
+    visible_events_for_ticket_holder,
     visible_events_for_user,
 )
 
@@ -111,6 +118,10 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
             return Event.all_objects.select_related(
                 "venue", "category", "organizer", "league", "home_team", "away_team"
             ).order_by("-start_datetime", "id")
+        if self.action in ("retrieve", "ticket_tiers") and self.request.method == "GET":
+            return visible_events_for_ticket_holder(user).order_by(
+                "-start_datetime", "id"
+            )
         return visible_events_for_user(user).order_by("-start_datetime", "id")
 
     def get_permissions(self):
@@ -132,14 +143,18 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
 
-        try:
-            ensure_event_editable(instance)
-        except EventNotEditableError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        with transaction.atomic():
+            lock_event(instance)
+            try:
+                ensure_event_editable(instance)
+            except EventNotEditableError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
-        serializer = self.get_serializer(instance, data=request.data, partial=partial)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
+            serializer = self.get_serializer(
+                instance, data=request.data, partial=partial
+            )
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
         return Response(serializer.data)
 
     def destroy(self, request, *args, **kwargs):
@@ -218,7 +233,13 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
             data=request.data, context={"event": event, "request": request}
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        try:
+            with transaction.atomic():
+                lock_event(event)
+                ensure_event_editable(event)
+                serializer.save()
+        except EventNotEditableError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     @action(
@@ -246,8 +267,11 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
 
         try:
             with transaction.atomic():
+                lock_event(event)
+                ensure_event_editable(event)
+                tier.event = event
                 serializer.save()
-        except TierPriceImmutableError as exc:
+        except (EventNotEditableError, TierPriceImmutableError) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
         return Response(serializer.data)
@@ -264,14 +288,23 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
 
         try:
             ensure_event_editable(event)
-        except EventNotEditableError as exc:
+            ensure_sections_mappable(event)
+        except (EventNotEditableError, SeatMapLockedError) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
         serializer = TierSectionMappingSerializer(
             data=request.data, context={"event": event, "ticket_tier": tier}
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        try:
+            with transaction.atomic():
+                lock_event(event)
+                ensure_event_editable(event)
+                ensure_sections_mappable(event)
+                tier.event = event
+                serializer.save()
+        except (EventNotEditableError, SeatMapLockedError) as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
@@ -314,7 +347,7 @@ class EventRejectView(views.APIView):
                 request.data.get("reason") if hasattr(request.data, "get") else None
             )
             reject_event(event, reason if isinstance(reason, str) else "")
-        except EventNotPendingApprovalError as exc:
+        except (EventNotPendingApprovalError, EventHasPaidBookingsError) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         except EventRejectionReasonRequiredError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
@@ -322,12 +355,14 @@ class EventRejectView(views.APIView):
 
 
 class EventPendingListView(generics.ListAPIView):
-    serializer_class = EventSerializer
+    serializer_class = PendingEventSerializer
     permission_classes = [permissions.IsAuthenticated, IsAdmin]
 
     def get_queryset(self):
-        return Event.objects.filter(status=Event.Status.PENDING_APPROVAL).order_by(
-            "created_at"
+        return (
+            Event.objects.filter(status=Event.Status.PENDING_APPROVAL)
+            .annotate(has_paid_bookings=Exists(paid_bookings(OuterRef("pk"))))
+            .order_by("created_at")
         )
 
 

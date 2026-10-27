@@ -71,7 +71,11 @@ export function SeatsPage() {
     event.data ? `Choose seats: ${event.data.title}` : 'Choose seats',
   )
   const { resolve } = useEventLookups(event.data ? [event.data] : undefined)
-  const { seats, connection } = useLiveSeats(id, event.data?.slug)
+  // No live socket when nothing can be booked: ticket holders on an event under
+  // review can't open its seat feed, so it would only retry and then poll a 404
+  const liveSlug =
+    event.data && !bookingBlocker(event.data) ? event.data.slug : undefined
+  const { seats, connection } = useLiveSeats(id, liveSlug)
 
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [message, setMessage] = useState<{

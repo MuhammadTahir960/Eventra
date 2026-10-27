@@ -1,14 +1,25 @@
+import threading
 from unittest.mock import MagicMock
 
 import pytest
+from django.core import mail
+from django.db import connection
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.bookings.factories import BookingFactory
+from apps.bookings.models import Booking
 from apps.common.constants import Roles
+from apps.payments.factories import PaymentFactory
+from apps.payments.models import Payment
+from apps.seating.factories import EventSeatFactory
+from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
+from apps.venues.factories import SeatFactory
 
-from ..factories import EventFactory
+from ..factories import EventFactory, TicketTierFactory
 from ..models import Event
+from ..views import EventViewSet
 
 pytestmark = pytest.mark.django_db
 
@@ -18,6 +29,57 @@ def auth_client(user):
     access = RefreshToken.for_user(user).access_token
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
     return client
+
+
+def _paid_booking(event, user, booking_status=Booking.Status.CONFIRMED):
+    seat = EventSeatFactory(
+        event=event,
+        ticket_tier=TicketTierFactory(event=event),
+        seat=SeatFactory(venue=event.venue),
+    )
+    booking = BookingFactory(user=user, status=booking_status)
+    Ticket.objects.create(booking=booking, event_seat=seat)
+    PaymentFactory(booking=booking, status=Payment.Status.SUCCEEDED)
+    return booking
+
+
+class TestCancelledEventEmails:
+    def test_buyers_get_the_notice_first_then_the_refund_email(
+        self, monkeypatch, django_capture_on_commit_callbacks
+    ):
+        monkeypatch.setattr("apps.payments.services.stripe.Refund.create", MagicMock())
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status=Event.Status.APPROVED, organizer=organizer)
+        buyer = UserFactory()
+        booking = _paid_booking(event, buyer)
+        _paid_booking(event, buyer)
+        _paid_booking(event, UserFactory(), Booking.Status.REFUNDED)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            response = auth_client(organizer).post(f"/events/{event.id}/cancel/")
+
+        assert response.status_code == 200
+        booking.refresh_from_db()
+        assert booking.status == Booking.Status.REFUNDED
+        assert [(m.to, m.subject) for m in mail.outbox] == [
+            ([buyer.email], "An event you booked has been cancelled"),
+            ([buyer.email], "Your Eventra booking has been refunded"),
+            ([buyer.email], "Your Eventra booking has been refunded"),
+        ]
+
+    def test_cancelling_an_unsold_event_sends_no_email(
+        self, monkeypatch, django_capture_on_commit_callbacks
+    ):
+        monkeypatch.setattr(
+            "apps.events.views.refund_event_bookings_task.delay", MagicMock()
+        )
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status=Event.Status.APPROVED, organizer=organizer)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            auth_client(organizer).post(f"/events/{event.id}/cancel/")
+
+        assert mail.outbox == []
 
 
 class TestEventCancelAction:
@@ -135,3 +197,69 @@ class TestEventRetryRefundsAction:
 
         assert response.status_code == 409
         mock_delay.assert_not_called()
+
+
+class TestEditRacingCancel:
+    @pytest.mark.django_db(transaction=True)
+    @pytest.mark.parametrize("edit", ["event", "tier", "tier_create", "mapping"])
+    def test_edit_that_read_before_the_cancel_gets_409(self, monkeypatch, edit):
+        monkeypatch.setattr(
+            "apps.events.views.refund_event_bookings_task.delay", MagicMock()
+        )
+        owner = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(organizer=owner, status=Event.Status.APPROVED)
+        tier = TicketTierFactory(event=event)
+        request = {
+            "event": ("patch", f"/events/{event.id}/", {"description": "Edited"}),
+            "tier": (
+                "patch",
+                f"/events/{event.id}/ticket-tiers/{tier.id}/",
+                {"price": "12.00"},
+            ),
+            "tier_create": (
+                "post",
+                f"/events/{event.id}/ticket-tiers/",
+                {"name": "Late", "price": "20.00"},
+            ),
+            "mapping": (
+                "post",
+                f"/events/{event.id}/ticket-tiers/{tier.id}/sections/",
+                {"section": "Upper"},
+            ),
+        }[edit]
+
+        read_done, release = threading.Event(), threading.Event()
+        original_get_object = EventViewSet.get_object
+
+        def paused_get_object(self):
+            obj = original_get_object(self)
+            if self.request.user == owner:
+                read_done.set()
+                release.wait(10)
+            return obj
+
+        monkeypatch.setattr(EventViewSet, "get_object", paused_get_object)
+        out = {}
+
+        def owner_edit():
+            try:
+                method, url, data = request
+                out["response"] = getattr(auth_client(owner), method)(
+                    url, data, format="json"
+                )
+            finally:
+                connection.close()
+
+        thread = threading.Thread(target=owner_edit)
+        thread.start()
+        assert read_done.wait(10)
+        cancel = auth_client(UserFactory(role=Roles.ADMIN)).post(
+            f"/events/{event.id}/cancel/"
+        )
+        assert cancel.status_code == 200
+        release.set()
+        thread.join(15)
+
+        assert out["response"].status_code == 409
+        event.refresh_from_db()
+        assert event.status == Event.Status.CANCELLED

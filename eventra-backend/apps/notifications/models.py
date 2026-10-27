@@ -10,6 +10,8 @@ class Notification(UUIDBaseModel):
         PAYOUT_READY = "payout_ready", "Payout Ready"
         PAYOUT_SETTLED = "payout_settled", "Payout Settled"
         EVENT_REMINDER = "event_reminder", "Event Reminder"
+        EVENT_UPDATED = "event_updated", "Event Updated"
+        EVENT_CANCELLED = "event_cancelled", "Event Cancelled"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"

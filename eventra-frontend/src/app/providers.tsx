@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useEffect, type ReactNode } from 'react'
 import { Toaster } from 'sonner'
 import { restoreSession } from '@/features/auth/session'
+import { clearCacheOnUserChange } from './clear-cache-on-user-change'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -13,6 +14,7 @@ const queryClient = new QueryClient({
     },
   },
 })
+clearCacheOnUserChange(queryClient)
 
 export function AppProviders({ children }: { children: ReactNode }) {
   // After a reload, re-validate the saved refresh token and load the profile

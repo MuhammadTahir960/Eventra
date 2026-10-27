@@ -6,6 +6,7 @@ import { Notice } from '@/components/Notice'
 import { StatusBadge } from '@/components/StatusBadge'
 import { TicketStub } from '@/components/TicketStub'
 import { ButtonLink } from '@/components/ui/button-link'
+import { useAuth } from '@/features/auth/auth-store'
 import { useLeagues } from '@/features/catalog/hooks'
 import { ApiError } from '@/lib/api-client'
 import { formatDateTimeLong, formatMoney } from '@/lib/format'
@@ -44,6 +45,7 @@ function lowestPrice(tiers: TicketTier[]): string | null {
 export function EventDetailPage() {
   const { id } = useParams()
   const event = useEvent(id)
+  const { user } = useAuth()
   usePageTitle(event.data?.title)
   const tiers = useTicketTiers(id)
   const { resolve } = useEventLookups(event.data ? [event.data] : undefined)
@@ -96,6 +98,11 @@ export function EventDetailPage() {
   const blocker = bookingBlocker(item)
   const from = tiers.data ? lowestPrice(tiers.data) : null
   const seatsLink = `/events/${item.id}/seats`
+  // Buyers only reach a pending event after an organizer edit sends it back to review
+  const underReview =
+    item.status === 'pending_approval' &&
+    user?.role !== 'admin' &&
+    user?.id !== item.organizer
 
   return (
     <article className="gutter mx-auto max-w-[1200px] pt-6 pb-24 lg:pb-0">
@@ -146,6 +153,15 @@ export function EventDetailPage() {
             <Notice tone="error">
               <strong className="font-semibold">Rejected:</strong>{' '}
               {item.rejection_reason}
+            </Notice>
+          )}
+
+          {underReview && (
+            <Notice>
+              <strong className="font-semibold">Changes under review.</strong>{' '}
+              The organizer updated this event and we're checking the changes.
+              Your tickets are still valid. If the event is cancelled, you're
+              refunded in full.
             </Notice>
           )}
 

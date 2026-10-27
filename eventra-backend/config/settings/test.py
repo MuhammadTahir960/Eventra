@@ -3,6 +3,8 @@ from .dev import *  # noqa: F401,F403
 CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True
 
+PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+
 import tempfile  # noqa: E402
 from pathlib import Path  # noqa: E402
 

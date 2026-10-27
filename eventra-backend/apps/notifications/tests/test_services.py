@@ -12,12 +12,15 @@ from apps.payouts.factories import OrganizerPayoutFactory
 from apps.seating.factories import EventSeatFactory
 from apps.seating.models import EventSeat
 from apps.tickets.models import Ticket
+from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory
 
 from ..models import Notification
 from ..services import (
     send_booking_confirmation_email,
+    send_event_cancelled_notice,
     send_event_reminders_batch,
+    send_event_updated_notice,
     send_payout_ready_email,
     send_payout_settled_email,
     send_refund_confirmation_email,
@@ -35,6 +38,50 @@ def _booking_with_tickets(n_tickets=2):
             booking=booking, event_seat=seat, status=Ticket.Status.VALID
         )
     return booking
+
+
+class TestEventBuyerNotices:
+    def test_updated_notice_has_a_constant_subject_and_the_new_details(self):
+        event = EventFactory(status="approved", title="Jazz Night")
+        buyer = UserFactory()
+
+        send_event_updated_notice(event, buyer)
+
+        [sent] = mail.outbox
+        assert sent.to == [buyer.email]
+        assert sent.subject == "An event you booked has been updated"
+        assert "Jazz Night" in sent.body and event.venue.name in sent.body
+        notification = Notification.objects.get(event=event)
+        assert notification.type == Notification.NotificationType.EVENT_UPDATED
+        assert notification.status == Notification.Status.SENT
+
+    def test_cancelled_notice_promises_a_refund(self):
+        event = EventFactory(status="cancelled", title="Jazz Night")
+
+        send_event_cancelled_notice(event, UserFactory())
+
+        [sent] = mail.outbox
+        assert sent.subject == "An event you booked has been cancelled"
+        assert "Jazz Night" in sent.body and "refund" in sent.body
+        assert Notification.objects.get(event=event).type == (
+            Notification.NotificationType.EVENT_CANCELLED
+        )
+
+    def test_failure_records_a_failed_notification_and_reraises_for_retry(
+        self, monkeypatch
+    ):
+        event = EventFactory(status="cancelled")
+        monkeypatch.setattr(
+            "apps.notifications.services.send_mail",
+            MagicMock(side_effect=RuntimeError("SMTP is down")),
+        )
+
+        with pytest.raises(RuntimeError):
+            send_event_cancelled_notice(event, UserFactory())
+
+        assert Notification.objects.get(event=event).status == (
+            Notification.Status.FAILED
+        )
 
 
 class TestSendBookingConfirmationEmail:

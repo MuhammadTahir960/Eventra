@@ -1,6 +1,7 @@
 from django.contrib import admin
 
 from .models import Event, TicketTier, TierSectionMapping
+from .services import TierPriceImmutableError, ensure_tier_price_mutable
 
 
 @admin.register(Event)
@@ -27,6 +28,14 @@ class TicketTierAdmin(admin.ModelAdmin):
     list_display = ("name", "event", "price")
     search_fields = ("name", "event__title")
     list_select_related = ("event",)
+
+    def get_readonly_fields(self, request, obj=None):
+        if obj is not None:
+            try:
+                ensure_tier_price_mutable(obj)
+            except TierPriceImmutableError:
+                return ("price",)
+        return ()
 
 
 @admin.register(TierSectionMapping)

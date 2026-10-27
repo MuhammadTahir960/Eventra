@@ -9,12 +9,42 @@ from apps.events.factories import EventFactory, TicketTierFactory
 from apps.events.models import Event
 from apps.seating.factories import EventSeatFactory
 from apps.tickets.models import Ticket
+from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory
 
 from ..models import Notification
-from ..tasks import send_confirmation_email, send_event_reminders, send_refund_email
+from ..tasks import (
+    send_confirmation_email,
+    send_event_cancelled_email,
+    send_event_reminders,
+    send_event_updated_email,
+    send_refund_email,
+)
 
 pytestmark = pytest.mark.django_db
+
+
+class TestEventBuyerNoticeTasks:
+    @pytest.mark.parametrize(
+        "task", [send_event_updated_email, send_event_cancelled_email]
+    )
+    def test_sends_to_one_buyer(self, task):
+        event = EventFactory(status="approved")
+        buyer = UserFactory()
+
+        task(str(event.id), str(buyer.id))
+
+        assert [m.to for m in mail.outbox] == [[buyer.email]]
+
+    @pytest.mark.parametrize(
+        "task", [send_event_updated_email, send_event_cancelled_email]
+    )
+    def test_skips_an_account_closed_since_the_change(self, task):
+        event = EventFactory(status="approved")
+
+        task(str(event.id), str(UserFactory(is_active=False).id))
+
+        assert mail.outbox == []
 
 
 class TestSendConfirmationEmailTask:

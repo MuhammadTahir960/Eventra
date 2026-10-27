@@ -163,6 +163,62 @@ def send_refund_confirmation_email(booking, *, event_cancelled: bool = True) -> 
         notification.save()
 
 
+def _email_buyer(event, user, notification_type, subject, body) -> None:
+    notification = Notification(
+        user=user,
+        event=event,
+        type=notification_type,
+        status=Notification.Status.FAILED,
+        message=f"{notification_type}: {event.id}",
+    )
+    try:
+        send_mail(
+            subject=subject,
+            message=f"Hi {user.first_name or user.email},\n\n{body}",
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to send %s email for event %s to user %s",
+            notification_type,
+            event.id,
+            user.id,
+        )
+        notification.save()
+        raise
+    notification.status = Notification.Status.SENT
+    notification.sent_at = timezone.now()
+    notification.save()
+
+
+def send_event_updated_notice(event, user) -> None:
+    _email_buyer(
+        event,
+        user,
+        Notification.NotificationType.EVENT_UPDATED,
+        "An event you booked has been updated",
+        f'The organizer of "{event.title}" changed some details, and the changes '
+        "have been approved. It now starts on "
+        f"{event.start_datetime:%Y-%m-%d %H:%M} UTC at {event.venue.name}.\n\n"
+        "Your tickets are still valid. The full details are on the event page in "
+        "your Eventra account.",
+    )
+
+
+def send_event_cancelled_notice(event, user) -> None:
+    _email_buyer(
+        event,
+        user,
+        Notification.NotificationType.EVENT_CANCELLED,
+        "An event you booked has been cancelled",
+        f'"{event.title}" on {event.start_datetime:%Y-%m-%d %H:%M} UTC has been '
+        "cancelled. You'll get a full refund to your original payment method, and "
+        "we'll email you again once it's done. You don't need to do anything.",
+    )
+
+
 REMINDER_WINDOW_HOURS = 24
 REMINDER_CLAIM_STALE_MINUTES = 15
 REMINDER_MAX_ATTEMPTS = 3

@@ -3,12 +3,14 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
+from django.core import mail
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.bookings.factories import BookingFactory
+from apps.bookings.models import Booking
 from apps.categories.factories import CategoryFactory
 from apps.common.constants import Roles
 from apps.seating.factories import EventSeatFactory
@@ -251,6 +253,20 @@ class TestListEvents:
         assert titles == {"Jazz Night"}
 
 
+def _sell_ticket(event, booking_status=Booking.Status.CONFIRMED, user=None):
+    seat = EventSeatFactory(
+        event=event,
+        ticket_tier=TicketTierFactory(event=event),
+        seat=SeatFactory(venue=event.venue),
+    )
+    booking = (
+        BookingFactory(status=booking_status, user=user)
+        if user
+        else BookingFactory(status=booking_status)
+    )
+    Ticket.objects.create(booking=booking, event_seat=seat)
+
+
 # ==================================================
 # GET /events/{id}/ (retrieve)
 # ==================================================
@@ -291,6 +307,45 @@ class TestRetrieveEvent:
         event.save(update_fields=["is_active"])
         response = admin_client.get(f"/events/{event.pk}/")
         assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_ticket_holder_can_retrieve_pending_event_and_tiers(self, attendee_user):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(event, user=attendee_user)
+        client = auth_client(attendee_user)
+
+        assert client.get(f"/events/{event.pk}/").status_code == status.HTTP_200_OK
+        tiers = client.get(f"/events/{event.pk}/ticket-tiers/")
+        assert tiers.status_code == status.HTTP_200_OK
+        assert len(tiers.data) == 1
+
+    @pytest.mark.parametrize(
+        "booking_status", [Booking.Status.PENDING, Booking.Status.REFUNDED]
+    )
+    def test_unpaid_or_refunded_booking_does_not_reveal_pending_event(
+        self, attendee_user, booking_status
+    ):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(event, booking_status, user=attendee_user)
+        response = auth_client(attendee_user).get(f"/events/{event.pk}/")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_other_users_ticket_does_not_reveal_pending_event(self, attendee_user):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(event)
+        response = auth_client(attendee_user).get(f"/events/{event.pk}/")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_ticket_holder_cannot_see_rejected_event(self, attendee_user):
+        event = EventFactory(status=Event.Status.REJECTED)
+        _sell_ticket(event, user=attendee_user)
+        response = auth_client(attendee_user).get(f"/events/{event.pk}/")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_ticket_holder_pending_event_stays_out_of_list(self, attendee_user):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(event, user=attendee_user)
+        response = auth_client(attendee_user).get("/events/")
+        assert str(event.pk) not in {row["id"] for row in results(response)}
 
 
 # ==================================================
@@ -343,7 +398,7 @@ class TestCreateEvent:
         response = client.post(
             self.url, _event_payload(title="My Great Event"), format="json"
         )
-        assert response.data["slug"] == "my-great-event"
+        assert response.data["slug"].startswith("my-great-event-")
 
 
 # ==================================================
@@ -808,6 +863,57 @@ class TestApproveRejectEvent:
         response = admin_client.post(f"/admin/events/{event.pk}/approve/")
         assert response.status_code == status.HTTP_409_CONFLICT
 
+    def test_approving_a_sold_event_emails_its_buyers(
+        self, admin_client, attendee_user, django_capture_on_commit_callbacks
+    ):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(event, user=attendee_user)
+        _sell_ticket(event, user=attendee_user)
+        _sell_ticket(event, Booking.Status.REFUNDED)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            response = admin_client.post(f"/admin/events/{event.pk}/approve/")
+
+        assert response.status_code == status.HTTP_200_OK
+        assert [m.to for m in mail.outbox] == [[attendee_user.email]]
+
+    def test_approving_an_unsold_event_sends_no_email(
+        self, admin_client, django_capture_on_commit_callbacks
+    ):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            admin_client.post(f"/admin/events/{event.pk}/approve/")
+
+        assert mail.outbox == []
+
+    def test_reject_event_with_paid_bookings_returns_409(self, admin_client):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(event)
+
+        response = admin_client.post(
+            f"/admin/events/{event.pk}/reject/", {"reason": "Wrong date."}
+        )
+
+        assert response.status_code == status.HTTP_409_CONFLICT
+        assert "Cancel it instead" in response.data["detail"]
+        event.refresh_from_db()
+        assert event.status == Event.Status.PENDING_APPROVAL
+        assert event.rejection_reason == ""
+
+    def test_reject_allowed_when_bookings_are_not_confirmed(self, admin_client):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(event, Booking.Status.REFUNDED)
+        _sell_ticket(event, Booking.Status.PENDING)
+
+        response = admin_client.post(
+            f"/admin/events/{event.pk}/reject/", {"reason": "Wrong date."}
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        event.refresh_from_db()
+        assert event.status == Event.Status.REJECTED
+
     def test_organizer_cannot_approve(self, organizer_user):
         event = EventFactory(status=Event.Status.PENDING_APPROVAL)
         client = auth_client(organizer_user)
@@ -865,6 +971,18 @@ class TestEventPendingListView:
 
         ids = [row["id"] for row in results(response)]
         assert ids == [str(first.pk), str(second.pk)]
+
+    def test_flags_events_with_paid_bookings(self, admin_client):
+        sold = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(sold)
+        _sell_ticket(sold)
+        unsold = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        _sell_ticket(unsold, Booking.Status.REFUNDED)
+
+        response = admin_client.get(self.url)
+
+        flags = {row["id"]: row["has_paid_bookings"] for row in results(response)}
+        assert flags == {str(sold.pk): True, str(unsold.pk): False}
 
     def test_non_admin_rejected(self, organizer_user):
         EventFactory(status=Event.Status.PENDING_APPROVAL)
@@ -1144,6 +1262,69 @@ class TestTierSectionMappings:
             format="json",
         )
         assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_mapping_on_approved_organizer_event_sends_it_back_to_review(
+        self, organizer_user
+    ):
+        event = EventFactory(organizer=organizer_user, status=Event.Status.APPROVED)
+        tier = TicketTierFactory(event=event, price=Decimal("999.99"))
+
+        response = auth_client(organizer_user).post(
+            f"/events/{event.pk}/ticket-tiers/{tier.pk}/sections/",
+            {"section": "Upper"},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        event.refresh_from_db()
+        assert event.status == Event.Status.PENDING_APPROVAL
+
+    def test_rejected_duplicate_mapping_leaves_the_status_alone(self, organizer_user):
+        event = EventFactory(organizer=organizer_user, status=Event.Status.APPROVED)
+        tier = TicketTierFactory(event=event)
+        TierSectionMappingFactory(event=event, ticket_tier=tier, section="A")
+
+        response = auth_client(organizer_user).post(
+            f"/events/{event.pk}/ticket-tiers/{tier.pk}/sections/",
+            {"section": "A"},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        event.refresh_from_db()
+        assert event.status == Event.Status.APPROVED
+
+    def test_mapping_on_admin_event_keeps_it_approved(self, admin_user):
+        event = EventFactory(organizer=admin_user, status=Event.Status.APPROVED)
+        tier = TicketTierFactory(event=event)
+
+        response = auth_client(admin_user).post(
+            f"/events/{event.pk}/ticket-tiers/{tier.pk}/sections/",
+            {"section": "Upper"},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        event.refresh_from_db()
+        assert event.status == Event.Status.APPROVED
+
+    def test_mapping_after_seats_exist_returns_409(self, organizer_user):
+        event = EventFactory(organizer=organizer_user, status=Event.Status.APPROVED)
+        tier = TicketTierFactory(event=event)
+        EventSeatFactory(
+            event=event, ticket_tier=tier, seat=SeatFactory(venue=event.venue)
+        )
+
+        response = auth_client(organizer_user).post(
+            f"/events/{event.pk}/ticket-tiers/{tier.pk}/sections/",
+            {"section": "Upper"},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_409_CONFLICT
+        assert not TierSectionMapping.objects.filter(event=event).exists()
+        event.refresh_from_db()
+        assert event.status == Event.Status.APPROVED
 
     def test_cannot_add_section_mapping_on_completed_event(self, organizer_user):
         event = EventFactory(organizer=organizer_user, status=Event.Status.COMPLETED)
