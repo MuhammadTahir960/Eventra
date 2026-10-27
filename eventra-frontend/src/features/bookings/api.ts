@@ -38,7 +38,19 @@ export interface CheckoutContext {
   seats: EventSeat[]
 }
 
-const contextKey = (bookingId: string) => `eventra-checkout-${bookingId}`
+const CONTEXT_PREFIX = 'eventra-checkout-'
+const contextKey = (bookingId: string) => `${CONTEXT_PREFIX}${bookingId}`
+
+// On sign-out: the summaries name the previous user's event and seats
+export function clearCheckoutContexts() {
+  try {
+    for (const key of Object.keys(sessionStorage)) {
+      if (key.startsWith(CONTEXT_PREFIX)) sessionStorage.removeItem(key)
+    }
+  } catch {
+    // Storage blocked: nothing was saved either
+  }
+}
 
 export function saveCheckoutContext(
   bookingId: string,
