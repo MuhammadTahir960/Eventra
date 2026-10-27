@@ -201,7 +201,7 @@ class TestEventRetryRefundsAction:
 
 class TestEditRacingCancel:
     @pytest.mark.django_db(transaction=True)
-    @pytest.mark.parametrize("edit", ["event", "tier", "mapping"])
+    @pytest.mark.parametrize("edit", ["event", "tier", "tier_create", "mapping"])
     def test_edit_that_read_before_the_cancel_gets_409(self, monkeypatch, edit):
         monkeypatch.setattr(
             "apps.events.views.refund_event_bookings_task.delay", MagicMock()
@@ -215,6 +215,11 @@ class TestEditRacingCancel:
                 "patch",
                 f"/events/{event.id}/ticket-tiers/{tier.id}/",
                 {"price": "12.00"},
+            ),
+            "tier_create": (
+                "post",
+                f"/events/{event.id}/ticket-tiers/",
+                {"name": "Late", "price": "20.00"},
             ),
             "mapping": (
                 "post",

@@ -233,7 +233,13 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
             data=request.data, context={"event": event, "request": request}
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        try:
+            with transaction.atomic():
+                lock_event(event)
+                ensure_event_editable(event)
+                serializer.save()
+        except EventNotEditableError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     @action(
