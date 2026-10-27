@@ -1,3 +1,4 @@
+import re
 from datetime import timedelta
 
 import pytest
@@ -21,7 +22,25 @@ pytestmark = pytest.mark.django_db
 
 def test_slug_generated_on_create():
     event = EventFactory(title="Summer Music Festival")
-    assert event.slug == "summer-music-festival"
+    assert re.fullmatch(r"summer-music-festival-[0-9a-f]{6}", event.slug)
+
+
+@pytest.mark.parametrize(
+    "hidden_status", [Event.Status.PENDING_APPROVAL, Event.Status.REJECTED]
+)
+def test_slug_does_not_reveal_a_hidden_event_with_the_same_title(hidden_status):
+    EventFactory(title="Orchid Night", status=hidden_status)
+    deleted = EventFactory(title="Deleted Night")
+    deleted.is_active = False
+    deleted.save(update_fields=["is_active"])
+
+    for title, base in [
+        ("Orchid Night", "orchid-night"),
+        ("Deleted Night", "deleted-night"),
+        ("Fresh Night", "fresh-night"),
+    ]:
+        probe = EventFactory(title=title)
+        assert re.fullmatch(rf"{base}-[0-9a-f]{{6}}", probe.slug)
 
 
 def test_slug_frozen_after_creation_even_when_title_changes():
@@ -70,8 +89,8 @@ def test_duplicate_active_slug_rejected_at_db_level():
 def test_same_title_gets_a_distinct_generated_slug():
     first = EventFactory(title="Summer Concert")
     second = EventFactory(title="Summer Concert")
-    assert first.slug == "summer-concert"
     assert second.slug != first.slug
+    assert first.slug.startswith("summer-concert-")
     assert second.slug.startswith("summer-concert-")
 
 

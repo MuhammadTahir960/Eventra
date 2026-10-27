@@ -108,10 +108,10 @@ class Event(SoftDeleteModel):
 
     def _generate_unique_slug(self) -> str:
         base = slugify(self.title)[:80].strip("-") or "event"
-        slug = base
-        while Event.all_objects.filter(slug=slug).exists():
+        while True:
             slug = f"{base}-{uuid.uuid4().hex[:6]}"
-        return slug
+            if not Event.all_objects.filter(slug=slug).exists():
+                return slug
 
     def save(self, *args, **kwargs):
         is_new = self._state.adding

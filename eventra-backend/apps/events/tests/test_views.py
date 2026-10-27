@@ -398,7 +398,7 @@ class TestCreateEvent:
         response = client.post(
             self.url, _event_payload(title="My Great Event"), format="json"
         )
-        assert response.data["slug"] == "my-great-event"
+        assert response.data["slug"].startswith("my-great-event-")
 
 
 # ==================================================
