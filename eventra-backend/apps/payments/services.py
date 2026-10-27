@@ -176,13 +176,15 @@ def confirm_payment_from_webhook(payment_intent_id: str) -> Booking:
             )
 
     if not fulfillable:
-        refund_booking(booking)
-        try:
-            from apps.notifications.tasks import send_refund_email
+        if refund_booking(booking):
+            try:
+                from apps.notifications.tasks import send_refund_email
 
-            send_refund_email.delay(str(booking.id), False)
-        except Exception:
-            logger.exception("Refund notice enqueue failed for booking %s", booking.id)
+                send_refund_email.delay(str(booking.id), False)
+            except Exception:
+                logger.exception(
+                    "Refund notice enqueue failed for booking %s", booking.id
+                )
         booking.refresh_from_db()
 
     return booking
@@ -224,34 +226,35 @@ def _enqueue_confirmation_email(booking_id: str) -> None:
     send_confirmation_email.delay(booking_id)
 
 
-def refund_booking(booking: Booking) -> None:
+def refund_booking(booking: Booking) -> bool:
     payment = Payment.objects.get(booking=booking)
 
-    if payment.status == Payment.Status.REFUNDED:
-        return
-
-    try:
-        stripe.Refund.create(
-            payment_intent=payment.stripe_payment_intent_id,
-            idempotency_key=f"refund-{payment.id}",
-        )
-    except stripe.error.StripeError as exc:
-        raise PaymentGatewayError(str(exc)) from exc
+    if payment.status != Payment.Status.REFUNDED:
+        try:
+            stripe.Refund.create(
+                payment_intent=payment.stripe_payment_intent_id,
+                idempotency_key=f"refund-{payment.id}",
+            )
+        except stripe.error.StripeError as exc:
+            raise PaymentGatewayError(str(exc)) from exc
 
     with transaction.atomic():
         payment = Payment.objects.select_for_update().get(id=payment.id)
-        if payment.status == Payment.Status.REFUNDED:
-            return
+        refunded_now = payment.status != Payment.Status.REFUNDED
+        if refunded_now:
+            payment.status = Payment.Status.REFUNDED
+            payment.save(update_fields=["status", "updated_at"])
 
-        payment.status = Payment.Status.REFUNDED
-        payment.save(update_fields=["status", "updated_at"])
-
-        booking.tickets.update(
-            status=Ticket.Status.CANCELLED, updated_at=timezone.now()
+        now = timezone.now()
+        booking.tickets.exclude(status=Ticket.Status.CANCELLED).update(
+            status=Ticket.Status.CANCELLED, updated_at=now
         )
-
+        Booking.objects.filter(id=booking.id).exclude(
+            status=Booking.Status.REFUNDED
+        ).update(status=Booking.Status.REFUNDED, updated_at=now)
         booking.status = Booking.Status.REFUNDED
-        booking.save(update_fields=["status", "updated_at"])
+
+    return refunded_now
 
 
 def refund_event_bookings(event_id, *, retry_failed: bool = False) -> None:
@@ -266,14 +269,16 @@ def refund_event_bookings(event_id, *, retry_failed: bool = False) -> None:
 
     for booking in bookings:
         try:
-            refund_booking(booking)
+            refunded = refund_booking(booking)
         except Exception:
             logger.exception(
                 "Refund failed for booking %s (event %s)", booking.id, event_id
             )
-            Booking.objects.filter(id=booking.id).update(
+            Booking.objects.filter(id=booking.id, status__in=statuses).update(
                 status=Booking.Status.REFUND_FAILED, updated_at=timezone.now()
             )
+            continue
+        if not refunded:
             continue
 
         try:
@@ -320,7 +325,7 @@ def refund_orphaned_payments() -> int:
             payment.booking.status,
         )
         try:
-            refund_booking(payment.booking)
+            refunded_now = refund_booking(payment.booking)
         except Exception:
             Payment.objects.filter(pk=payment.pk).update(
                 refund_attempts=F("refund_attempts") + 1
@@ -340,6 +345,8 @@ def refund_orphaned_payments() -> int:
                     attempts,
                     ORPHANED_PAYMENT_MAX_ATTEMPTS,
                 )
+            continue
+        if not refunded_now:
             continue
         refunded += 1
         try:

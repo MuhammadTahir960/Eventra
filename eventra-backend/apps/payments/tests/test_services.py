@@ -379,11 +379,82 @@ class TestRefundBooking:
         monkeypatch.setattr("apps.payments.services.stripe.Refund.create", refund_mock)
         booking, payment = _confirmed_booking_with_payment()
 
-        refund_booking(booking)
+        assert refund_booking(booking) is True
         assert refund_mock.call_count == 1
 
-        refund_booking(booking)
+        assert refund_booking(booking) is False
         assert refund_mock.call_count == 1
+
+    def test_already_refunded_payment_repairs_a_failed_booking(self, monkeypatch):
+        refund_mock = MagicMock()
+        monkeypatch.setattr("apps.payments.services.stripe.Refund.create", refund_mock)
+        booking, payment = _confirmed_booking_with_payment()
+        Payment.objects.filter(pk=payment.pk).update(status=Payment.Status.REFUNDED)
+        Booking.objects.filter(pk=booking.pk).update(
+            status=Booking.Status.REFUND_FAILED
+        )
+
+        assert refund_booking(booking) is False
+
+        booking.refresh_from_db()
+        assert refund_mock.call_count == 0
+        assert booking.status == Booking.Status.REFUNDED
+        assert all(t.status == Ticket.Status.CANCELLED for t in booking.tickets.all())
+
+
+class TestOverlappingRefundBatches:
+    def _event_with_one_paid_booking(self):
+        event = EventFactory(status="cancelled")
+        booking, payment = _confirmed_booking_with_payment()
+        EventSeat.objects.filter(ticket__booking=booking).update(event=event)
+        return event, booking, payment
+
+    def test_one_refund_email_per_booking(self, monkeypatch):
+        event, booking, payment = self._event_with_one_paid_booking()
+        email = MagicMock()
+        monkeypatch.setattr("apps.notifications.tasks.send_refund_email.delay", email)
+        inner_ran = []
+
+        def stripe_refund(**kwargs):
+            if not inner_ran:
+                inner_ran.append(True)
+                refund_event_bookings(str(event.id))
+
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.Refund.create", stripe_refund
+        )
+
+        refund_event_bookings(str(event.id))
+
+        booking.refresh_from_db()
+        assert booking.status == Booking.Status.REFUNDED
+        assert email.call_count == 1
+
+    def test_a_failed_stripe_call_does_not_undo_the_other_runs_refund(
+        self, monkeypatch
+    ):
+        event, booking, payment = self._event_with_one_paid_booking()
+        email = MagicMock()
+        monkeypatch.setattr("apps.notifications.tasks.send_refund_email.delay", email)
+        calls = []
+
+        def stripe_refund(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                refund_event_bookings(str(event.id))
+                raise stripe.error.IdempotencyError("concurrent request")
+
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.Refund.create", stripe_refund
+        )
+
+        refund_event_bookings(str(event.id))
+
+        booking.refresh_from_db()
+        payment.refresh_from_db()
+        assert payment.status == Payment.Status.REFUNDED
+        assert booking.status == Booking.Status.REFUNDED
+        assert email.call_count == 1
 
 
 class TestRefundEventBookings:

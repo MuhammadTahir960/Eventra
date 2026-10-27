@@ -14,6 +14,7 @@ from apps.tickets.models import Ticket
 
 from ..factories import PaymentFactory
 from ..models import Payment
+from ..services import refund_orphaned_payments
 from ..tasks import refund_event_bookings_task, sweep_unrefunded_cancelled_events
 
 pytestmark = pytest.mark.django_db
@@ -96,8 +97,9 @@ class TestSweepUnrefundedCancelledEvents:
     def _mocks(self, monkeypatch):
         self.refund = MagicMock()
         monkeypatch.setattr("apps.payments.services.stripe.Refund.create", self.refund)
+        self.email = MagicMock()
         monkeypatch.setattr(
-            "apps.notifications.tasks.send_refund_email.delay", MagicMock()
+            "apps.notifications.tasks.send_refund_email.delay", self.email
         )
 
     def test_recovers_confirmed_bookings_a_crashed_batch_never_reached(self):
@@ -167,6 +169,20 @@ class TestSweepUnrefundedCancelledEvents:
         payment.refresh_from_db()
         assert payment.status == Payment.Status.REFUNDED
         assert booking.status == Booking.Status.REFUNDED
+
+    def test_orphan_refunded_by_another_path_meanwhile_gets_no_second_email(self):
+        booking, payment = self._orphan(Booking.Status.CANCELLED, age_minutes=30)
+
+        def refunded_elsewhere(**kwargs):
+            Payment.objects.filter(id=payment.id).update(status=Payment.Status.REFUNDED)
+
+        self.refund.side_effect = refunded_elsewhere
+
+        assert refund_orphaned_payments() == 0
+
+        booking.refresh_from_db()
+        assert booking.status == Booking.Status.REFUNDED
+        self.email.assert_not_called()
 
     def test_recent_orphan_is_left_for_the_in_flight_webhook(self):
         _, payment = self._orphan(Booking.Status.PENDING, age_minutes=1)
