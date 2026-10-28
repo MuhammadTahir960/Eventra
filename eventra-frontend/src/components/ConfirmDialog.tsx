@@ -1,5 +1,5 @@
 import { AlertDialog } from '@base-ui/react/alert-dialog'
-import type { ReactElement, ReactNode } from 'react'
+import { useEffect, useRef, type ReactElement, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 
 // For actions that can't be undone (cancel an event, reject, settle).
@@ -32,6 +32,18 @@ export function ConfirmDialog({
   // Replaces the confirm button, e.g. with a HoldToConfirmButton
   confirmControl?: ReactNode
 }) {
+  // A double click lands before `pending` re-renders, so lock on the first
+  // click and unlock once a render shows the action isn't running
+  const locked = useRef(false)
+  useEffect(() => {
+    if (!pending) locked.current = false
+  })
+  function confirm() {
+    if (locked.current || pending) return
+    locked.current = true
+    onConfirm()
+  }
+
   return (
     <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
       <AlertDialog.Trigger render={trigger} />
@@ -56,7 +68,7 @@ export function ConfirmDialog({
               <Button
                 variant={destructive ? 'destructive' : 'ink'}
                 disabled={pending}
-                onClick={onConfirm}
+                onClick={confirm}
               >
                 {pending ? 'Working…' : confirmLabel}
               </Button>
