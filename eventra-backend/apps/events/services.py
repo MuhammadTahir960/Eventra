@@ -58,9 +58,7 @@ SENSITIVE_EVENT_FIELDS = frozenset(
 )
 COMPLETE_PAST_EVENTS_BUFFER_HOURS = 2
 MAX_RUNNING_LATE_DAYS = 7
-RUNNING_LATE_OPENS_HOURS = (
-    24
-)
+RUNNING_LATE_OPENS_HOURS = 24
 
 
 def ensure_event_deletable(event: Event) -> None:
