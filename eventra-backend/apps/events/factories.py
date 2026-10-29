@@ -29,6 +29,13 @@ class EventFactory(DjangoModelFactory):
     end_datetime = factory.LazyFunction(
         lambda: timezone.now() + timedelta(days=7, hours=3)
     )
+    completed_at = factory.LazyAttribute(
+        lambda o: (
+            timezone.now() - timedelta(days=2)
+            if o.status == Event.Status.COMPLETED
+            else None
+        )
+    )
 
 
 class TicketTierFactory(DjangoModelFactory):

@@ -59,39 +59,6 @@ def send_booking_confirmation_email(booking) -> None:
         notification.save()
 
 
-def send_payout_ready_email(payout) -> None:
-    organizer = payout.event.organizer
-    notification = Notification(
-        user=organizer,
-        type=Notification.NotificationType.PAYOUT_READY,
-        status=Notification.Status.FAILED,
-    )
-    try:
-        message = EmailMessage(
-            subject="Your Eventra payout is ready for review",
-            body=(
-                f"Hi {organizer.first_name or organizer.email},\n\n"
-                f'Your event "{payout.event.title}" has concluded and a payout has been '
-                f"calculated: net amount ${payout.net_amount} (reference "
-                f"{payout.payout_reference}). An admin will review and settle it shortly."
-            ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            to=[organizer.email],
-        )
-        message.send(fail_silently=False)
-
-        notification.status = Notification.Status.SENT
-        notification.sent_at = timezone.now()
-        notification.message = f"Payout ready: {payout.payout_reference}"
-    except Exception:
-        logger.exception("Failed to send payout-ready email for payout %s", payout.id)
-        notification.message = "Failed to send payout-ready email"
-        notification.save()
-        raise
-    else:
-        notification.save()
-
-
 def send_payout_settled_email(payout) -> None:
     organizer = payout.event.organizer
     notification = Notification(
@@ -202,6 +169,19 @@ def send_event_updated_notice(event, user) -> None:
         f'The organizer of "{event.title}" changed some details, and the changes '
         "have been approved. It now starts on "
         f"{event.start_datetime:%Y-%m-%d %H:%M} UTC at {event.venue.name}.\n\n"
+        "Your tickets are still valid. The full details are on the event page in "
+        "your Eventra account.",
+    )
+
+
+def send_event_running_late_notice(event, user) -> None:
+    _email_buyer(
+        event,
+        user,
+        Notification.NotificationType.EVENT_UPDATED,
+        "An event you booked is running late",
+        f'"{event.title}" is running late and now ends on '
+        f"{event.end_datetime:%Y-%m-%d %H:%M} UTC at {event.venue.name}.\n\n"
         "Your tickets are still valid. The full details are on the event page in "
         "your Eventra account.",
     )

@@ -6,10 +6,17 @@ from apps.common.permissions import IsAdmin, IsEventOwnerStrict, IsOrganizer
 from apps.events.models import Event
 
 from .models import OrganizerPayout
-from .serializers import EventSalesSerializer, OrganizerPayoutSerializer
+from .serializers import (
+    AwaitingPayoutSerializer,
+    EventSalesSerializer,
+    OrganizerPayoutSerializer,
+)
 from .services import (
+    PayoutNotAvailableError,
     PayoutNotSettleableError,
+    awaiting_payout,
     get_event_sales,
+    pay_out_event,
     request_payout_settlement,
 )
 
@@ -57,4 +64,38 @@ class AdminPayoutSettleView(APIView):
 
         return Response(
             OrganizerPayoutSerializer(payout).data, status=status.HTTP_202_ACCEPTED
+        )
+
+
+class AdminPayoutReadyListView(generics.ListAPIView):
+    serializer_class = AwaitingPayoutSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def get_queryset(self):
+        return awaiting_payout(Event.all_objects.all())
+
+
+class OrganizerPayoutUpcomingListView(generics.ListAPIView):
+    serializer_class = AwaitingPayoutSerializer
+    permission_classes = [permissions.IsAuthenticated, IsOrganizer]
+
+    def get_queryset(self):
+        return awaiting_payout(
+            Event.all_objects.filter(organizer_id=self.request.user.id)
+        )
+
+
+class AdminEventPayOutView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def post(self, request, event_id):
+        event = generics.get_object_or_404(Event.all_objects, pk=event_id)
+
+        try:
+            payout = pay_out_event(event)
+        except PayoutNotAvailableError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+
+        return Response(
+            OrganizerPayoutSerializer(payout).data, status=status.HTTP_201_CREATED
         )

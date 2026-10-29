@@ -1,10 +1,13 @@
 from django.urls import path
 
 from .views import (
+    AdminEventPayOutView,
     AdminPayoutListView,
+    AdminPayoutReadyListView,
     AdminPayoutSettleView,
     OrganizerEventSalesView,
     OrganizerPayoutListView,
+    OrganizerPayoutUpcomingListView,
 )
 
 urlpatterns = [
@@ -17,6 +20,21 @@ urlpatterns = [
         "organizer/payouts/",
         OrganizerPayoutListView.as_view(),
         name="organizer-payout-list",
+    ),
+    path(
+        "organizer/payouts/upcoming/",
+        OrganizerPayoutUpcomingListView.as_view(),
+        name="organizer-payout-upcoming",
+    ),
+    path(
+        "admin/payouts/ready/",
+        AdminPayoutReadyListView.as_view(),
+        name="admin-payout-ready",
+    ),
+    path(
+        "admin/events/<uuid:event_id>/pay-out/",
+        AdminEventPayOutView.as_view(),
+        name="admin-event-pay-out",
     ),
     path(
         "admin/payouts/",

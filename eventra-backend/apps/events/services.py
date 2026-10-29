@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 from django.db import transaction
-from django.db.models import Q, QuerySet
+from django.db.models import Exists, OuterRef, Q, QuerySet
 from django.utils import timezone
 from rest_framework.generics import get_object_or_404
 
@@ -43,12 +43,22 @@ class SeatMapLockedError(Exception):
     """Raised when a section is mapped to a tier after the event's seats were created."""
 
 
+class EventEndNotExtendableError(Exception):
+    """Raised when "running late" targets an event that isn't on sale or in review."""
+
+
+class InvalidEventEndError(Exception):
+    """Raised when a "running late" end time is earlier, in the past or too far out."""
+
+
 PUBLIC_STATUSES = [Event.Status.APPROVED, Event.Status.COMPLETED]
 DELETABLE_STATUSES = {Event.Status.CANCELLED, Event.Status.COMPLETED}
 SENSITIVE_EVENT_FIELDS = frozenset(
     {"venue", "category", "start_datetime", "end_datetime"}
 )
 COMPLETE_PAST_EVENTS_BUFFER_HOURS = 2
+MAX_RUNNING_LATE_DAYS = 7
+RUNNING_LATE_OPENS_HOURS = 24
 
 
 def ensure_event_deletable(event: Event) -> None:
@@ -57,6 +67,18 @@ def ensure_event_deletable(event: Event) -> None:
             "Event must be cancelled or completed before it can be deleted "
             f"(current status: {event.get_status_display()})."
         )
+    if (
+        event.status == Event.Status.COMPLETED
+        and not _has_payout(event)
+        and paid_bookings(event).exists()
+    ):
+        raise EventNotDeletableError(
+            "A completed event can't be deleted until its organizer has been paid out."
+        )
+
+
+def _has_payout(event: Event) -> bool:
+    return Event.all_objects.filter(pk=event.pk, payout__isnull=False).exists()
 
 
 class EventNotEditableError(Exception):
@@ -191,17 +213,22 @@ def _reject_locked(event: Event, reason: str) -> Event:
     return event
 
 
-def cancel_event(event: Event) -> Event:
+def cancel_event(event: Event, *, allow_completed: bool = False) -> Event:
     with transaction.atomic():
-        return _cancel_locked(event)
+        return _cancel_locked(event, allow_completed=allow_completed)
 
 
-def _cancel_locked(event: Event) -> Event:
+def _cancel_locked(event: Event, *, allow_completed: bool = False) -> Event:
     lock_event(event)
     if event.status == Event.Status.COMPLETED:
-        raise EventNotCancellableError(
-            "Event is completed and can no longer be cancelled."
-        )
+        if not allow_completed:
+            raise EventNotCancellableError(
+                "This event has ended. Only an admin can void it."
+            )
+        if _has_payout(event):
+            raise EventNotCancellableError(
+                "This event has been paid out, so it can no longer be voided."
+            )
     if event.status == Event.Status.CANCELLED:
         raise EventNotCancellableError("Event is already cancelled.")
 
@@ -224,13 +251,14 @@ def visible_events_for_user(user) -> QuerySet:
     qs = Event.objects.select_related(
         "venue", "category", "organizer", "league", "home_team", "away_team"
     )
+    public = Q(status__in=PUBLIC_STATUSES, completed_in_review=False)
     if not user or not user.is_authenticated:
-        return qs.filter(status__in=PUBLIC_STATUSES)
+        return qs.filter(public)
     if user.role == Roles.ADMIN:
         return qs
     if user.role == Roles.ORGANIZER:
-        return qs.filter(Q(organizer=user) | Q(status__in=PUBLIC_STATUSES))
-    return qs.filter(status__in=PUBLIC_STATUSES)
+        return qs.filter(Q(organizer=user) | public)
+    return qs.filter(public)
 
 
 def visible_events_for_ticket_holder(user) -> QuerySet:
@@ -240,7 +268,8 @@ def visible_events_for_ticket_holder(user) -> QuerySet:
     held = Booking.objects.filter(user=user, status=Booking.Status.CONFIRMED).values(
         "tickets__event_seat__event"
     )
-    return qs | Event.objects.filter(status=Event.Status.PENDING_APPROVAL, pk__in=held)
+    hidden = Q(status=Event.Status.PENDING_APPROVAL) | Q(completed_in_review=True)
+    return qs | Event.objects.filter(hidden, pk__in=held)
 
 
 def get_visible_event_or_404(user, pk) -> Event:
@@ -270,7 +299,57 @@ def find_blocking_upcoming_event(*, venue_id=None, category_id=None) -> bool:
 
 
 def complete_past_events() -> int:
-    cutoff = timezone.now() - timedelta(hours=COMPLETE_PAST_EVENTS_BUFFER_HOURS)
-    return Event.objects.filter(
-        status=Event.Status.APPROVED, end_datetime__lt=cutoff
-    ).update(status=Event.Status.COMPLETED, updated_at=timezone.now())
+    now = timezone.now()
+    cutoff = now - timedelta(hours=COMPLETE_PAST_EVENTS_BUFFER_HOURS)
+    sold = Booking.objects.filter(
+        tickets__event_seat__event=OuterRef("pk"), status=Booking.Status.CONFIRMED
+    )
+    ended = Event.objects.filter(end_datetime__lt=cutoff)
+    completed = ended.filter(status=Event.Status.APPROVED).update(
+        status=Event.Status.COMPLETED, completed_at=now, updated_at=now
+    )
+    return completed + ended.filter(
+        Exists(sold), status=Event.Status.PENDING_APPROVAL
+    ).update(
+        status=Event.Status.COMPLETED,
+        completed_at=now,
+        completed_in_review=True,
+        updated_at=now,
+    )
+
+
+def extend_event_end(event: Event, new_end) -> Event:
+    with transaction.atomic():
+        lock_event(event)
+        if event.status not in (Event.Status.APPROVED, Event.Status.PENDING_APPROVAL):
+            raise EventEndNotExtendableError(
+                "Only an event that is on sale or in review can run late."
+            )
+        opens_at = event.start_datetime - timedelta(hours=RUNNING_LATE_OPENS_HOURS)
+        if timezone.now() < opens_at:
+            raise EventEndNotExtendableError(
+                f"Running late opens {RUNNING_LATE_OPENS_HOURS} hours before the start. "
+                "To change the time earlier, edit the event; it goes back to review."
+            )
+        if new_end <= event.end_datetime:
+            raise InvalidEventEndError(
+                "The new end time must be later than the current one."
+            )
+        if new_end <= timezone.now():
+            raise InvalidEventEndError("The new end time must be in the future.")
+        if new_end > event.start_datetime + timedelta(days=MAX_RUNNING_LATE_DAYS):
+            raise InvalidEventEndError(
+                f"An event can't end more than {MAX_RUNNING_LATE_DAYS} days after it starts."
+            )
+
+        moved_day = (
+            timezone.localtime(new_end).date()
+            != timezone.localtime(event.end_datetime).date()
+        )
+        event.end_datetime = new_end
+        event.save(update_fields=["end_datetime", "updated_at"])
+        if moved_day:
+            _email_buyers_on_commit(
+                "send_event_running_late_email", event, _paid_buyer_ids(event)
+            )
+    return event

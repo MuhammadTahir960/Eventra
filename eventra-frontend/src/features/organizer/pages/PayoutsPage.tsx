@@ -8,11 +8,19 @@ import { StatusBadge } from '@/components/StatusBadge'
 import { Button } from '@/components/ui/button'
 import { ApiError, apiFetch } from '@/lib/api-client'
 import { formatDateTime, formatMoney } from '@/lib/format'
-import { PAYOUT_STATUS, usePayouts, type Payout } from '../api'
+import {
+  PAYOUT_STATUS,
+  useAwaitingPayouts,
+  usePayOut,
+  usePayouts,
+  type AwaitingPayout,
+  type Payout,
+} from '../api'
 import { usePageTitle } from '@/lib/use-page-title'
+import { CancelEventButton } from './OrganizerEventsPage'
 import { toast } from 'sonner'
 
-function SettleButton({ payout }: { payout: Payout }) {
+function RetryButton({ payout }: { payout: Payout }) {
   const client = useQueryClient()
   const [open, setOpen] = useState(false)
   const settle = useMutation({
@@ -22,7 +30,7 @@ function SettleButton({ payout }: { payout: Payout }) {
       }),
     onSuccess: () => {
       setOpen(false)
-      toast.success('Payout is settling', {
+      toast.success('Payout is being retried', {
         description: 'Its status updates once it completes.',
       })
       void client.invalidateQueries({ queryKey: ['admin', 'payouts'] })
@@ -38,12 +46,12 @@ function SettleButton({ payout }: { payout: Payout }) {
       }}
       trigger={
         <Button variant="outline" size="sm">
-          Settle
+          Retry
         </Button>
       }
-      title="Settle this payout?"
-      description={`Marks ${formatMoney(payout.net_amount)} for "${payout.event_title}" as paid to the organizer.`}
-      confirmLabel="Settle payout"
+      title="Retry this payout?"
+      description={`Tries again to pay ${formatMoney(payout.net_amount)} for "${payout.event_title}" to the organizer.`}
+      confirmLabel="Retry payout"
       pending={settle.isPending}
       onConfirm={() => settle.mutate()}
     >
@@ -51,15 +59,130 @@ function SettleButton({ payout }: { payout: Payout }) {
         <Notice tone="error">
           {settle.error instanceof ApiError
             ? settle.error.message
-            : 'The payout could not be settled.'}
+            : 'The payout could not be retried.'}
         </Notice>
       )}
     </ConfirmDialog>
   )
 }
 
+function PayOutButton({ row }: { row: AwaitingPayout }) {
+  const [open, setOpen] = useState(false)
+  const payOut = usePayOut()
+
+  return (
+    <ConfirmDialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) payOut.reset()
+      }}
+      trigger={
+        <Button variant="ink" size="sm">
+          Pay out
+        </Button>
+      }
+      title="Pay out this event?"
+      description={`Pays ${formatMoney(row.net_amount)} for "${row.event_title}" to ${row.organizer_name}. After this the event can no longer be voided.`}
+      confirmLabel="Pay out"
+      pending={payOut.isPending}
+      onConfirm={() =>
+        payOut.mutate(row.event_id, {
+          onSuccess: () => {
+            setOpen(false)
+            toast.success('Payout is on its way', {
+              description: 'Its status updates once it settles.',
+            })
+          },
+        })
+      }
+    >
+      {payOut.isError && (
+        <Notice tone="error">
+          {payOut.error instanceof ApiError
+            ? payOut.error.message
+            : 'The payout could not be made.'}
+        </Notice>
+      )}
+    </ConfirmDialog>
+  )
+}
+
+// Completed events waiting for their payout. Admins pay them out once the
+// 24 hours after completion are up; organizers see when that will be.
+function AwaitingPayouts({ scope }: { scope: 'organizer' | 'admin' }) {
+  const awaiting = useAwaitingPayouts(scope)
+  const rows = awaiting.data?.results ?? []
+
+  if (awaiting.isError)
+    return <Notice tone="error">{awaiting.error.message}</Notice>
+  if (awaiting.isPending || rows.length === 0) return null
+
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="font-display text-2xl">
+        {scope === 'admin' ? 'Ready to pay out' : 'Upcoming'}
+      </h2>
+      <div className="relative overflow-x-auto rounded-lg border border-border bg-card">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Event</th>
+              <th scope="col" className="num">
+                Net
+              </th>
+              <th scope="col" className="text-right">
+                Payout
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.event_id}>
+                <td className="min-w-56">
+                  <span className="font-medium">{row.event_title}</span>
+                  <span className="tabular block text-[13px] text-muted-foreground">
+                    {scope === 'admin' && `${row.organizer_name} · `}
+                    Ended {formatDateTime(row.completed_at)}
+                  </span>
+                </td>
+                <td className="num font-semibold">
+                  {formatMoney(row.net_amount)}
+                </td>
+                <td>
+                  <div className="flex items-center justify-end gap-2">
+                    {scope === 'admin' && row.eligible ? (
+                      <PayOutButton row={row} />
+                    ) : (
+                      <span className="tabular text-[13px] text-muted-foreground">
+                        {scope === 'admin' || !row.eligible
+                          ? `Available from ${formatDateTime(row.payout_available_at)}`
+                          : 'Waiting for an admin'}
+                      </span>
+                    )}
+                    {/* Pay the organizer or refund the buyers: one decision, one place */}
+                    {scope === 'admin' && (
+                      <CancelEventButton
+                        event={{
+                          id: row.event_id,
+                          title: row.event_title,
+                          status: 'completed',
+                        }}
+                      />
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
 // One page for both roles: organizers see their own payouts, admins see
-// everyone's and can settle the ones that are ready
+// everyone's, pay out events that are ready and retry failed payouts
 export function PayoutsPage({ scope }: { scope: 'organizer' | 'admin' }) {
   usePageTitle('Payouts')
   const payouts = usePayouts(scope)
@@ -72,10 +195,12 @@ export function PayoutsPage({ scope }: { scope: 'organizer' | 'admin' }) {
         title="Payouts"
         description={
           scope === 'organizer'
-            ? 'Created automatically after each event ends: ticket sales minus the 10% platform fee.'
-            : 'Payouts across all organizers. Settle the ones that are ready.'
+            ? 'Paid by an admin from 24 hours after each event ends: ticket sales minus the 10% platform fee.'
+            : 'Events become ready to pay out 24 hours after they end. Until they are paid out, they can be voided instead.'
         }
       />
+
+      <AwaitingPayouts scope={scope} />
 
       {payouts.isError ? (
         <Notice tone="error">{payouts.error.message}</Notice>
@@ -140,10 +265,10 @@ export function PayoutsPage({ scope }: { scope: 'organizer' | 'admin' }) {
                     </td>
                     {scope === 'admin' && (
                       <td className="text-right">
-                        {/* The backend settles pending payouts and retries failed ones */}
+                        {/* Payouts start settling when created; only a failed one needs a hand */}
                         {(payout.status === 'pending' ||
                           payout.status === 'failed') && (
-                          <SettleButton payout={payout} />
+                          <RetryButton payout={payout} />
                         )}
                       </td>
                     )}

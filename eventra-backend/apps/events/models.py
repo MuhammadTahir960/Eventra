@@ -71,6 +71,8 @@ class Event(SoftDeleteModel):
     rejection_reason = models.TextField(blank=True, default="")
     start_datetime = models.DateTimeField()
     end_datetime = models.DateTimeField()
+    completed_at = models.DateTimeField(null=True, blank=True)
+    completed_in_review = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -95,6 +97,10 @@ class Event(SoftDeleteModel):
             models.CheckConstraint(
                 condition=Q(end_datetime__gt=F("start_datetime")),
                 name="event_end_after_start",
+            ),
+            models.CheckConstraint(
+                condition=~Q(status="completed") | Q(completed_at__isnull=False),
+                name="event_completed_has_completed_at",
             ),
             models.CheckConstraint(
                 condition=(

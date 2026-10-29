@@ -1,4 +1,5 @@
 import logging
+from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import IntegrityError, models, transaction
@@ -11,12 +12,17 @@ from apps.tickets.models import Ticket
 from .models import OrganizerPayout
 
 PLATFORM_FEE_PERCENTAGE = Decimal("0.10")
+PAYOUT_WAIT_HOURS = 24
 
 logger = logging.getLogger(__name__)
 
 
 class PayoutNotSettleableError(Exception):
     """Raised when settle is attempted on a payout that isn't pending or failed."""
+
+
+class PayoutNotAvailableError(Exception):
+    """Raised when an event is not completed, too early, sold nothing or is paid."""
 
 
 class OrganizerInactiveError(Exception):
@@ -115,29 +121,49 @@ def create_payout(event: Event) -> tuple[OrganizerPayout, bool]:
         payout = OrganizerPayout.objects.get(event=event)
         created = False
 
-    if created:
-        transaction.on_commit(
-            lambda: _enqueue_payout_ready_notification(payout.id), robust=True
-        )
-
     return payout, created
 
 
-def create_payouts_for_completed_events() -> int:
-    completed_event_ids = list(
-        Event.all_objects.filter(
-            status=Event.Status.COMPLETED, payout__isnull=True
-        ).values_list("id", flat=True)
+def payout_available_at(event: Event):
+    return event.completed_at + timedelta(hours=PAYOUT_WAIT_HOURS)
+
+
+def awaiting_payout(events) -> models.QuerySet:
+    sold = Booking.objects.filter(
+        tickets__event_seat__event=models.OuterRef("pk"),
+        status=Booking.Status.CONFIRMED,
+    )
+    return (
+        events.filter(status=Event.Status.COMPLETED, payout__isnull=True)
+        .filter(models.Exists(sold))
+        .select_related("organizer", "venue")
+        .order_by("completed_at", "id")
     )
 
-    created_count = 0
-    for event_id in completed_event_ids:
-        event = Event.all_objects.get(id=event_id)
-        _, created = create_payout(event)
-        if created:
-            created_count += 1
 
-    return created_count
+def pay_out_event(event: Event) -> OrganizerPayout:
+    with transaction.atomic():
+        event = Event.all_objects.select_for_update(of=("self",)).get(pk=event.pk)
+        if event.status != Event.Status.COMPLETED:
+            raise PayoutNotAvailableError("Only a completed event can be paid out.")
+        if OrganizerPayout.objects.filter(event=event).exists():
+            raise PayoutNotAvailableError("This event has already been paid out.")
+        if not awaiting_payout(Event.all_objects.filter(pk=event.pk)).exists():
+            raise PayoutNotAvailableError(
+                "No tickets were sold, so there is nothing to pay out."
+            )
+        available_at = payout_available_at(event)
+        if timezone.now() < available_at:
+            raise PayoutNotAvailableError(
+                f"Payout becomes available at {available_at:%Y-%m-%d %H:%M} UTC."
+            )
+
+        payout, _ = create_payout(event)
+        payout.status = OrganizerPayout.Status.PROCESSING
+        payout.save(update_fields=["status", "updated_at"])
+        transaction.on_commit(lambda: _enqueue_settle_payout_or_fail(payout.id))
+
+    return payout
 
 
 def request_payout_settlement(payout: OrganizerPayout) -> OrganizerPayout:
@@ -192,12 +218,6 @@ def settle_payout(payout_id) -> None:
         transaction.on_commit(
             lambda: _enqueue_payout_settled_notification(payout.id), robust=True
         )
-
-
-def _enqueue_payout_ready_notification(payout_id) -> None:
-    from apps.payouts.tasks import send_payout_ready_notification
-
-    send_payout_ready_notification.delay(str(payout_id))
 
 
 def _enqueue_payout_settled_notification(payout_id) -> None:

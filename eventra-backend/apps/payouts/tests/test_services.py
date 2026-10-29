@@ -1,9 +1,11 @@
 import threading
+from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
 from django.db import connection
+from django.utils import timezone
 
 from apps.bookings.factories import BookingFactory
 from apps.bookings.models import Booking
@@ -17,14 +19,17 @@ from apps.users.factories import UserFactory
 from ..factories import OrganizerPayoutFactory
 from ..models import OrganizerPayout
 from ..services import (
+    PAYOUT_WAIT_HOURS,
     PLATFORM_FEE_PERCENTAGE,
+    PayoutNotAvailableError,
     PayoutNotSettleableError,
     _sum_confirmed_booking_totals,
     _ticket_sale_amount,
+    awaiting_payout,
     compute_payout_amounts,
     create_payout,
-    create_payouts_for_completed_events,
     get_event_sales,
+    pay_out_event,
     request_payout_settlement,
     settle_payout,
 )
@@ -297,27 +302,6 @@ class TestCreatePayout:
         assert first.id == second.id
         assert OrganizerPayout.objects.filter(event=event).count() == 1
 
-    def test_enqueues_ready_notification_only_on_actual_creation(
-        self, monkeypatch, django_capture_on_commit_callbacks
-    ):
-        mock_task = MagicMock()
-        monkeypatch.setattr(
-            "apps.payouts.tasks.send_payout_ready_notification", mock_task
-        )
-        event = EventFactory(status=Event.Status.COMPLETED)
-
-        with django_capture_on_commit_callbacks(execute=True):
-            payout, created = create_payout(event)
-
-        assert created is True
-        mock_task.delay.assert_called_once_with(str(payout.id))
-
-        mock_task.reset_mock()
-        with django_capture_on_commit_callbacks(execute=True):
-            create_payout(event)
-
-        mock_task.delay.assert_not_called()
-
     @pytest.mark.django_db(transaction=True)
     def test_concurrent_calls_for_the_same_event_yield_exactly_one_payout(self):
         event = EventFactory(status=Event.Status.COMPLETED)
@@ -350,36 +334,98 @@ class TestCreatePayout:
         assert created_flags == [False, True]
 
 
-class TestCreatePayoutsForCompletedEvents:
-    def test_creates_a_payout_per_completed_unpaid_event_only(self):
-        completed_unpaid = EventFactory(status=Event.Status.COMPLETED)
-        EventFactory(status=Event.Status.APPROVED)
-        already_paid = EventFactory(status=Event.Status.COMPLETED)
-        OrganizerPayoutFactory(event=already_paid)
+class TestPayOutEvent:
+    def _completed(self, hours_ago, sold=True):
+        event = EventFactory(
+            status=Event.Status.COMPLETED,
+            completed_at=timezone.now() - timedelta(hours=hours_ago),
+        )
+        if sold:
+            _confirmed_booking_with_ticket(event, Decimal("100.00"))
+        return event
 
-        created_count = create_payouts_for_completed_events()
+    def test_creates_a_processing_payout_and_settles_it(
+        self, django_capture_on_commit_callbacks
+    ):
+        event = self._completed(hours_ago=25)
 
-        assert created_count == 1
-        assert OrganizerPayout.objects.filter(event=completed_unpaid).exists()
-        assert OrganizerPayout.objects.filter(event=already_paid).count() == 1
+        with django_capture_on_commit_callbacks(execute=True):
+            payout = pay_out_event(event)
 
-    def test_running_twice_does_not_double_create(self):
-        event = EventFactory(status=Event.Status.COMPLETED)
+        payout.refresh_from_db()
+        assert payout.status == OrganizerPayout.Status.SETTLED
+        assert payout.net_amount == Decimal("90.00")
 
-        first_run = create_payouts_for_completed_events()
-        second_run = create_payouts_for_completed_events()
+    def test_refused_before_the_wait_is_over(self):
+        event = self._completed(hours_ago=PAYOUT_WAIT_HOURS - 1)
 
-        assert first_run == 1
-        assert second_run == 0
+        with pytest.raises(PayoutNotAvailableError, match="available at"):
+            pay_out_event(event)
+        assert not OrganizerPayout.objects.filter(event=event).exists()
+
+    def test_refused_when_already_paid_out(self):
+        event = self._completed(hours_ago=25)
+        OrganizerPayoutFactory(event=event)
+
+        with pytest.raises(PayoutNotAvailableError, match="already"):
+            pay_out_event(event)
+
+    def test_refused_when_nothing_was_sold(self):
+        event = self._completed(hours_ago=25, sold=False)
+
+        with pytest.raises(PayoutNotAvailableError, match="nothing to pay"):
+            pay_out_event(event)
+
+    def test_refused_for_an_event_that_is_not_completed(self):
+        event = EventFactory(status=Event.Status.APPROVED)
+
+        with pytest.raises(PayoutNotAvailableError, match="completed"):
+            pay_out_event(event)
+
+    @pytest.mark.django_db(transaction=True)
+    def test_concurrent_pay_outs_create_exactly_one_payout(self, monkeypatch):
+        monkeypatch.setattr("apps.payouts.tasks.settle_payout", MagicMock())
+        event = self._completed(hours_ago=25)
+        outcomes, barrier = [], threading.Barrier(2)
+
+        def attempt():
+            barrier.wait()
+            try:
+                pay_out_event(event)
+                outcomes.append("paid")
+            except PayoutNotAvailableError:
+                outcomes.append("refused")
+            finally:
+                connection.close()
+
+        threads = [threading.Thread(target=attempt) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert sorted(outcomes) == ["paid", "refused"]
         assert OrganizerPayout.objects.filter(event=event).count() == 1
 
-    def test_soft_deleted_completed_event_still_gets_a_payout(self):
-        event = EventFactory(status=Event.Status.COMPLETED, is_active=False)
+    def test_soft_deleted_completed_event_can_still_be_paid(self):
+        event = self._completed(hours_ago=25)
+        Event.all_objects.filter(pk=event.pk).update(is_active=False)
 
-        created_count = create_payouts_for_completed_events()
+        assert pay_out_event(event).event_id == event.id
 
-        assert created_count == 1
-        assert OrganizerPayout.objects.filter(event=event).exists()
+
+class TestAwaitingPayout:
+    def test_lists_completed_unpaid_events_that_sold_tickets(self):
+        waiting = EventFactory(status=Event.Status.COMPLETED)
+        _confirmed_booking_with_ticket(waiting, Decimal("10.00"))
+        EventFactory(status=Event.Status.COMPLETED)
+        paid = EventFactory(status=Event.Status.COMPLETED)
+        _confirmed_booking_with_ticket(paid, Decimal("10.00"))
+        OrganizerPayoutFactory(event=paid)
+        upcoming = EventFactory(status=Event.Status.APPROVED)
+        _confirmed_booking_with_ticket(upcoming, Decimal("10.00"))
+
+        assert list(awaiting_payout(Event.all_objects.all())) == [waiting]
 
 
 class TestRequestPayoutSettlement:

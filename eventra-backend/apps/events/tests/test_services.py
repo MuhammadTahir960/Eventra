@@ -1,28 +1,44 @@
 from datetime import timedelta
+from unittest.mock import MagicMock
 
 import pytest
+from django.db import IntegrityError
 from django.utils import timezone
 
+from apps.bookings.factories import BookingFactory
+from apps.bookings.models import Booking
 from apps.categories.factories import CategoryFactory
 from apps.common.constants import Roles
+from apps.payouts.factories import OrganizerPayoutFactory
 from apps.seating.factories import EventSeatFactory
+from apps.seating.models import EventSeat
+from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
 from apps.venues.factories import VenueFactory
 
 from ..factories import EventFactory, TicketTierFactory
 from ..models import Event
 from ..services import (
+    MAX_RUNNING_LATE_DAYS,
+    RUNNING_LATE_OPENS_HOURS,
     DuplicateEventSlugError,
+    EventEndNotExtendableError,
+    EventNotCancellableError,
     EventNotDeletableError,
+    InvalidEventEndError,
     TierPriceImmutableError,
+    cancel_event,
     complete_past_events,
     ensure_can_restore_event,
     ensure_event_deletable,
     ensure_tier_price_mutable,
+    extend_event_end,
     find_blocking_upcoming_event,
     resolve_create_status,
     should_retrigger_approval,
     should_retrigger_approval_for_tier,
+    visible_events_for_ticket_holder,
+    visible_events_for_user,
 )
 
 pytestmark = pytest.mark.django_db
@@ -276,3 +292,181 @@ def test_returns_count_of_events_completed():
     EventFactory(status=Event.Status.APPROVED, start_datetime=start, end_datetime=end)
     EventFactory(status=Event.Status.APPROVED)
     assert complete_past_events() == 2
+
+
+# ==================================================
+# manual payouts: completion, void, delete, running late
+# ==================================================
+
+
+def _sell_ticket(event):
+    booking = BookingFactory(status=Booking.Status.CONFIRMED)
+    seat = EventSeatFactory(event=event, status=EventSeat.Status.BOOKED)
+    Ticket.objects.create(booking=booking, event_seat=seat, status=Ticket.Status.VALID)
+    return booking
+
+
+def test_completion_records_completed_at():
+    start, end = _past(hours_ago=3)
+    event = EventFactory(
+        status=Event.Status.APPROVED, start_datetime=start, end_datetime=end
+    )
+    complete_past_events()
+    event.refresh_from_db()
+    assert event.completed_at is not None
+
+
+def test_event_in_review_with_sales_completes():
+    start, end = _past(hours_ago=3)
+    event = EventFactory(
+        status=Event.Status.PENDING_APPROVAL, start_datetime=start, end_datetime=end
+    )
+    _sell_ticket(event)
+    assert complete_past_events() == 1
+    event.refresh_from_db()
+    assert event.status == Event.Status.COMPLETED
+
+
+def test_event_completed_in_review_stays_hidden_from_the_public():
+    start, end = _past(hours_ago=3)
+    event = EventFactory(
+        status=Event.Status.PENDING_APPROVAL, start_datetime=start, end_datetime=end
+    )
+    buyer = _sell_ticket(event).user
+    complete_past_events()
+    event.refresh_from_db()
+    assert event.completed_in_review is True
+
+    assert not visible_events_for_user(None).filter(pk=event.pk).exists()
+    stranger = UserFactory(role=Roles.ATTENDEE)
+    assert not visible_events_for_ticket_holder(stranger).filter(pk=event.pk).exists()
+    assert visible_events_for_ticket_holder(buyer).filter(pk=event.pk).exists()
+    assert visible_events_for_user(event.organizer).filter(pk=event.pk).exists()
+
+
+def test_approved_event_completes_publicly():
+    start, end = _past(hours_ago=3)
+    event = EventFactory(
+        status=Event.Status.APPROVED, start_datetime=start, end_datetime=end
+    )
+    complete_past_events()
+    event.refresh_from_db()
+    assert event.completed_in_review is False
+    assert visible_events_for_user(None).filter(pk=event.pk).exists()
+
+
+def test_event_in_review_without_sales_stays_in_review():
+    start, end = _past(hours_ago=3)
+    event = EventFactory(
+        status=Event.Status.PENDING_APPROVAL, start_datetime=start, end_datetime=end
+    )
+    assert complete_past_events() == 0
+    event.refresh_from_db()
+    assert event.status == Event.Status.PENDING_APPROVAL
+
+
+def test_completed_event_needs_completed_at():
+    with pytest.raises(IntegrityError):
+        EventFactory(status=Event.Status.COMPLETED, completed_at=None)
+
+
+def test_completed_unpaid_event_with_sales_cannot_be_deleted():
+    event = EventFactory(status=Event.Status.COMPLETED)
+    _sell_ticket(event)
+    with pytest.raises(EventNotDeletableError, match="paid out"):
+        ensure_event_deletable(event)
+
+
+def test_completed_event_can_be_deleted_once_paid_out():
+    event = EventFactory(status=Event.Status.COMPLETED)
+    _sell_ticket(event)
+    OrganizerPayoutFactory(event=event)
+    ensure_event_deletable(event)
+
+
+def test_only_an_admin_may_void_a_completed_event():
+    event = EventFactory(status=Event.Status.COMPLETED)
+    with pytest.raises(EventNotCancellableError, match="Only an admin"):
+        cancel_event(event)
+    cancel_event(event, allow_completed=True)
+    event.refresh_from_db()
+    assert event.status == Event.Status.CANCELLED
+
+
+def test_a_paid_out_event_cannot_be_voided():
+    event = EventFactory(status=Event.Status.COMPLETED)
+    OrganizerPayoutFactory(event=event)
+    with pytest.raises(EventNotCancellableError, match="paid out"):
+        cancel_event(event, allow_completed=True)
+
+
+def _running(**kwargs):
+    now = timezone.now()
+    return EventFactory(
+        start_datetime=now - timedelta(hours=2),
+        end_datetime=now + timedelta(minutes=30),
+        **kwargs,
+    )
+
+
+def test_running_late_moves_the_end_without_review():
+    event = _running(status=Event.Status.APPROVED)
+    new_end = event.end_datetime + timedelta(hours=2)
+    extend_event_end(event, new_end)
+    event.refresh_from_db()
+    assert event.end_datetime == new_end
+    assert event.status == Event.Status.APPROVED
+
+
+@pytest.mark.parametrize(
+    "shift",
+    [timedelta(0), -timedelta(minutes=10), timedelta(days=MAX_RUNNING_LATE_DAYS)],
+)
+def test_running_late_rejects_earlier_or_too_far(shift):
+    event = _running(status=Event.Status.APPROVED)
+    with pytest.raises(InvalidEventEndError):
+        extend_event_end(event, event.end_datetime + shift)
+
+
+@pytest.mark.parametrize(
+    "status", [Event.Status.COMPLETED, Event.Status.CANCELLED, Event.Status.REJECTED]
+)
+def test_running_late_refused_for_finished_events(status):
+    event = _running(status=status)
+    with pytest.raises(EventEndNotExtendableError):
+        extend_event_end(event, event.end_datetime + timedelta(hours=1))
+
+
+def test_running_late_emails_holders_only_when_the_day_changes(
+    monkeypatch, django_capture_on_commit_callbacks
+):
+    task = MagicMock()
+    monkeypatch.setattr("apps.notifications.tasks.send_event_running_late_email", task)
+    start = timezone.now().replace(hour=1, minute=0, second=0, microsecond=0)
+    event = EventFactory(
+        status=Event.Status.APPROVED,
+        start_datetime=start,
+        end_datetime=start + timedelta(hours=22),
+    )
+    booking = _sell_ticket(event)
+
+    with django_capture_on_commit_callbacks(execute=True):
+        extend_event_end(event, start + timedelta(hours=22, minutes=30))
+    task.delay.assert_not_called()
+
+    with django_capture_on_commit_callbacks(execute=True):
+        extend_event_end(event, start + timedelta(days=1, hours=3))
+    task.delay.assert_called_once_with(str(event.id), str(booking.user_id))
+
+
+def test_running_late_is_closed_until_a_day_before_the_start():
+    start = timezone.now() + timedelta(hours=RUNNING_LATE_OPENS_HOURS + 2)
+    event = EventFactory(
+        status=Event.Status.APPROVED,
+        start_datetime=start,
+        end_datetime=start + timedelta(hours=2),
+    )
+    with pytest.raises(EventEndNotExtendableError, match="opens"):
+        extend_event_end(event, event.end_datetime + timedelta(hours=1))
+    event.refresh_from_db()
+    assert event.end_datetime == start + timedelta(hours=2)
