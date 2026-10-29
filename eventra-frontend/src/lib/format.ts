@@ -32,3 +32,10 @@ export function formatDateTimeLong(iso: string): string {
     timeZoneName: 'short',
   }).format(new Date(iso))
 }
+
+// <input type="datetime-local"> works in local time without a zone
+export function toLocalInput(iso: string): string {
+  const date = new Date(iso)
+  const offset = date.getTimezoneOffset() * 60_000
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16)
+}

@@ -14,16 +14,10 @@ import { useEvent } from '@/features/events/hooks'
 import { EVENT_STATUS } from '@/features/events/status'
 import type { EventItem } from '@/features/events/types'
 import { ApiError } from '@/lib/api-client'
+import { toLocalInput } from '@/lib/format'
 import { isUuid } from '@/lib/ids'
 import { useUpdateEvent, type EventPatch } from '../api'
 import { usePageTitle } from '@/lib/use-page-title'
-
-// <input type="datetime-local"> works in local time without a zone
-function toLocalInput(iso: string): string {
-  const date = new Date(iso)
-  const offset = date.getTimezoneOffset() * 60_000
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16)
-}
 
 interface Values {
   title: string

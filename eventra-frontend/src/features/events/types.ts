@@ -24,6 +24,8 @@ export interface EventItem {
   is_seated: boolean
   start_datetime: string
   end_datetime: string
+  // Set when the event is marked completed; payouts open 24h later
+  completed_at: string | null
   is_active: boolean
   created_at: string
   updated_at: string

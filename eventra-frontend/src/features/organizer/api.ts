@@ -52,6 +52,24 @@ export function useCancelEvent() {
   })
 }
 
+// Owner or admin: push the end time later (rain delay, overrun, resumed next
+// day). No review; ticket holders are emailed if the day changes.
+export function useRunningLate(id: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (endDatetime: string) =>
+      apiFetch<EventItem>(`/events/${id}/running-late/`, {
+        method: 'POST',
+        body: { end_datetime: endDatetime },
+      }),
+    onSuccess: (event) => {
+      client.setQueryData(['events', 'detail', event.id], event)
+      void client.invalidateQueries({ queryKey: ['organizer'] })
+      void client.invalidateQueries({ queryKey: ['admin'] })
+    },
+  })
+}
+
 // ---------- sales ----------
 
 export interface EventSales {
@@ -112,6 +130,48 @@ export function usePayouts(scope: 'organizer' | 'admin') {
     queryKey: [scope, 'payouts'],
     queryFn: ({ signal }) =>
       apiFetch<Page<Payout>>(`/${scope}/payouts/`, { signal }),
+  })
+}
+
+// Completed events that sold tickets and have no payout yet. Admins see all
+// of them ("ready to pay out"); organizers see their own ("upcoming").
+export interface AwaitingPayout {
+  event_id: string
+  event_title: string
+  organizer_name: string
+  venue_name: string
+  completed_at: string
+  payout_available_at: string
+  // True once the 24-hour wait after completion is over
+  eligible: boolean
+  // Decimal strings, USD
+  gross_revenue: string
+  platform_fee: string
+  net_amount: string
+}
+
+export function useAwaitingPayouts(scope: 'organizer' | 'admin') {
+  return useQuery({
+    queryKey: [scope, 'payouts', 'awaiting'],
+    queryFn: ({ signal }) =>
+      apiFetch<Page<AwaitingPayout>>(
+        scope === 'admin'
+          ? '/admin/payouts/ready/'
+          : '/organizer/payouts/upcoming/',
+        { signal },
+      ),
+  })
+}
+
+// Admin only: creates the payout and starts settling it in one step
+export function usePayOut() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (eventId: string) =>
+      apiFetch<Payout>(`/admin/events/${eventId}/pay-out/`, { method: 'POST' }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['admin', 'payouts'] })
+    },
   })
 }
 

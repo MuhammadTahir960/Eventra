@@ -12,7 +12,11 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { useEventLookups } from '@/features/events/lookups'
 import { EVENT_STATUS } from '@/features/events/status'
 import type { EventItem, EventStatus } from '@/features/events/types'
-import { CancelEventButton } from '@/features/organizer/pages/OrganizerEventsPage'
+import {
+  CancelEventButton,
+  RunningLateButton,
+} from '@/features/organizer/pages/OrganizerEventsPage'
+import { canRunLate } from '@/features/organizer/running-late'
 import { ApiError } from '@/lib/api-client'
 import { formatDateTime } from '@/lib/format'
 import { pageParam } from '@/lib/ids'
@@ -207,6 +211,10 @@ export function AdminEventsPage() {
                           {event.status === 'cancelled' && (
                             <RetryRefundsButton event={event} />
                           )}
+                          {canRunLate(event) && (
+                            <RunningLateButton event={event} />
+                          )}
+                          {/* Completed events are voided from the payouts page */}
                           {event.status !== 'cancelled' &&
                             event.status !== 'completed' && (
                               <CancelEventButton event={event} />

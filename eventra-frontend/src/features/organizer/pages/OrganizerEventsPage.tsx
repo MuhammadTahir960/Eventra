@@ -4,27 +4,107 @@ import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { HoldToConfirmButton } from '@/components/HoldToConfirmButton'
 import { EmptyState } from '@/components/EmptyState'
+import { FormField } from '@/components/FormField'
 import { Notice } from '@/components/Notice'
 import { PageHeader } from '@/components/PageHeader'
 import { StatusBadge } from '@/components/StatusBadge'
 import { Button } from '@/components/ui/button'
 import { ButtonLink } from '@/components/ui/button-link'
+import { Input } from '@/components/ui/input'
 import { useEventLookups } from '@/features/events/lookups'
 import { EVENT_STATUS } from '@/features/events/status'
 import type { EventItem } from '@/features/events/types'
 import { ApiError } from '@/lib/api-client'
-import { formatDateTime } from '@/lib/format'
-import { useCancelEvent, useOrganizerEvents } from '../api'
+import { formatDateTime, toLocalInput } from '@/lib/format'
+import { useCancelEvent, useOrganizerEvents, useRunningLate } from '../api'
+import { canRunLate } from '../running-late'
 import { usePageTitle } from '@/lib/use-page-title'
 
 const TERMINAL: EventItem['status'][] = ['cancelled', 'completed']
+
+export function RunningLateButton({ event }: { event: EventItem }) {
+  const [open, setOpen] = useState(false)
+  const [end, setEnd] = useState('')
+  const [missing, setMissing] = useState(false)
+  const runLate = useRunningLate(event.id)
+  const fieldError = missing
+    ? 'Pick a new end time.'
+    : runLate.error instanceof ApiError
+      ? runLate.error.fieldErrors.end_datetime?.[0]
+      : undefined
+
+  return (
+    <ConfirmDialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (next) setEnd(toLocalInput(event.end_datetime))
+        else runLate.reset()
+        setMissing(false)
+      }}
+      trigger={
+        <Button variant="outline" size="sm">
+          Running late
+        </Button>
+      }
+      title="Running late?"
+      description={
+        <>
+          Move the end of{' '}
+          <strong className="font-medium text-foreground">{event.title}</strong>{' '}
+          later, for a delayed start, an overrun or a match finished the next
+          day. Tickets stay valid; buyers are emailed if it moves to another
+          day.
+        </>
+      }
+      confirmLabel="Save new end time"
+      pending={runLate.isPending}
+      onConfirm={() => {
+        if (!end) return setMissing(true)
+        runLate.mutate(new Date(end).toISOString(), {
+          onSuccess: () => {
+            setOpen(false)
+            toast.success('End time updated')
+          },
+        })
+      }}
+    >
+      <FormField
+        id={`late-end-${event.id}`}
+        label="Now ends"
+        error={fieldError}
+      >
+        {(control) => (
+          <Input
+            {...control}
+            type="datetime-local"
+            value={end}
+            min={toLocalInput(event.end_datetime)}
+            onChange={(e) => {
+              setEnd(e.target.value)
+              setMissing(false)
+            }}
+          />
+        )}
+      </FormField>
+      {runLate.isError && !fieldError && (
+        <Notice tone="error" className="mt-3">
+          {runLate.error instanceof ApiError
+            ? runLate.error.message
+            : 'The end time could not be changed.'}
+        </Notice>
+      )}
+    </ConfirmDialog>
+  )
+}
 
 // Cancelling refunds every buyer, so it always goes through a confirmation
 export function CancelEventButton({
   event,
   size = 'sm',
 }: {
-  event: EventItem
+  // Only these fields, so the payouts page can void from a payout row
+  event: Pick<EventItem, 'id' | 'title' | 'status'>
   size?: 'sm' | 'default'
 }) {
   const [open, setOpen] = useState(false)
@@ -33,12 +113,14 @@ export function CancelEventButton({
   // Bumped after a failure so the hold button re-arms
   const [attempt, setAttempt] = useState(0)
   const hintId = `cancel-hint-${event.id}`
+  // An ended event is voided (abandoned or didn't happen), not cancelled
+  const voiding = event.status === 'completed'
 
   function confirm() {
     cancel.mutate(event.id, {
       onSuccess: () => {
         setOpen(false)
-        toast.success('Event cancelled', {
+        toast.success(voiding ? 'Event voided' : 'Event cancelled', {
           description: 'Every buyer is being refunded in full.',
         })
       },
@@ -62,18 +144,31 @@ export function CancelEventButton({
       }}
       trigger={
         <Button variant="destructive" size={size}>
-          Cancel
+          {voiding ? 'Void' : 'Cancel'}
         </Button>
       }
-      title="Cancel this event?"
+      title={voiding ? 'Void and refund everyone?' : 'Cancel this event?'}
       description={
-        <>
-          <strong className="font-medium text-foreground">{event.title}</strong>{' '}
-          will be taken off sale and every buyer is refunded in full. This can't
-          be undone.
-        </>
+        voiding ? (
+          <>
+            <strong className="font-medium text-foreground">
+              {event.title}
+            </strong>{' '}
+            has ended. Use this only if it didn't take place or was abandoned.
+            Every buyer gets a full refund and no payout is made. This can't be
+            undone.
+          </>
+        ) : (
+          <>
+            <strong className="font-medium text-foreground">
+              {event.title}
+            </strong>{' '}
+            will be taken off sale and every buyer is refunded in full. This
+            can't be undone.
+          </>
+        )
       }
-      confirmLabel="Cancel event"
+      confirmLabel={voiding ? 'Void event' : 'Cancel event'}
       destructive
       pending={cancel.isPending}
       onConfirm={confirm}
@@ -82,8 +177,8 @@ export function CancelEventButton({
       confirmControl={
         <HoldToConfirmButton
           key={attempt}
-          label="Hold to cancel event"
-          confirmedLabel="Cancelling…"
+          label={voiding ? 'Hold to void event' : 'Hold to cancel event'}
+          confirmedLabel={voiding ? 'Voiding…' : 'Cancelling…'}
           hintId={hintId}
           disabled={cancel.isPending}
           onConfirm={confirm}
@@ -208,6 +303,9 @@ export function OrganizerEventsPage() {
                           >
                             Edit
                           </ButtonLink>
+                        )}
+                        {canRunLate(event) && (
+                          <RunningLateButton event={event} />
                         )}
                         {!terminal && <CancelEventButton event={event} />}
                       </div>
