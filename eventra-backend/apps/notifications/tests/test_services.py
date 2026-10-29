@@ -21,7 +21,6 @@ from ..services import (
     send_event_cancelled_notice,
     send_event_reminders_batch,
     send_event_updated_notice,
-    send_payout_ready_email,
     send_payout_settled_email,
     send_refund_confirmation_email,
 )
@@ -170,31 +169,6 @@ class TestSendRefundConfirmationEmail:
         assert notification.status == Notification.Status.FAILED
         assert notification.sent_at is None
         assert len(mail.outbox) == 0
-
-
-class TestSendPayoutReadyEmail:
-    def test_happy_path_sends_email_to_the_organizer(self):
-        event = EventFactory()
-        payout = OrganizerPayoutFactory(event=event)
-
-        send_payout_ready_email(payout)
-
-        assert len(mail.outbox) == 1
-        sent = mail.outbox[0]
-        assert sent.to == [event.organizer.email]
-        assert "payout" in sent.subject.lower()
-        assert payout.payout_reference in sent.body
-
-    def test_happy_path_records_a_sent_notification(self):
-        event = EventFactory()
-        payout = OrganizerPayoutFactory(event=event)
-
-        send_payout_ready_email(payout)
-
-        notification = Notification.objects.get(user=event.organizer)
-        assert notification.type == Notification.NotificationType.PAYOUT_READY
-        assert notification.status == Notification.Status.SENT
-        assert notification.sent_at is not None
 
 
 class TestSendPayoutSettledEmail:

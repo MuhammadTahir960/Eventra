@@ -44,6 +44,7 @@ class EventSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
             "is_seated",
             "start_datetime",
             "end_datetime",
+            "completed_at",
             "is_active",
             "created_at",
             "updated_at",
@@ -54,6 +55,7 @@ class EventSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
             "slug",
             "status",
             "rejection_reason",
+            "completed_at",
             "is_active",
             "created_at",
             "updated_at",
@@ -161,6 +163,10 @@ class EventSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
         ):
             validated_data["status"] = Event.Status.PENDING_APPROVAL
         return super().update(instance, validated_data)
+
+
+class RunningLateSerializer(serializers.Serializer):
+    end_datetime = serializers.DateTimeField()
 
 
 class PendingEventSerializer(EventSerializer):

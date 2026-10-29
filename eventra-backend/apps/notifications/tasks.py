@@ -8,6 +8,7 @@ from .services import (
     send_booking_confirmation_email,
     send_event_cancelled_notice,
     send_event_reminders_batch,
+    send_event_running_late_notice,
     send_event_updated_notice,
     send_refund_confirmation_email,
 )
@@ -33,6 +34,14 @@ def send_event_updated_email(event_id, user_id):
     if user is not None:
         event = Event.all_objects.select_related("venue").get(id=event_id)
         send_event_updated_notice(event, user)
+
+
+@shared_task(**_RETRY)
+def send_event_running_late_email(event_id, user_id):
+    user = User.objects.filter(id=user_id, is_active=True).first()
+    if user is not None:
+        event = Event.all_objects.select_related("venue").get(id=event_id)
+        send_event_running_late_notice(event, user)
 
 
 @shared_task(**_RETRY)

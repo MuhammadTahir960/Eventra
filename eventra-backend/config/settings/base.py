@@ -204,10 +204,6 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.notifications.tasks.send_event_reminders",
         "schedule": crontab(minute=15),
     },
-    "create-payouts-for-completed-events": {
-        "task": "apps.payouts.tasks.create_payouts_for_completed_events",
-        "schedule": crontab(hour=2, minute=0),
-    },
 }
 
 CACHES = {

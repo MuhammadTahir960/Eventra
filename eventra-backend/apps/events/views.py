@@ -18,17 +18,20 @@ from .permissions import IsEventOwnerOrAdminForDelete
 from .serializers import (
     EventSerializer,
     PendingEventSerializer,
+    RunningLateSerializer,
     TicketTierSerializer,
     TierSectionMappingSerializer,
 )
 from .services import (
     DuplicateEventSlugError,
+    EventEndNotExtendableError,
     EventHasPaidBookingsError,
     EventNotCancellableError,
     EventNotDeletableError,
     EventNotEditableError,
     EventNotPendingApprovalError,
     EventRejectionReasonRequiredError,
+    InvalidEventEndError,
     SeatMapLockedError,
     TierPriceImmutableError,
     approve_event,
@@ -37,6 +40,7 @@ from .services import (
     ensure_event_deletable,
     ensure_event_editable,
     ensure_sections_mappable,
+    extend_event_end,
     lock_event,
     paid_bookings,
     reject_event,
@@ -133,7 +137,7 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
             return [permissions.IsAuthenticated(), IsEventOwnerStrict()]
         if self.action == "destroy":
             return [permissions.IsAuthenticated(), IsEventOwnerOrAdminForDelete()]
-        if self.action == "cancel":
+        if self.action in ("cancel", "running_late"):
             return [permissions.IsAuthenticated(), IsEventOwnerOrAdminForDelete()]
         if self.action == "restore":
             return [IsAdmin()]
@@ -197,13 +201,30 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
 
         with transaction.atomic():
             try:
-                cancel_event(event)
+                cancel_event(event, allow_completed=request.user.role == Roles.ADMIN)
             except EventNotCancellableError as exc:
                 return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
             transaction.on_commit(
                 lambda: refund_event_bookings_task.delay(str(event.id)), robust=True
             )
+
+        return Response(self.get_serializer(event).data)
+
+    @action(detail=True, methods=["post"], url_path="running-late")
+    def running_late(self, request, pk=None):
+        event = self.get_object()
+        serializer = RunningLateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            extend_event_end(event, serializer.validated_data["end_datetime"])
+        except InvalidEventEndError as exc:
+            return Response(
+                {"end_datetime": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST
+            )
+        except EventEndNotExtendableError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
         return Response(self.get_serializer(event).data)
 

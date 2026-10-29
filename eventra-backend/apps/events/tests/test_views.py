@@ -1545,3 +1545,96 @@ class TestOrganizerEventList:
     def test_attendee_and_anonymous_are_refused(self):
         assert _client(UserFactory()).get("/organizer/events/").status_code == 403
         assert APIClient().get("/organizer/events/").status_code == 401
+
+
+class TestRunningLateEndpoint:
+    def _running(self, organizer):
+        now = timezone.now()
+        return EventFactory(
+            organizer=organizer,
+            start_datetime=now - timedelta(hours=2),
+            end_datetime=now + timedelta(minutes=30),
+        )
+
+    def test_owner_pushes_the_end_later(self, organizer_user):
+        event = self._running(organizer_user)
+        new_end = event.end_datetime + timedelta(hours=1)
+        response = auth_client(organizer_user).post(
+            f"/events/{event.id}/running-late/",
+            {"end_datetime": new_end.isoformat()},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["status"] == Event.Status.APPROVED
+        event.refresh_from_db()
+        assert event.end_datetime == new_end
+
+    def test_admin_may_extend_any_event(self, organizer_user, admin_user):
+        event = self._running(organizer_user)
+        response = auth_client(admin_user).post(
+            f"/events/{event.id}/running-late/",
+            {"end_datetime": (event.end_datetime + timedelta(hours=1)).isoformat()},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_other_organizer_cannot_find_it(self, organizer_user):
+        event = self._running(organizer_user)
+        event.status = Event.Status.PENDING_APPROVAL
+        event.save(update_fields=["status"])
+        other = UserFactory(role=Roles.ORGANIZER)
+        response = auth_client(other).post(
+            f"/events/{event.id}/running-late/",
+            {"end_datetime": (event.end_datetime + timedelta(hours=1)).isoformat()},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_other_organizer_is_forbidden_on_a_public_event(self, organizer_user):
+        event = self._running(organizer_user)
+        other = UserFactory(role=Roles.ORGANIZER)
+        response = auth_client(other).post(
+            f"/events/{event.id}/running-late/",
+            {"end_datetime": (event.end_datetime + timedelta(hours=1)).isoformat()},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_earlier_end_is_a_field_error(self, organizer_user):
+        event = self._running(organizer_user)
+        response = auth_client(organizer_user).post(
+            f"/events/{event.id}/running-late/",
+            {"end_datetime": (event.end_datetime - timedelta(minutes=5)).isoformat()},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "end_datetime" in response.data
+
+    def test_completed_event_is_a_conflict(self, admin_user):
+        event = EventFactory(status=Event.Status.COMPLETED)
+        response = auth_client(admin_user).post(
+            f"/events/{event.id}/running-late/",
+            {"end_datetime": (timezone.now() + timedelta(hours=1)).isoformat()},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_409_CONFLICT
+
+
+class TestVoidCompletedEvent:
+    def test_admin_voids_a_completed_unpaid_event_and_refunds_are_queued(
+        self, admin_user, django_capture_on_commit_callbacks
+    ):
+        event = EventFactory(status=Event.Status.COMPLETED)
+        with (
+            patch("apps.events.views.refund_event_bookings_task") as task,
+            django_capture_on_commit_callbacks(execute=True),
+        ):
+            response = auth_client(admin_user).post(f"/events/{event.id}/cancel/")
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["status"] == Event.Status.CANCELLED
+        task.delay.assert_called_once_with(str(event.id))
+
+    def test_organizer_cannot_void_their_completed_event(self, organizer_user):
+        event = EventFactory(organizer=organizer_user, status=Event.Status.COMPLETED)
+        response = auth_client(organizer_user).post(f"/events/{event.id}/cancel/")
+        assert response.status_code == status.HTTP_409_CONFLICT

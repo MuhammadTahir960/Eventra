@@ -1,8 +1,11 @@
+from datetime import timedelta
 from decimal import Decimal
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 import pytest
 from django.urls import resolve
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -239,4 +242,65 @@ class TestAdminPayoutSettleView:
 
         response = _authed_client(organizer).post(f"/admin/payouts/{payout.id}/settle/")
 
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+def _completed_with_sale(organizer=None, hours_ago=25):
+    kwargs = {"organizer": organizer} if organizer else {}
+    event = EventFactory(
+        status=Event.Status.COMPLETED,
+        completed_at=timezone.now() - timedelta(hours=hours_ago),
+        **kwargs,
+    )
+    _confirmed_booking_with_ticket(event, Decimal("50.00"))
+    return event
+
+
+class TestAdminPayOut:
+    def test_pays_out_after_the_wait(self, admin_client):
+        event = _completed_with_sale()
+        with patch("apps.payouts.tasks.settle_payout"):
+            response = admin_client.post(f"/admin/events/{event.id}/pay-out/")
+        assert response.status_code == status.HTTP_201_CREATED
+        assert response.data["status"] == OrganizerPayout.Status.PROCESSING
+        assert response.data["net_amount"] == "45.00"
+
+    def test_conflict_before_the_wait(self, admin_client):
+        event = _completed_with_sale(hours_ago=2)
+        response = admin_client.post(f"/admin/events/{event.id}/pay-out/")
+        assert response.status_code == status.HTTP_409_CONFLICT
+
+    def test_organizer_is_forbidden(self, organizer_user):
+        event = _completed_with_sale(organizer=organizer_user)
+        response = _authed_client(organizer_user).post(
+            f"/admin/events/{event.id}/pay-out/"
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_unknown_event_is_404(self, admin_client):
+        response = admin_client.post(f"/admin/events/{uuid4()}/pay-out/")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+class TestAwaitingPayoutLists:
+    def test_admin_ready_list_shows_eligibility(self, admin_client):
+        ready = _completed_with_sale()
+        waiting = _completed_with_sale(hours_ago=2)
+        response = admin_client.get("/admin/payouts/ready/")
+        assert response.status_code == status.HTTP_200_OK
+        rows = {row["event_id"]: row for row in response.data["results"]}
+        assert rows[str(ready.id)]["eligible"] is True
+        assert rows[str(waiting.id)]["eligible"] is False
+        assert rows[str(ready.id)]["net_amount"] == "45.00"
+
+    def test_organizer_upcoming_list_is_scoped_to_own_events(self, organizer_user):
+        own = _completed_with_sale(organizer=organizer_user, hours_ago=2)
+        _completed_with_sale()
+        response = _authed_client(organizer_user).get("/organizer/payouts/upcoming/")
+        assert response.status_code == status.HTTP_200_OK
+        assert [row["event_id"] for row in response.data["results"]] == [str(own.id)]
+        assert response.data["results"][0]["payout_available_at"]
+
+    def test_attendee_cannot_see_the_upcoming_list(self, attendee_user):
+        response = _authed_client(attendee_user).get("/organizer/payouts/upcoming/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
