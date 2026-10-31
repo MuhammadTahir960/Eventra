@@ -151,6 +151,12 @@ class TestCreateVenue:
         response = client.post(self.url, _venue_payload(capacity=0))
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_capacity_above_the_largest_stadiums_rejected(self, admin):
+        client = auth_client(admin)
+        response = client.post(self.url, _venue_payload(capacity=150_001))
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "capacity" in response.data
+
     def test_missing_fields_rejected(self, admin):
         client = auth_client(admin)
         response = client.post(self.url, {"name": "Incomplete Arena"})
