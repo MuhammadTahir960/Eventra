@@ -13,7 +13,13 @@ from apps.sports.factories import LeagueFactory, TeamFactory
 from apps.users.factories import UserFactory
 from apps.venues.factories import VenueFactory
 
-from ..validators import MAX_IMAGE_UPLOAD_SIZE_MB
+from ..validators import (
+    MAX_IMAGE_UPLOAD_SIZE_MB,
+    has_allowed_text,
+    validate_event_title,
+    validate_image_upload_size,
+    validate_person_name,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -138,3 +144,82 @@ class TestImagePixelCap:
         with pytest.raises(ValidationError):
             validators.validate_image_upload_size(bomb)
         assert bomb.tell() == 0
+
+
+BAD_TEXT = [
+    "\u202eevil",
+    "a\x07b",
+    "a\u200bb",
+    "a\x00b",
+    "a\nb",
+    "a\u2028b",
+    "a\ufeffb",
+]
+
+
+@pytest.mark.parametrize("value", BAD_TEXT)
+def test_single_line_text_refuses_control_and_invisible_characters(value):
+    assert not has_allowed_text(value)
+
+
+@pytest.mark.parametrize(
+    "value", ["R&B Night <3", "Café 2026", "قوالی کی رات", "😀 Fest", "می\u200cخواهم"]
+)
+def test_single_line_text_keeps_real_titles(value):
+    assert has_allowed_text(value)
+
+
+def test_multiline_text_allows_only_line_breaks_and_tabs_on_top():
+    assert has_allowed_text("line one\r\nline\ttwo", multiline=True)
+    assert not has_allowed_text("a\x07b", multiline=True)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Syed Muhammad", "O'Brien", "Anne-Marie", "J.R.", "طاہر حیدر", "मुहम्मद", "José"],
+)
+def test_real_names_pass(name):
+    validate_person_name(name)
+
+
+@pytest.mark.parametrize("name", ["<b>x</b>", "a1", "\u202eevil", "a\nb", "---", "😀"])
+def test_names_outside_the_allow_list_fail(name):
+    with pytest.raises(ValidationError):
+        validate_person_name(name)
+
+
+def _image(fmt):
+    buffer = io.BytesIO()
+    Image.new("RGB", (2, 2)).save(buffer, format=fmt)
+    return SimpleUploadedFile("photo.png", buffer.getvalue())
+
+
+def test_a_gif_renamed_png_is_refused_by_its_real_format():
+    with pytest.raises(ValidationError, match="JPEG, PNG or WebP"):
+        validate_image_upload_size(_image("GIF"))
+    validate_image_upload_size(_image("PNG"))
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "R&B Night: Vol. 2",
+        "AC/DC Tribute (Live)",
+        "Lahore vs Karachi - T20",
+        "Who's Next?",
+        "Romeo + Juliet #1",
+        "50% Off Night",
+        "قوالی کی رات",
+    ],
+)
+def test_professional_titles_pass(title):
+    validate_event_title(title)
+
+
+@pytest.mark.parametrize(
+    "title",
+    ["Night <3", "Party 😀", "SALE!!!", "Win $$$", "a_b", "x=y", "[VIP]", "---", "%%"],
+)
+def test_unprofessional_titles_fail(title):
+    with pytest.raises(ValidationError):
+        validate_event_title(title)

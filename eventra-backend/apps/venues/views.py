@@ -9,6 +9,7 @@ from rest_framework.views import APIView
 from apps.common.constants import Roles
 from apps.common.mixins import SoftDeleteDestroyMixin, SoftDeleteRestoreMixin
 from apps.common.permissions import IsAdmin, IsAdminForWrite, IsOrganizer
+from apps.common.validators import has_allowed_text
 from apps.events.services import find_blocking_upcoming_event
 
 from .models import Venue, VenueRequest
@@ -32,7 +33,7 @@ from .services import (
 
 
 class VenueFilterSet(django_filters.FilterSet):
-    city = django_filters.CharFilter(lookup_expr="iexact")
+    city = django_filters.CharFilter(lookup_expr="iexact", max_length=100)
 
     class Meta:
         model = Venue
@@ -181,6 +182,11 @@ class VenueRequestRejectView(APIView):
                 if hasattr(request.data, "get")
                 else None
             )
+            if isinstance(notes, str) and not has_allowed_text(notes, multiline=True):
+                return Response(
+                    {"admin_notes": ["This contains characters that aren't allowed."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             reject_venue_request(venue_request, notes if isinstance(notes, str) else "")
         except VenueRequestNotPendingError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)

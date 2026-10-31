@@ -1,11 +1,13 @@
 from rest_framework import serializers
 
-from apps.common.serializers import IntegrityErrorHandlingMixin
+from apps.common.serializers import AllowedTextMixin, IntegrityErrorHandlingMixin
 
 from .models import Seat, Venue, VenueRequest
 
 
-class VenueSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
+class VenueSerializer(
+    AllowedTextMixin, IntegrityErrorHandlingMixin, serializers.ModelSerializer
+):
     integrity_error_field = "name"
     integrity_error_message = "A venue with this name already exists in this city."
 
@@ -56,7 +58,7 @@ class SeatSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class RowSpecSerializer(serializers.Serializer):
+class RowSpecSerializer(AllowedTextMixin, serializers.Serializer):
     row_label = serializers.CharField(max_length=10)
     seat_count = serializers.IntegerField(
         min_value=1,
@@ -64,7 +66,7 @@ class RowSpecSerializer(serializers.Serializer):
     )
 
 
-class SectionSpecSerializer(serializers.Serializer):
+class SectionSpecSerializer(AllowedTextMixin, serializers.Serializer):
     name = serializers.CharField(max_length=50)
     rows = RowSpecSerializer(many=True, allow_empty=False)
 
@@ -95,7 +97,7 @@ class BulkSeatTemplateSerializer(serializers.Serializer):
         return sections
 
 
-class VenueRequestSerializer(serializers.ModelSerializer):
+class VenueRequestSerializer(AllowedTextMixin, serializers.ModelSerializer):
     class Meta:
         model = VenueRequest
         fields = [
