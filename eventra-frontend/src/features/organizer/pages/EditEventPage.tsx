@@ -147,11 +147,16 @@ function EditForm({ event }: { event: EventItem }) {
             value={values.category}
             onChange={(e) => set('category', e.target.value)}
           >
-            {(categories.data?.list ?? []).map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.name}
-              </option>
-            ))}
+            {(categories.data?.list ?? [])
+              .filter(
+                (category) =>
+                  !category.admin_only || category.id === event.category,
+              )
+              .map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
           </NativeSelect>
         )}
       </FormField>

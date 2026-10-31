@@ -49,6 +49,27 @@ describe('validateDraft', () => {
     expect(errors).toHaveProperty('description')
   })
 
+  it('limits length, lead time and (for organizers) notice', () => {
+    const at = (iso: string) =>
+      validateDraft(makeDraft(), ['North', 'South'], new Date(iso))
+    const tooLong = validateDraft(
+      makeDraft({ end: '2026-11-20T18:00' }),
+      ['North', 'South'],
+      NOW,
+    )
+    expect(tooLong.end).toMatch(/14 days/)
+    expect(at('2024-10-01T00:00').start).toMatch(/2 years/)
+    const soon = new Date(
+      new Date('2026-11-01T18:00').getTime() - 6 * 60 * 60 * 1000,
+    )
+    expect(
+      validateDraft(makeDraft(), ['North', 'South'], soon, 24).start,
+    ).toMatch(/24 hours/)
+    expect(
+      validateDraft(makeDraft(), ['North', 'South'], soon, 0).start,
+    ).toBeUndefined()
+  })
+
   it('rejects a start in the past and an end before the start', () => {
     const errors = validateDraft(
       makeDraft({ start: '2026-10-01T18:00', end: '2026-09-30T18:00' }),

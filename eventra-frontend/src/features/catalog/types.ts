@@ -22,6 +22,8 @@ export interface Category {
   slug: string
   icon: string
   sort_order: number
+  // Only admins may list events here (Sports)
+  admin_only: boolean
 }
 
 export interface League {
