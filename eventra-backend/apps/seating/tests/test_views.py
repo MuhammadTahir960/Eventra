@@ -3,12 +3,14 @@ import uuid
 from unittest.mock import MagicMock
 
 import pytest
+from django.conf import settings
 from django.db import connection
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.bookings.models import Booking
+from apps.bookings.views import BookingCheckoutView
 from apps.events.factories import (
     EventFactory,
     TicketTierFactory,
@@ -21,6 +23,7 @@ from apps.venues.factories import SeatFactory
 from ..factories import EventSeatFactory
 from ..models import EventSeat
 from ..services import MAX_SEATS_PER_HOLD
+from ..views import EventSeatHoldView
 
 pytestmark = pytest.mark.django_db
 
@@ -435,3 +438,9 @@ class TestInternalSeatsBroadcastView:
 
         assert response.status_code == 204
         mock_broadcast.assert_not_called()
+
+
+def test_hold_and_checkout_have_a_configured_throttle():
+    rates = settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]
+    assert rates[EventSeatHoldView.throttle_scope] == "60/min"
+    assert rates[BookingCheckoutView.throttle_scope] == "20/min"

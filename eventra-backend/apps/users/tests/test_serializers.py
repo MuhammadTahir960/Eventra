@@ -124,13 +124,13 @@ def test_register_serializer_rejects_invalid_email_format():
 
 
 def test_register_serializer_rejects_first_name_over_max_length():
-    serializer = RegisterSerializer(data=_register_payload(first_name="A" * 31))
+    serializer = RegisterSerializer(data=_register_payload(first_name="A" * 51))
     assert serializer.is_valid() is False
     assert "first_name" in serializer.errors
 
 
 def test_register_serializer_rejects_last_name_over_max_length():
-    serializer = RegisterSerializer(data=_register_payload(last_name="B" * 31))
+    serializer = RegisterSerializer(data=_register_payload(last_name="B" * 51))
     assert serializer.is_valid() is False
     assert "last_name" in serializer.errors
 

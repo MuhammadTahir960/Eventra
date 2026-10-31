@@ -63,6 +63,7 @@ class BookingDetailView(generics.RetrieveAPIView):
 
 class BookingCheckoutView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = "checkout"
 
     def post(self, request, id):
         booking = generics.get_object_or_404(

@@ -51,8 +51,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     email = models.EmailField(unique=True, db_index=True)
-    first_name = models.CharField(max_length=30)
-    last_name = models.CharField(max_length=30)
+    first_name = models.CharField(max_length=50)
+    last_name = models.CharField(max_length=50)
     role = models.CharField(
         max_length=20, choices=Roles.choices, default=Roles.ATTENDEE
     )
@@ -70,6 +70,8 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     created_at = models.DateTimeField(auto_now_add=True)
     last_updated = models.DateTimeField(auto_now=True)
+    # set when the user deletes their account; personal data is wiped then
+    deleted_at = models.DateTimeField(null=True, blank=True)
 
     objects = UserManager()
 

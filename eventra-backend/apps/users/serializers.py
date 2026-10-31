@@ -9,11 +9,12 @@ from rest_framework_simplejwt.serializers import (
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.common.constants import Roles
+from apps.common.serializers import PersonNameMixin
 
 from .models import User
 
 
-class RegisterSerializer(serializers.ModelSerializer):
+class RegisterSerializer(PersonNameMixin, serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, max_length=128)
     gender = serializers.ChoiceField(
         choices=User.Gender.choices,
@@ -129,6 +130,10 @@ class LogoutSerializer(serializers.Serializer):
             raise serializers.ValidationError({"refresh": str(exc)}) from exc
 
 
+class DeleteAccountSerializer(serializers.Serializer):
+    password = serializers.CharField(write_only=True, max_length=128)
+
+
 class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
 
@@ -149,7 +154,7 @@ _AVATAR_ASSET_KEYS = {
 }
 
 
-class UserSerializer(serializers.ModelSerializer):
+class UserSerializer(PersonNameMixin, serializers.ModelSerializer):
     avatar = serializers.SerializerMethodField()
 
     class Meta:

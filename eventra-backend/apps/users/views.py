@@ -10,6 +10,7 @@ from apps.common.permissions import IsAdmin
 from .models import User
 from .serializers import (
     ActiveUserTokenObtainPairSerializer,
+    DeleteAccountSerializer,
     LogoutSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
@@ -18,6 +19,9 @@ from .serializers import (
     UserSerializer,
 )
 from .services import (
+    AccountDeletionBlockedError,
+    IncorrectPasswordError,
+    delete_account,
     issue_ws_ticket,
     register_user,
     request_password_reset,
@@ -90,6 +94,32 @@ class MeView(generics.RetrieveUpdateAPIView):
         return self.request.user
 
 
+class AccountDeletionView(generics.GenericAPIView):
+    serializer_class = DeleteAccountSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = "auth-delete-account"
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            delete_account(request.user, serializer.validated_data["password"])
+        except IncorrectPasswordError:
+            return Response(
+                {"password": ["That password isn't right."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except AccountDeletionBlockedError as exc:
+            return Response(
+                {
+                    "detail": "Your account can't be deleted yet.",
+                    "reasons": exc.reasons,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class PasswordResetRequestView(generics.GenericAPIView):
     serializer_class = PasswordResetRequestSerializer
     permission_classes = [permissions.AllowAny]
@@ -147,7 +177,7 @@ class WsTicketView(generics.GenericAPIView):
 
 
 class AdminUserFilterSet(django_filters.FilterSet):
-    search = django_filters.CharFilter(method="filter_search")
+    search = django_filters.CharFilter(method="filter_search", max_length=100)
     role = django_filters.ChoiceFilter(choices=Roles.choices)
 
     class Meta:

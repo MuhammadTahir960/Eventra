@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    AccountDeletionView,
     AdminUserListView,
     LoginView,
     LogoutView,
@@ -20,6 +21,7 @@ urlpatterns = [
     path("auth/refresh/", SafeTokenRefreshView.as_view(), name="token_refresh"),
     path("auth/logout/", LogoutView.as_view(), name="logout"),
     path("auth/me/", MeView.as_view(), name="me"),
+    path("auth/me/deletion/", AccountDeletionView.as_view(), name="account-deletion"),
     path(
         "auth/password-reset/",
         PasswordResetRequestView.as_view(),
