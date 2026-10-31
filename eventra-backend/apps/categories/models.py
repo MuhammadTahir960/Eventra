@@ -9,6 +9,7 @@ class Category(SoftDeleteModel):
     slug = models.SlugField(max_length=100, blank=True)
     icon = models.CharField(max_length=50, blank=True)
     sort_order = models.PositiveIntegerField(default=0)
+    admin_only = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["sort_order", "name"]

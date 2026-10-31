@@ -1,5 +1,10 @@
+import importlib
+
 import pytest
+from django.apps import apps
 from django.db import IntegrityError
+
+from apps.events.factories import EventFactory
 
 from ..factories import CategoryFactory
 from ..models import Category
@@ -111,3 +116,33 @@ def test_default_ordering_is_by_sort_order_then_name():
     CategoryFactory(name="Beta", sort_order=0)
     names = list(Category.objects.values_list("name", flat=True))
     assert names == ["Beta", "Alpha", "Zebra"]
+
+
+migration = importlib.import_module("apps.categories.migrations.0003_final_categories")
+
+
+def run():
+    migration.add_final_categories(apps, None)
+
+
+def test_creates_the_final_list_once_even_when_run_again():
+    run()
+    run()
+    names = list(Category.objects.values_list("name", flat=True))
+    assert names == migration.FINAL_CATEGORIES
+    assert list(
+        Category.objects.filter(admin_only=True).values_list("name", flat=True)
+    ) == ["Sports"]
+
+
+def test_old_names_are_renamed_and_keep_their_events():
+    Category.objects.all().delete()
+    music = Category.objects.create(name="Music")
+    event = EventFactory(category=music)
+    run()
+    music.refresh_from_db()
+    assert music.name == "Concerts & Live Music"
+    assert music.slug == "concerts-live-music"
+    event.refresh_from_db()
+    assert event.category_id == music.id
+    assert Category.objects.filter(name__iexact="concerts & live music").count() == 1
