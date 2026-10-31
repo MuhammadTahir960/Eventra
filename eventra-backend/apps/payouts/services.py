@@ -41,7 +41,10 @@ def _sum_confirmed_booking_totals(event: Event) -> Decimal:
 
 
 def compute_payout_amounts(event: Event) -> tuple[Decimal, Decimal, Decimal]:
-    gross_revenue = _sum_confirmed_booking_totals(event)
+    return split_gross_revenue(_sum_confirmed_booking_totals(event))
+
+
+def split_gross_revenue(gross_revenue: Decimal) -> tuple[Decimal, Decimal, Decimal]:
     platform_fee = (gross_revenue * PLATFORM_FEE_PERCENTAGE).quantize(
         Decimal("0.01"), rounding=ROUND_HALF_UP
     )
@@ -133,9 +136,23 @@ def awaiting_payout(events) -> models.QuerySet:
         tickets__event_seat__event=models.OuterRef("pk"),
         status=Booking.Status.CONFIRMED,
     )
+    gross = (
+        Booking.objects.filter(
+            status=Booking.Status.CONFIRMED,
+            pk__in=Ticket.objects.filter(
+                event_seat__event=models.OuterRef(models.OuterRef("pk"))
+            ).values("booking"),
+        )
+        .order_by()
+        .annotate(group=models.Value(1))
+        .values("group")
+        .annotate(total=models.Sum("total_amount"))
+        .values("total")
+    )
     return (
         events.filter(status=Event.Status.COMPLETED, payout__isnull=True)
         .filter(models.Exists(sold))
+        .annotate(gross_revenue=models.Subquery(gross))
         .select_related("organizer", "venue")
         .order_by("completed_at", "id")
     )

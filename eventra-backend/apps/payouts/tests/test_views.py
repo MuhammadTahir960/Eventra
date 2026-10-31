@@ -4,6 +4,8 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import resolve
 from django.utils import timezone
 from rest_framework import status
@@ -304,3 +306,25 @@ class TestAwaitingPayoutLists:
     def test_attendee_cannot_see_the_upcoming_list(self, attendee_user):
         response = _authed_client(attendee_user).get("/organizer/payouts/upcoming/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_ready_list_query_count_does_not_grow_with_rows(
+        self, admin_client, django_assert_max_num_queries
+    ):
+        _completed_with_sale()
+        with CaptureQueriesContext(connection) as one_row:
+            admin_client.get("/admin/payouts/ready/")
+        for _ in range(5):
+            _completed_with_sale()
+        with django_assert_max_num_queries(len(one_row)):
+            response = admin_client.get("/admin/payouts/ready/")
+        assert len(response.data["results"]) == 6
+
+    def test_a_booking_with_two_tickets_counts_once(self, admin_client):
+        event = _completed_with_sale()
+        booking = Booking.objects.get(tickets__event_seat__event=event)
+        seat = EventSeatFactory(event=event, status=EventSeat.Status.BOOKED)
+        Ticket.objects.create(
+            booking=booking, event_seat=seat, status=Ticket.Status.VALID
+        )
+        row = admin_client.get("/admin/payouts/ready/").data["results"][0]
+        assert row["gross_revenue"] == "50.00"
