@@ -32,9 +32,9 @@ urlpatterns = [
         name="admin-payout-ready",
     ),
     path(
-        "admin/events/<uuid:event_id>/pay-out/",
+        "admin/events/<uuid:event_id>/payouts/",
         AdminEventPayOutView.as_view(),
-        name="admin-event-pay-out",
+        name="admin-event-payouts",
     ),
     path(
         "admin/payouts/",

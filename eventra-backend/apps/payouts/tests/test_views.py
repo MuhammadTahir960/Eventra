@@ -262,25 +262,25 @@ class TestAdminPayOut:
     def test_pays_out_after_the_wait(self, admin_client):
         event = _completed_with_sale()
         with patch("apps.payouts.tasks.settle_payout"):
-            response = admin_client.post(f"/admin/events/{event.id}/pay-out/")
+            response = admin_client.post(f"/admin/events/{event.id}/payouts/")
         assert response.status_code == status.HTTP_201_CREATED
         assert response.data["status"] == OrganizerPayout.Status.PROCESSING
         assert response.data["net_amount"] == "45.00"
 
     def test_conflict_before_the_wait(self, admin_client):
         event = _completed_with_sale(hours_ago=2)
-        response = admin_client.post(f"/admin/events/{event.id}/pay-out/")
+        response = admin_client.post(f"/admin/events/{event.id}/payouts/")
         assert response.status_code == status.HTTP_409_CONFLICT
 
     def test_organizer_is_forbidden(self, organizer_user):
         event = _completed_with_sale(organizer=organizer_user)
         response = _authed_client(organizer_user).post(
-            f"/admin/events/{event.id}/pay-out/"
+            f"/admin/events/{event.id}/payouts/"
         )
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_unknown_event_is_404(self, admin_client):
-        response = admin_client.post(f"/admin/events/{uuid4()}/pay-out/")
+        response = admin_client.post(f"/admin/events/{uuid4()}/payouts/")
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
