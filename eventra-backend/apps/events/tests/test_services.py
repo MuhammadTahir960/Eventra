@@ -19,7 +19,7 @@ from apps.venues.factories import VenueFactory
 from ..factories import EventFactory, TicketTierFactory
 from ..models import Event
 from ..services import (
-    MAX_RUNNING_LATE_DAYS,
+    MAX_EVENT_LENGTH_DAYS,
     RUNNING_LATE_OPENS_HOURS,
     DuplicateEventSlugError,
     EventEndNotExtendableError,
@@ -420,7 +420,7 @@ def test_running_late_moves_the_end_without_review():
 
 @pytest.mark.parametrize(
     "shift",
-    [timedelta(0), -timedelta(minutes=10), timedelta(days=MAX_RUNNING_LATE_DAYS)],
+    [timedelta(0), -timedelta(minutes=10), timedelta(days=MAX_EVENT_LENGTH_DAYS)],
 )
 def test_running_late_rejects_earlier_or_too_far(shift):
     event = _running(status=Event.Status.APPROVED)
@@ -442,20 +442,22 @@ def test_running_late_emails_holders_only_when_the_day_changes(
 ):
     task = MagicMock()
     monkeypatch.setattr("apps.notifications.tasks.send_event_running_late_email", task)
-    start = timezone.now().replace(hour=1, minute=0, second=0, microsecond=0)
+    midnight = (timezone.now() + timedelta(hours=27)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     event = EventFactory(
         status=Event.Status.APPROVED,
-        start_datetime=start,
-        end_datetime=start + timedelta(hours=22),
+        start_datetime=midnight - timedelta(hours=3),
+        end_datetime=midnight - timedelta(hours=1),
     )
     booking = _sell_ticket(event)
 
     with django_capture_on_commit_callbacks(execute=True):
-        extend_event_end(event, start + timedelta(hours=22, minutes=30))
+        extend_event_end(event, midnight - timedelta(minutes=30))
     task.delay.assert_not_called()
 
     with django_capture_on_commit_callbacks(execute=True):
-        extend_event_end(event, start + timedelta(days=1, hours=3))
+        extend_event_end(event, midnight + timedelta(hours=3))
     task.delay.assert_called_once_with(str(event.id), str(booking.user_id))
 
 
@@ -470,3 +472,15 @@ def test_running_late_is_closed_until_a_day_before_the_start():
         extend_event_end(event, event.end_datetime + timedelta(hours=1))
     event.refresh_from_db()
     assert event.end_datetime == start + timedelta(hours=2)
+
+
+def test_a_long_festival_can_run_late_up_to_the_length_limit():
+    now = timezone.now()
+    event = EventFactory(
+        status=Event.Status.APPROVED,
+        start_datetime=now + timedelta(hours=1),
+        end_datetime=now + timedelta(days=10),
+    )
+    extend_event_end(event, now + timedelta(days=10, hours=2))
+    with pytest.raises(InvalidEventEndError, match="14 days"):
+        extend_event_end(event, now + timedelta(days=15))
