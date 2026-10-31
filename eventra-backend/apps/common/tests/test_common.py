@@ -15,9 +15,9 @@ from apps.common.constants import Roles
 from apps.events.factories import EventFactory, TicketTierFactory
 from apps.users.factories import UserFactory
 
-from .mixins import SoftDeleteDestroyMixin, SoftDeleteRestoreMixin
-from .permissions import IsEventOwnerStrict
-from .serializers import IntegrityErrorHandlingMixin
+from ..mixins import SoftDeleteDestroyMixin, SoftDeleteRestoreMixin
+from ..permissions import IsEventOwnerStrict
+from ..serializers import IntegrityErrorHandlingMixin
 
 
 class FakeRequest:

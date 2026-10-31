@@ -13,7 +13,7 @@ from apps.sports.factories import LeagueFactory, TeamFactory
 from apps.users.factories import UserFactory
 from apps.venues.factories import VenueFactory
 
-from .validators import MAX_IMAGE_UPLOAD_SIZE_MB
+from ..validators import MAX_IMAGE_UPLOAD_SIZE_MB
 
 pytestmark = pytest.mark.django_db
 
