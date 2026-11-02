@@ -11,11 +11,14 @@ from rest_framework_simplejwt.token_blacklist.models import (
 )
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 
+from apps.bookings.factories import BookingFactory
+from apps.bookings.models import Booking
 from apps.common.constants import Roles
 from tests.helpers import results
 
 from ..factories import UserFactory
 from ..models import User
+from ..services import delete_account
 from ..tokens import generate_password_reset_token, generate_verification_token
 from ..views import AdminUserListView
 
@@ -192,7 +195,7 @@ class TestRegister:
         assert response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
 
     def test_throttled_after_rate_exceeded(self, api_client):
-        for i in range(5):
+        for i in range(20):
             api_client.post(
                 self.url,
                 {
@@ -838,3 +841,122 @@ class TestRolesAreNotChangeableViaApi:
 
 def test_admin_routes_resolve_to_dedicated_views(admin_user):
     assert resolve("/admin/users/").func.cls == AdminUserListView
+
+
+def test_profile_name_uses_the_allow_list():
+    client = APIClient()
+    client.force_authenticate(UserFactory())
+    response = client.patch("/auth/me/", {"first_name": "<b>x</b>"}, format="json")
+    assert response.status_code == 400 and "first_name" in response.data
+
+
+class TestDeleteAccount:
+    url = "/auth/me/deletion/"
+    password = "testpass123"
+
+    def _client(self, user):
+        client = APIClient()
+        client.force_authenticate(user=user)
+        return client
+
+    def test_deletes_with_204(self):
+        user = UserFactory()
+        response = self._client(user).post(
+            self.url, {"password": self.password}, format="json"
+        )
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+
+    def test_wrong_password_is_a_field_error(self):
+        response = self._client(UserFactory()).post(
+            self.url, {"password": "nope"}, format="json"
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "password" in response.data
+
+    def test_blocked_lists_every_reason(self):
+        user = UserFactory()
+        BookingFactory(user=user, status=Booking.Status.PENDING)
+        BookingFactory(user=user, status=Booking.Status.REFUND_FAILED)
+        response = self._client(user).post(
+            self.url, {"password": self.password}, format="json"
+        )
+        assert response.status_code == status.HTTP_409_CONFLICT
+        assert len(response.data["reasons"]) == 2
+
+    def test_anonymous_is_rejected(self):
+        response = APIClient().post(
+            self.url, {"password": self.password}, format="json"
+        )
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_only_the_logged_in_user_is_deleted(self):
+        user, other = UserFactory(), UserFactory()
+        response = self._client(user).post(
+            self.url,
+            {"password": self.password, "id": str(other.id), "email": other.email},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+        other.refresh_from_db()
+        assert other.is_active and other.deleted_at is None
+
+    def test_guessing_the_password_is_stopped_after_five_tries(self):
+        user = UserFactory()
+        client = self._client(user)
+        codes = [
+            client.post(self.url, {"password": "guess"}, format="json").status_code
+            for _ in range(6)
+        ]
+        assert codes == [400] * 5 + [429]
+        # blocked even with the right password
+        response = client.post(self.url, {"password": self.password}, format="json")
+        assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+        user.refresh_from_db()
+        assert user.is_active
+
+    def test_the_limit_is_per_user(self):
+        for _ in range(5):
+            self._client(UserFactory()).post(
+                self.url, {"password": "guess"}, format="json"
+            )
+        response = self._client(UserFactory()).post(
+            self.url, {"password": "guess"}, format="json"
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_email_can_register_again_after_deletion(self):
+        user = UserFactory()
+        email = user.email
+        self._client(user).post(self.url, {"password": self.password}, format="json")
+        response = APIClient().post(
+            "/auth/register/",
+            {
+                "email": email,
+                "password": "a-genuinely-strong-pass-1",
+                "first_name": "New",
+                "last_name": "Person",
+                "gender": "other",
+                "role": "attendee",
+            },
+        )
+        assert response.status_code == status.HTTP_201_CREATED, response.data
+
+    def test_deleted_user_access_token_stops_working(self):
+        user = UserFactory()
+        access = str(RefreshToken.for_user(user).access_token)
+        self._client(user).post(self.url, {"password": self.password}, format="json")
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+        assert client.get("/auth/me/").status_code == status.HTTP_401_UNAUTHORIZED
+
+
+def test_an_old_verification_link_does_not_revive_a_deleted_account():
+    user = UserFactory()
+    token = generate_verification_token(user.id)
+    delete_account(user, "testpass123")
+
+    response = APIClient().get(f"/auth/verify-email/?token={token}")
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    user.refresh_from_db()
+    assert not user.is_active and not user.is_email_verified

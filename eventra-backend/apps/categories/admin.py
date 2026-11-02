@@ -5,8 +5,8 @@ from .models import Category
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
-    list_display = ("name", "slug", "sort_order", "is_active")
-    list_filter = ("is_active",)
+    list_display = ("name", "slug", "sort_order", "admin_only", "is_active")
+    list_filter = ("is_active", "admin_only")
     search_fields = ("name", "slug")
     ordering = ("sort_order", "name")
 

@@ -1,5 +1,9 @@
 from django.conf import settings
-from django.core.validators import MinLengthValidator, MinValueValidator
+from django.core.validators import (
+    MaxValueValidator,
+    MinLengthValidator,
+    MinValueValidator,
+)
 from django.db import models
 from django.db.models.functions import Lower
 
@@ -19,7 +23,9 @@ class Venue(SoftDeleteModel):
     address = models.CharField(max_length=255)
     city = models.CharField(max_length=100, db_index=True)
     country = models.CharField(max_length=100)
-    capacity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    capacity = models.PositiveIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(150_000)]
+    )
     layout_shape = models.CharField(
         max_length=20, choices=LayoutShape.choices, default=LayoutShape.OVAL
     )

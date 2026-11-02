@@ -70,6 +70,7 @@ class EventSeatInstantiateView(APIView):
 
 class EventSeatHoldView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = "seat-hold"
 
     def post(self, request, event_id):
         event = get_visible_event_or_404(request.user, event_id)

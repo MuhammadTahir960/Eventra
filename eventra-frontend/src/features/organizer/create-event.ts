@@ -44,10 +44,16 @@ export function newTierKey(): string {
 
 const PRICE_PATTERN = /^\d{1,8}(\.\d{1,2})?$/
 
+const HOUR_MS = 60 * 60 * 1000
+const MAX_LENGTH_DAYS = 14
+const MAX_LEAD_DAYS = 730
+
+// `noticeHours`: organizers need 24h so an admin can review the event in time
 export function validateDraft(
   draft: EventDraft,
   venueSections: string[],
   now: Date = new Date(),
+  noticeHours = 0,
 ): DraftErrors {
   const errors: DraftErrors = {}
 
@@ -68,9 +74,18 @@ export function validateDraft(
   if (!start || Number.isNaN(start.getTime()))
     errors.start = 'Choose a start time.'
   else if (start <= now) errors.start = 'The start time must be in the future.'
+  else if (start.getTime() < now.getTime() + noticeHours * HOUR_MS)
+    errors.start = `The event must start at least ${noticeHours} hours from now, so it can be reviewed in time.`
+  else if (start.getTime() > now.getTime() + MAX_LEAD_DAYS * 24 * HOUR_MS)
+    errors.start = 'An event can start at most 2 years from now.'
   if (!end || Number.isNaN(end.getTime())) errors.end = 'Choose an end time.'
   else if (start && !Number.isNaN(start.getTime()) && end <= start) {
     errors.end = 'The end time must be after the start.'
+  } else if (
+    start &&
+    end.getTime() - start.getTime() > MAX_LENGTH_DAYS * 24 * HOUR_MS
+  ) {
+    errors.end = `An event can last at most ${MAX_LENGTH_DAYS} days.`
   }
 
   if (draft.match) {

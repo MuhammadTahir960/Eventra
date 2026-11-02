@@ -58,7 +58,7 @@ export function useRunningLate(id: string) {
   const client = useQueryClient()
   return useMutation({
     mutationFn: (endDatetime: string) =>
-      apiFetch<EventItem>(`/events/${id}/running-late/`, {
+      apiFetch<EventItem>(`/events/${id}/extend-end/`, {
         method: 'POST',
         body: { end_datetime: endDatetime },
       }),
@@ -168,7 +168,7 @@ export function usePayOut() {
   const client = useQueryClient()
   return useMutation({
     mutationFn: (eventId: string) =>
-      apiFetch<Payout>(`/admin/events/${eventId}/pay-out/`, { method: 'POST' }),
+      apiFetch<Payout>(`/admin/events/${eventId}/payouts/`, { method: 'POST' }),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ['admin', 'payouts'] })
     },

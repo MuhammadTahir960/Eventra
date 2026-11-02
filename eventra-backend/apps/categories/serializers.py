@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from apps.common.serializers import IntegrityErrorHandlingMixin
+from apps.common.serializers import AllowedTextMixin, IntegrityErrorHandlingMixin
 
 from .models import Category
 from .services import (
@@ -10,13 +10,15 @@ from .services import (
 )
 
 
-class CategorySerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
+class CategorySerializer(
+    AllowedTextMixin, IntegrityErrorHandlingMixin, serializers.ModelSerializer
+):
     integrity_error_field = "name"
     integrity_error_message = "A category with this name or slug already exists."
 
     class Meta:
         model = Category
-        fields = ["id", "name", "slug", "icon", "sort_order"]
+        fields = ["id", "name", "slug", "icon", "sort_order", "admin_only"]
         read_only_fields = ["id", "slug"]
 
     def validate(self, attrs):

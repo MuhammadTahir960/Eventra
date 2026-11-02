@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from apps.common.serializers import IntegrityErrorHandlingMixin
+from apps.common.serializers import AllowedTextMixin, IntegrityErrorHandlingMixin
 
 from .models import League, Sport, Team
 from .services import (
@@ -13,7 +13,9 @@ from .services import (
 )
 
 
-class SportSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
+class SportSerializer(
+    AllowedTextMixin, IntegrityErrorHandlingMixin, serializers.ModelSerializer
+):
     integrity_error_field = "name"
     integrity_error_message = "This name already exists in the given scope."
 
@@ -58,7 +60,10 @@ class ScopedUniqueNameMixin:
 
 
 class LeagueSerializer(
-    IntegrityErrorHandlingMixin, ScopedUniqueNameMixin, serializers.ModelSerializer
+    AllowedTextMixin,
+    IntegrityErrorHandlingMixin,
+    ScopedUniqueNameMixin,
+    serializers.ModelSerializer,
 ):
     unique_check = staticmethod(ensure_unique_league_name)
     integrity_error_field = "name"
@@ -71,7 +76,10 @@ class LeagueSerializer(
 
 
 class TeamSerializer(
-    IntegrityErrorHandlingMixin, ScopedUniqueNameMixin, serializers.ModelSerializer
+    AllowedTextMixin,
+    IntegrityErrorHandlingMixin,
+    ScopedUniqueNameMixin,
+    serializers.ModelSerializer,
 ):
     unique_check = staticmethod(ensure_unique_team_name)
     integrity_error_field = "name"

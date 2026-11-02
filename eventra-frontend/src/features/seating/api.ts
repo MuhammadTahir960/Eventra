@@ -6,7 +6,7 @@ export const seatingApi = {
   getSeats: (eventId: string, signal?: AbortSignal) =>
     apiFetch<EventSeat[]>(`/events/${eventId}/seats/`, { signal }),
 
-  // Reserves seats for 10 minutes. 409 means some were taken (the body names
+  // Reserves seats for 5 minutes. 409 means some were taken (the body names
   // them in `seat_ids`); 400 means a bad request such as more than 10 seats.
   holdSeats: (eventId: string, seatIds: string[]) =>
     apiFetch<HoldResponse>(`/events/${eventId}/seats/hold/`, {

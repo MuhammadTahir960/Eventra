@@ -180,7 +180,7 @@ export function RegisterPage() {
                 value={values.first_name ?? ''}
                 onChange={(event) => setField('first_name', event.target.value)}
                 autoComplete="given-name"
-                maxLength={30}
+                maxLength={50}
               />
             )}
           </FormField>
@@ -195,7 +195,7 @@ export function RegisterPage() {
                 value={values.last_name ?? ''}
                 onChange={(event) => setField('last_name', event.target.value)}
                 autoComplete="family-name"
-                maxLength={30}
+                maxLength={50}
               />
             )}
           </FormField>

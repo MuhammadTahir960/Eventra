@@ -57,7 +57,9 @@ SENSITIVE_EVENT_FIELDS = frozenset(
     {"venue", "category", "start_datetime", "end_datetime"}
 )
 COMPLETE_PAST_EVENTS_BUFFER_HOURS = 2
-MAX_RUNNING_LATE_DAYS = 7
+MAX_EVENT_LENGTH_DAYS = 14
+MAX_EVENT_LEAD_DAYS = 730
+ORGANIZER_MIN_NOTICE_HOURS = 24
 RUNNING_LATE_OPENS_HOURS = 24
 
 
@@ -337,9 +339,9 @@ def extend_event_end(event: Event, new_end) -> Event:
             )
         if new_end <= timezone.now():
             raise InvalidEventEndError("The new end time must be in the future.")
-        if new_end > event.start_datetime + timedelta(days=MAX_RUNNING_LATE_DAYS):
+        if new_end > event.start_datetime + timedelta(days=MAX_EVENT_LENGTH_DAYS):
             raise InvalidEventEndError(
-                f"An event can't end more than {MAX_RUNNING_LATE_DAYS} days after it starts."
+                f"An event can't end more than {MAX_EVENT_LENGTH_DAYS} days after it starts."
             )
 
         moved_day = (

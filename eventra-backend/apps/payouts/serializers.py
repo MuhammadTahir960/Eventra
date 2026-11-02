@@ -2,7 +2,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from .models import OrganizerPayout
-from .services import compute_payout_amounts, payout_available_at
+from .services import payout_available_at, split_gross_revenue
 
 
 class OrganizerPayoutSerializer(serializers.ModelSerializer):
@@ -43,7 +43,7 @@ class EventSalesSerializer(serializers.Serializer):
 
 class AwaitingPayoutSerializer(serializers.Serializer):
     def to_representation(self, event):
-        gross, fee, net = compute_payout_amounts(event)
+        gross, fee, net = split_gross_revenue(event.gross_revenue)
         available_at = payout_available_at(event)
         organizer = event.organizer
         return {

@@ -258,7 +258,12 @@ export function CreateEventPage() {
       void run()
       return
     }
-    const found = validateDraft(draft, sectionNames)
+    const found = validateDraft(
+      draft,
+      sectionNames,
+      new Date(),
+      isAdmin ? 0 : 24,
+    )
     setErrors(found)
     if (Object.keys(found).length > 0) {
       setFocusKey((key) => key + 1)
@@ -580,11 +585,13 @@ export function CreateEventPage() {
                       }
                     >
                       <option value="">Select a category</option>
-                      {categories.data?.list.map((category) => (
-                        <option key={category.id} value={category.id}>
-                          {category.name}
-                        </option>
-                      ))}
+                      {categories.data?.list
+                        .filter((category) => isAdmin || !category.admin_only)
+                        .map((category) => (
+                          <option key={category.id} value={category.id}>
+                            {category.name}
+                          </option>
+                        ))}
                     </NativeSelect>
                   )}
                 </FormField>

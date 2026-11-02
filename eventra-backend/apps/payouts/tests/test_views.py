@@ -4,6 +4,8 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import resolve
 from django.utils import timezone
 from rest_framework import status
@@ -260,25 +262,25 @@ class TestAdminPayOut:
     def test_pays_out_after_the_wait(self, admin_client):
         event = _completed_with_sale()
         with patch("apps.payouts.tasks.settle_payout"):
-            response = admin_client.post(f"/admin/events/{event.id}/pay-out/")
+            response = admin_client.post(f"/admin/events/{event.id}/payouts/")
         assert response.status_code == status.HTTP_201_CREATED
         assert response.data["status"] == OrganizerPayout.Status.PROCESSING
         assert response.data["net_amount"] == "45.00"
 
     def test_conflict_before_the_wait(self, admin_client):
         event = _completed_with_sale(hours_ago=2)
-        response = admin_client.post(f"/admin/events/{event.id}/pay-out/")
+        response = admin_client.post(f"/admin/events/{event.id}/payouts/")
         assert response.status_code == status.HTTP_409_CONFLICT
 
     def test_organizer_is_forbidden(self, organizer_user):
         event = _completed_with_sale(organizer=organizer_user)
         response = _authed_client(organizer_user).post(
-            f"/admin/events/{event.id}/pay-out/"
+            f"/admin/events/{event.id}/payouts/"
         )
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_unknown_event_is_404(self, admin_client):
-        response = admin_client.post(f"/admin/events/{uuid4()}/pay-out/")
+        response = admin_client.post(f"/admin/events/{uuid4()}/payouts/")
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
@@ -304,3 +306,25 @@ class TestAwaitingPayoutLists:
     def test_attendee_cannot_see_the_upcoming_list(self, attendee_user):
         response = _authed_client(attendee_user).get("/organizer/payouts/upcoming/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_ready_list_query_count_does_not_grow_with_rows(
+        self, admin_client, django_assert_max_num_queries
+    ):
+        _completed_with_sale()
+        with CaptureQueriesContext(connection) as one_row:
+            admin_client.get("/admin/payouts/ready/")
+        for _ in range(5):
+            _completed_with_sale()
+        with django_assert_max_num_queries(len(one_row)):
+            response = admin_client.get("/admin/payouts/ready/")
+        assert len(response.data["results"]) == 6
+
+    def test_a_booking_with_two_tickets_counts_once(self, admin_client):
+        event = _completed_with_sale()
+        booking = Booking.objects.get(tickets__event_seat__event=event)
+        seat = EventSeatFactory(event=event, status=EventSeat.Status.BOOKED)
+        Ticket.objects.create(
+            booking=booking, event_seat=seat, status=Ticket.Status.VALID
+        )
+        row = admin_client.get("/admin/payouts/ready/").data["results"][0]
+        assert row["gross_revenue"] == "50.00"

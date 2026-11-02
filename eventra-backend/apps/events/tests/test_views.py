@@ -369,6 +369,43 @@ class TestCreateEvent:
         assert response.status_code == status.HTTP_201_CREATED, response.data
         assert response.data["status"] == Event.Status.APPROVED
 
+    def test_event_longer_than_14_days_rejected(self, organizer_user):
+        start = timezone.now() + timedelta(days=10)
+        response = auth_client(organizer_user).post(
+            self.url,
+            _event_payload(end_datetime=(start + timedelta(days=15)).isoformat()),
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "end_datetime" in response.data
+
+    def test_event_more_than_2_years_ahead_rejected(self, admin_user):
+        start = timezone.now() + timedelta(days=731)
+        response = auth_client(admin_user).post(
+            self.url,
+            _event_payload(
+                start_datetime=start.isoformat(),
+                end_datetime=(start + timedelta(hours=3)).isoformat(),
+            ),
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "start_datetime" in response.data
+
+    def test_organizer_needs_24_hours_notice_but_admin_does_not(
+        self, organizer_user, admin_user
+    ):
+        start = timezone.now() + timedelta(hours=6)
+        payload = _event_payload(
+            start_datetime=start.isoformat(),
+            end_datetime=(start + timedelta(hours=3)).isoformat(),
+        )
+        response = auth_client(organizer_user).post(self.url, payload, format="json")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "start_datetime" in response.data
+        response = auth_client(admin_user).post(self.url, payload, format="json")
+        assert response.status_code == status.HTTP_201_CREATED, response.data
+
     def test_attendee_cannot_create(self, attendee_user):
         client = auth_client(attendee_user)
         response = client.post(self.url, _event_payload(), format="json")
@@ -420,10 +457,28 @@ class TestCreateSportsMatchEvent:
             event_type=Event.EventType.SPORTS_MATCH,
             home_team=str(home.id),
             away_team=str(away.id),
+            category=str(CategoryFactory(admin_only=True).id),
         )
         response = client.post(self.url, payload, format="json")
         assert response.status_code == status.HTTP_201_CREATED, response.data
         assert response.data["status"] == Event.Status.APPROVED
+
+    def test_sports_match_outside_the_sports_category_rejected(self, admin_user):
+        home, away = self._teams()
+        payload = _event_payload(
+            event_type=Event.EventType.SPORTS_MATCH,
+            home_team=str(home.id),
+            away_team=str(away.id),
+        )
+        response = auth_client(admin_user).post(self.url, payload, format="json")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "category" in response.data
+
+    def test_organizer_cannot_use_an_admin_only_category(self, organizer_user):
+        payload = _event_payload(category=str(CategoryFactory(admin_only=True).id))
+        response = auth_client(organizer_user).post(self.url, payload, format="json")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "category" in response.data
 
     def test_organizer_cannot_create_sports_match_event(self, organizer_user):
         home, away = self._teams()
@@ -1560,7 +1615,7 @@ class TestRunningLateEndpoint:
         event = self._running(organizer_user)
         new_end = event.end_datetime + timedelta(hours=1)
         response = auth_client(organizer_user).post(
-            f"/events/{event.id}/running-late/",
+            f"/events/{event.id}/extend-end/",
             {"end_datetime": new_end.isoformat()},
             format="json",
         )
@@ -1572,7 +1627,7 @@ class TestRunningLateEndpoint:
     def test_admin_may_extend_any_event(self, organizer_user, admin_user):
         event = self._running(organizer_user)
         response = auth_client(admin_user).post(
-            f"/events/{event.id}/running-late/",
+            f"/events/{event.id}/extend-end/",
             {"end_datetime": (event.end_datetime + timedelta(hours=1)).isoformat()},
             format="json",
         )
@@ -1584,7 +1639,7 @@ class TestRunningLateEndpoint:
         event.save(update_fields=["status"])
         other = UserFactory(role=Roles.ORGANIZER)
         response = auth_client(other).post(
-            f"/events/{event.id}/running-late/",
+            f"/events/{event.id}/extend-end/",
             {"end_datetime": (event.end_datetime + timedelta(hours=1)).isoformat()},
             format="json",
         )
@@ -1594,7 +1649,7 @@ class TestRunningLateEndpoint:
         event = self._running(organizer_user)
         other = UserFactory(role=Roles.ORGANIZER)
         response = auth_client(other).post(
-            f"/events/{event.id}/running-late/",
+            f"/events/{event.id}/extend-end/",
             {"end_datetime": (event.end_datetime + timedelta(hours=1)).isoformat()},
             format="json",
         )
@@ -1603,7 +1658,7 @@ class TestRunningLateEndpoint:
     def test_earlier_end_is_a_field_error(self, organizer_user):
         event = self._running(organizer_user)
         response = auth_client(organizer_user).post(
-            f"/events/{event.id}/running-late/",
+            f"/events/{event.id}/extend-end/",
             {"end_datetime": (event.end_datetime - timedelta(minutes=5)).isoformat()},
             format="json",
         )
@@ -1613,7 +1668,7 @@ class TestRunningLateEndpoint:
     def test_completed_event_is_a_conflict(self, admin_user):
         event = EventFactory(status=Event.Status.COMPLETED)
         response = auth_client(admin_user).post(
-            f"/events/{event.id}/running-late/",
+            f"/events/{event.id}/extend-end/",
             {"end_datetime": (timezone.now() + timedelta(hours=1)).isoformat()},
             format="json",
         )
@@ -1638,3 +1693,32 @@ class TestVoidCompletedEvent:
         event = EventFactory(organizer=organizer_user, status=Event.Status.COMPLETED)
         response = auth_client(organizer_user).post(f"/events/{event.id}/cancel/")
         assert response.status_code == status.HTTP_409_CONFLICT
+
+
+class TestInputAllowLists:
+    def _organizer_client(self, event):
+        client = APIClient()
+        client.force_authenticate(event.organizer)
+        return client
+
+    @pytest.mark.parametrize("title", ["\u202eevil", "Night <3"])
+    def test_title_refuses_characters_outside_the_allow_list(self, title):
+        event = EventFactory()
+        response = self._organizer_client(event).patch(
+            f"/events/{event.id}/", {"title": title}, format="json"
+        )
+        assert response.status_code == 400 and "title" in response.data
+
+    @pytest.mark.parametrize("field", ["search", "city"])
+    def test_filters_have_a_length_limit(self, field):
+        assert APIClient().get(f"/events/?{field}={'a' * 101}").status_code == 400
+        assert APIClient().get(f"/events/?{field}={'a' * 100}").status_code == 200
+
+    def test_rejection_reason_uses_the_allow_list(self, admin_client):
+        event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+        response = admin_client.post(
+            f"/admin/events/{event.id}/reject/",
+            {"reason": "bad\x07reason"},
+            format="json",
+        )
+        assert response.status_code == 400 and "reason" in response.data

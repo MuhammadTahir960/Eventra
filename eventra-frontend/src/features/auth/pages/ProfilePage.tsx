@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { ApiError, apiFetch } from '@/lib/api-client'
 import { authStore, useAuth, type SessionUser } from '../auth-store'
+import { DeleteAccountSection } from '../components/DeleteAccountSection'
 import { usePageTitle } from '@/lib/use-page-title'
 
 type Editable = Pick<SessionUser, 'first_name' | 'last_name' | 'gender'>
@@ -118,7 +119,7 @@ export function ProfilePage() {
               <Input
                 {...control}
                 value={values.first_name}
-                maxLength={30}
+                maxLength={50}
                 autoComplete="given-name"
                 onChange={(event) =>
                   setValues({ ...values, first_name: event.target.value })
@@ -135,7 +136,7 @@ export function ProfilePage() {
               <Input
                 {...control}
                 value={values.last_name}
-                maxLength={30}
+                maxLength={50}
                 autoComplete="family-name"
                 onChange={(event) =>
                   setValues({ ...values, last_name: event.target.value })
@@ -190,6 +191,8 @@ export function ProfilePage() {
           </Link>
         </p>
       </section>
+
+      <DeleteAccountSection />
     </div>
   )
 }

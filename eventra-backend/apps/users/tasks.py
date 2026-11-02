@@ -1,7 +1,11 @@
 from celery import shared_task
 
 from .models import User
-from .services import send_password_reset_email, send_verification_email
+from .services import (
+    send_account_deleted_email,
+    send_password_reset_email,
+    send_verification_email,
+)
 
 
 @shared_task(autoretry_for=(Exception,), retry_backoff=True, max_retries=3)
@@ -16,3 +20,8 @@ def send_password_reset_email_task(user_id: str) -> None:
     user = User.objects.filter(id=user_id, is_active=True).first()
     if user is not None:
         send_password_reset_email(user)
+
+
+@shared_task(autoretry_for=(Exception,), retry_backoff=True, max_retries=3)
+def send_account_deleted_email_task(email: str, first_name: str) -> None:
+    send_account_deleted_email(email, first_name)

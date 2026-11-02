@@ -190,7 +190,7 @@ CELERY_BEAT_SCHEDULE = {
     },
     "release-expired-holds": {
         "task": "apps.seating.tasks.release_expired_holds",
-        "schedule": 60.0,
+        "schedule": 30.0,
     },
     "release-expired-bookings": {
         "task": "apps.bookings.tasks.release_expired_bookings",
@@ -240,18 +240,22 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_THROTTLE_RATES": {
         "auth-login": "10/min",
-        "auth-register": "5/hour",
+        "auth-register": "20/hour",
         "auth-verify-email": "20/hour",
         "auth-password-reset": "5/hour",
         "auth-ws-ticket": "20/min",
+        "auth-delete-account": "5/hour",
         "ticket-download": "30/min",
         "venue-request": "10/hour",
+        "seat-hold": "60/min",
+        "checkout": "20/min",
         "anon": "100/min",
         "user": "300/min",
     },
     "NUM_PROXIES": 1,
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
+    "EXCEPTION_HANDLER": "apps.common.exceptions.api_exception_handler",
 }
 
 

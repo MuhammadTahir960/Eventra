@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from apps.common.constants import Roles
 from apps.common.mixins import SoftDeleteRestoreMixin
 from apps.common.permissions import IsAdmin, IsEventOwnerStrict, IsOrganizer
+from apps.common.validators import has_allowed_text
 from apps.payments.tasks import refund_event_bookings_task
 
 from .models import EVENT_SEARCH_CONFIG, Event, TicketTier
@@ -51,7 +52,9 @@ from .services import (
 
 class EventFilterSet(django_filters.FilterSet):
     category = django_filters.UUIDFilter(field_name="category_id")
-    city = django_filters.CharFilter(field_name="venue__city", lookup_expr="iexact")
+    city = django_filters.CharFilter(
+        field_name="venue__city", lookup_expr="iexact", max_length=100
+    )
     status = django_filters.ChoiceFilter(choices=Event.Status.choices)
     date_from = django_filters.DateTimeFilter(
         field_name="start_datetime", lookup_expr="gte"
@@ -61,7 +64,7 @@ class EventFilterSet(django_filters.FilterSet):
     )
     min_price = django_filters.NumberFilter(method="filter_noop")
     max_price = django_filters.NumberFilter(method="filter_noop")
-    search = django_filters.CharFilter(method="filter_search")
+    search = django_filters.CharFilter(method="filter_search", max_length=100)
 
     class Meta:
         model = Event
@@ -137,7 +140,7 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
             return [permissions.IsAuthenticated(), IsEventOwnerStrict()]
         if self.action == "destroy":
             return [permissions.IsAuthenticated(), IsEventOwnerOrAdminForDelete()]
-        if self.action in ("cancel", "running_late"):
+        if self.action in ("cancel", "extend_end"):
             return [permissions.IsAuthenticated(), IsEventOwnerOrAdminForDelete()]
         if self.action == "restore":
             return [IsAdmin()]
@@ -211,8 +214,8 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
 
         return Response(self.get_serializer(event).data)
 
-    @action(detail=True, methods=["post"], url_path="running-late")
-    def running_late(self, request, pk=None):
+    @action(detail=True, methods=["post"], url_path="extend-end")
+    def extend_end(self, request, pk=None):
         event = self.get_object()
         serializer = RunningLateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -367,6 +370,11 @@ class EventRejectView(views.APIView):
             reason = (
                 request.data.get("reason") if hasattr(request.data, "get") else None
             )
+            if isinstance(reason, str) and not has_allowed_text(reason, multiline=True):
+                return Response(
+                    {"reason": ["This contains characters that aren't allowed."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             reject_event(event, reason if isinstance(reason, str) else "")
         except (EventNotPendingApprovalError, EventHasPaidBookingsError) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)

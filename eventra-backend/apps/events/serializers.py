@@ -1,12 +1,19 @@
+from datetime import timedelta
+
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 
 from apps.common.constants import Roles
-from apps.common.serializers import IntegrityErrorHandlingMixin
+from apps.common.serializers import AllowedTextMixin, IntegrityErrorHandlingMixin
+from apps.common.validators import validate_event_title
 
 from .models import Event, TicketTier, TierSectionMapping
 from .services import (
+    MAX_EVENT_LEAD_DAYS,
+    MAX_EVENT_LENGTH_DAYS,
+    ORGANIZER_MIN_NOTICE_HOURS,
     ensure_tier_price_mutable,
     resolve_create_status,
     should_retrigger_approval,
@@ -21,7 +28,9 @@ def _is_organizer_or_admin_for_event(request, event) -> bool:
     return user.role == Roles.ADMIN or event.organizer_id == user.id
 
 
-class EventSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
+class EventSerializer(
+    AllowedTextMixin, IntegrityErrorHandlingMixin, serializers.ModelSerializer
+):
     integrity_error_field = "slug"
     integrity_error_message = "An event with a conflicting slug already exists."
 
@@ -73,6 +82,45 @@ class EventSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
             data.pop("rejection_reason", None)
         return data
 
+    def validate_title(self, value):
+        try:
+            validate_event_title(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages) from exc
+        return value
+
+    def _actor_is_admin(self):
+        user = getattr(self.context.get("request"), "user", None)
+        return bool(user and user.is_authenticated and user.role == Roles.ADMIN)
+
+    def _validate_start_window(self, start, now):
+        if start > now + timedelta(days=MAX_EVENT_LEAD_DAYS):
+            raise serializers.ValidationError(
+                {"start_datetime": "An event can start at most 2 years from now."}
+            )
+        if not self._actor_is_admin() and start < now + timedelta(
+            hours=ORGANIZER_MIN_NOTICE_HOURS
+        ):
+            raise serializers.ValidationError(
+                {
+                    "start_datetime": f"An event must start at least {ORGANIZER_MIN_NOTICE_HOURS} "
+                    "hours from now, so it can be reviewed in time."
+                }
+            )
+
+    def _validate_category(self, attrs, event_type):
+        category = self._current(attrs, "category")
+        if not category:
+            return
+        if "category" in attrs and category.admin_only and not self._actor_is_admin():
+            raise serializers.ValidationError(
+                {"category": "Only admins can list events in this category."}
+            )
+        if event_type == Event.EventType.SPORTS_MATCH and not category.admin_only:
+            raise serializers.ValidationError(
+                {"category": "A sports match must be in the Sports category."}
+            )
+
     def _current(self, attrs, field):
         return attrs.get(field, getattr(self.instance, field, None))
 
@@ -93,6 +141,20 @@ class EventSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"start_datetime": "start_datetime must be in the future."}
             )
+        if start_changed:
+            self._validate_start_window(attrs["start_datetime"], now)
+        dates_changed = "start_datetime" in attrs or "end_datetime" in attrs
+        if (
+            dates_changed
+            and start
+            and end
+            and end - start > timedelta(days=MAX_EVENT_LENGTH_DAYS)
+        ):
+            raise serializers.ValidationError(
+                {
+                    "end_datetime": f"An event can last at most {MAX_EVENT_LENGTH_DAYS} days."
+                }
+            )
 
         if self.instance is not None and self.instance.event_seats.exists():
             for field in ("venue", "is_seated"):
@@ -109,9 +171,7 @@ class EventSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
         league = self._current(attrs, "league")
 
         if event_type == Event.EventType.SPORTS_MATCH:
-            request = self.context.get("request")
-            actor = getattr(request, "user", None)
-            if not (actor and actor.is_authenticated and actor.role == Roles.ADMIN):
+            if not self._actor_is_admin():
                 raise PermissionDenied(
                     "Only admins can create or edit sports_match events "
                     "— sports fixtures are centrally curated data."
@@ -141,6 +201,9 @@ class EventSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "league/home_team/away_team may only be set on sports_match events."
             )
+
+        if "category" in attrs or "event_type" in attrs:
+            self._validate_category(attrs, event_type)
 
         return attrs
 
@@ -176,7 +239,9 @@ class PendingEventSerializer(EventSerializer):
         fields = [*EventSerializer.Meta.fields, "has_paid_bookings"]
 
 
-class TicketTierSerializer(IntegrityErrorHandlingMixin, serializers.ModelSerializer):
+class TicketTierSerializer(
+    AllowedTextMixin, IntegrityErrorHandlingMixin, serializers.ModelSerializer
+):
     class Meta:
         model = TicketTier
         fields = ["id", "event", "name", "price", "created_at"]
@@ -202,7 +267,7 @@ class TicketTierSerializer(IntegrityErrorHandlingMixin, serializers.ModelSeriali
 
 
 class TierSectionMappingSerializer(
-    IntegrityErrorHandlingMixin, serializers.ModelSerializer
+    AllowedTextMixin, IntegrityErrorHandlingMixin, serializers.ModelSerializer
 ):
     integrity_error_field = "section"
     integrity_error_message = (
