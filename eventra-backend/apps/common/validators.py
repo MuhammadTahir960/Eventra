@@ -30,8 +30,8 @@ def _check_pixel_count(file) -> None:
             image_format = img.format
     except Image.DecompressionBombError as exc:
         raise ValidationError("Image dimensions are too large.") from exc
-    except Exception:
-        return
+    except Exception as exc:
+        raise ValidationError("Upload a JPEG, PNG or WebP image.") from exc
     finally:
         with contextlib.suppress(Exception):
             file.seek(0)
