@@ -146,3 +146,17 @@ def test_old_names_are_renamed_and_keep_their_events():
     event.refresh_from_db()
     assert event.category_id == music.id
     assert Category.objects.filter(name__iexact="concerts & live music").count() == 1
+
+
+def test_an_old_name_alongside_its_new_name_is_merged_into_it():
+    Category.objects.all().delete()
+    music = Category.objects.create(name="Music")
+    concerts = Category.objects.create(name="Concerts & Live Music")
+    event = EventFactory(category=music)
+    run()
+    event.refresh_from_db()
+    assert event.category_id == concerts.id
+    assert not Category.objects.filter(name="Music").exists()
+    assert list(Category.objects.values_list("name", flat=True)) == (
+        migration.FINAL_CATEGORIES
+    )

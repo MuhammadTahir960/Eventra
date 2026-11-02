@@ -626,3 +626,15 @@ def test_the_last_two_admins_leaving_together_leaves_one(monkeypatch):
         partial(delete_account, second, PASSWORD),
     )
     assert User.objects.filter(role=Roles.ADMIN, is_active=True).count() == 1
+
+
+@pytest.mark.django_db
+def test_a_blocked_deletion_leaves_the_users_holds_untouched():
+    user = UserFactory()
+    hold = SeatHoldFactory(user=user)
+    expires_at = hold.expires_at
+    BookingFactory(user=user, status=Booking.Status.PENDING)
+    with pytest.raises(AccountDeletionBlockedError):
+        delete_account(user, PASSWORD)
+    hold.refresh_from_db()
+    assert hold.expires_at == expires_at

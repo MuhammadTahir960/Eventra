@@ -31,10 +31,15 @@ def add_final_categories(apps, schema_editor):
     Category = apps.get_model("categories", "Category")
     active = Category._base_manager.filter(is_active=True)
 
+    Event = apps.get_model("events", "Event")
     for old, new in RENAMES.items():
-        if active.filter(name__iexact=new).exists():
+        target = active.filter(name__iexact=new).first()
+        if target is None:
+            active.filter(name__iexact=old).update(name=new, slug=slugify(new))
             continue
-        active.filter(name__iexact=old).update(name=new, slug=slugify(new))
+        for stale in active.filter(name__iexact=old):
+            Event._base_manager.filter(category=stale).update(category=target)
+            active.filter(pk=stale.pk).update(is_active=False)
 
     for order, name in enumerate(FINAL_CATEGORIES):
         fields = {"sort_order": order, "admin_only": name in ADMIN_ONLY}
@@ -47,6 +52,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ("categories", "0002_category_admin_only"),
+        ("events", "0001_initial"),
     ]
 
     operations = [
