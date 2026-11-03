@@ -64,16 +64,7 @@ class VenueViewSet(
     http_method_names = ["get", "post", "patch", "delete"]
 
     def get_queryset(self):
-        user = self.request.user
-        include_inactive = str(
-            self.request.query_params.get("include_inactive", "")
-        ).lower() in ("1", "true", "yes")
-        if (
-            include_inactive
-            and user
-            and user.is_authenticated
-            and user.role == Roles.ADMIN
-        ):
+        if self.include_inactive():
             return Venue.all_objects.all()
         return Venue.objects.all()
 
