@@ -1,22 +1,15 @@
 import pytest
 from rest_framework import status
 from rest_framework.test import APIClient
-from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.common.constants import Roles
 from apps.users.factories import UserFactory
+from tests.helpers import auth_client
 
 from ..factories import VenueFactory
 from ..models import Venue
 
 pytestmark = pytest.mark.django_db
-
-
-def auth_client(user):
-    client = APIClient()
-    access = RefreshToken.for_user(user).access_token
-    client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
-    return client
 
 
 def _payload(**overrides):
