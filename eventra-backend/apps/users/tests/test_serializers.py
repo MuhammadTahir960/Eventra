@@ -66,38 +66,26 @@ def test_register_serializer_password_write_only():
     assert "password" not in serializer.data
 
 
-def test_register_serializer_rejects_short_password():
-    serializer = RegisterSerializer(data=_register_payload(password="short1"))
-    assert serializer.is_valid() is False
-    assert "too short" in str(serializer.errors).lower()
-
-
-def test_register_serializer_rejects_common_password():
-    serializer = RegisterSerializer(data=_register_payload(password="password123"))
-    assert serializer.is_valid() is False
-    assert "too common" in str(serializer.errors).lower()
-
-
-def test_register_serializer_rejects_password_similar_to_email():
+@pytest.mark.parametrize(
+    "email, password, reason",
+    [
+        ("new@example.com", "short1", "too short"),
+        ("new@example.com", "password123", "too common"),
+        ("janedoe@example.com", "janedoe@example.com", "too similar"),
+    ],
+)
+def test_register_serializer_rejects_weak_passwords(email, password, reason):
     serializer = RegisterSerializer(
-        data=_register_payload(
-            email="janedoe@example.com", password="janedoe@example.com"
-        )
+        data=_register_payload(email=email, password=password)
     )
     assert serializer.is_valid() is False
-    assert "too similar" in str(serializer.errors).lower()
+    assert reason in str(serializer.errors).lower()
 
 
-def test_register_serializer_duplicate_email_rejected():
+@pytest.mark.parametrize("email", ["taken@example.com", "Taken@Example.com"])
+def test_register_serializer_duplicate_email_rejected(email):
     UserFactory(email="taken@example.com")
-    serializer = RegisterSerializer(data=_register_payload(email="taken@example.com"))
-    assert serializer.is_valid() is False
-    assert "email" in serializer.errors
-
-
-def test_register_serializer_duplicate_email_rejected_case_insensitive():
-    UserFactory(email="taken@example.com")
-    serializer = RegisterSerializer(data=_register_payload(email="Taken@Example.com"))
+    serializer = RegisterSerializer(data=_register_payload(email=email))
     assert serializer.is_valid() is False
     assert "email" in serializer.errors
 
@@ -202,18 +190,17 @@ def test_login_serializer_rejects_nonexistent_email():
         serializer.is_valid(raise_exception=True)
 
 
-def test_login_serializer_missing_email_rejected():
-    serializer = ActiveUserTokenObtainPairSerializer(data={"password": "testpass123"})
+@pytest.mark.parametrize(
+    "data, missing",
+    [
+        ({"password": "testpass123"}, "email"),
+        ({"email": "active@example.com"}, "password"),
+    ],
+)
+def test_login_serializer_missing_field_rejected(data, missing):
+    serializer = ActiveUserTokenObtainPairSerializer(data=data)
     assert serializer.is_valid() is False
-    assert "email" in serializer.errors
-
-
-def test_login_serializer_missing_password_rejected():
-    serializer = ActiveUserTokenObtainPairSerializer(
-        data={"email": "active@example.com"}
-    )
-    assert serializer.is_valid() is False
-    assert "password" in serializer.errors
+    assert missing in serializer.errors
 
 
 def test_login_serializer_email_lookup_is_case_insensitive():
