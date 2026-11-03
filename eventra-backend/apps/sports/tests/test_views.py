@@ -1,40 +1,18 @@
+import uuid
+
 import pytest
 from rest_framework import status
-from rest_framework.test import APIClient
-from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.common.constants import Roles
 from apps.events.factories import EventFactory
 from apps.events.models import Event
 from apps.sports.models import Sport
 from apps.users.factories import UserFactory
-from tests.helpers import results
+from tests.helpers import auth_client, results
 
 from ..factories import LeagueFactory, SportFactory, TeamFactory
 
 pytestmark = pytest.mark.django_db
-
-
-def auth_client(user):
-    client = APIClient()
-    access = RefreshToken.for_user(user).access_token
-    client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
-    return client
-
-
-@pytest.fixture
-def admin():
-    return UserFactory(role=Roles.ADMIN)
-
-
-@pytest.fixture
-def organizer():
-    return UserFactory(role=Roles.ORGANIZER)
-
-
-@pytest.fixture
-def attendee():
-    return UserFactory(role=Roles.ATTENDEE)
 
 
 # ==================================================
@@ -50,8 +28,8 @@ class TestSportEndpoint:
         response = api_client.get(self.url)
         assert response.status_code == status.HTTP_200_OK
 
-    def test_admin_can_create(self, admin):
-        client = auth_client(admin)
+    def test_admin_can_create(self, admin_user):
+        client = auth_client(admin_user)
         response = client.post(self.url, {"name": "Football"})
         assert response.status_code == status.HTTP_201_CREATED
         assert Sport.objects.filter(name="Football").exists()
@@ -60,30 +38,26 @@ class TestSportEndpoint:
         response = api_client.post(self.url, {"name": "Football"})
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_attendee_cannot_create(self, attendee):
-        client = auth_client(attendee)
+    @pytest.mark.parametrize("role", [Roles.ATTENDEE, Roles.ORGANIZER])
+    def test_non_admin_cannot_create(self, role):
+        client = auth_client(UserFactory(role=role))
         response = client.post(self.url, {"name": "Football"})
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_organizer_cannot_create(self, organizer):
-        client = auth_client(organizer)
-        response = client.post(self.url, {"name": "Football"})
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-
-    def test_duplicate_name_rejected(self, admin):
+    def test_duplicate_name_rejected(self, admin_user):
         SportFactory(name="Football")
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.post(self.url, {"name": "Football"})
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_blank_name_rejected(self, admin):
-        client = auth_client(admin)
+    def test_blank_name_rejected(self, admin_user):
+        client = auth_client(admin_user)
         response = client.post(self.url, {"name": "   "})
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_admin_can_update_name(self, admin):
+    def test_admin_can_update_name(self, admin_user):
         sport = SportFactory(name="Football")
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.patch(f"/sports/{sport.pk}/", {"name": "Soccer"})
         assert response.status_code == status.HTTP_200_OK
         sport.refresh_from_db()
@@ -94,33 +68,28 @@ class TestSportEndpoint:
         response = api_client.patch(f"/sports/{sport.pk}/", {"name": "Renamed"})
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_attendee_cannot_update(self, attendee):
+    @pytest.mark.parametrize("role", [Roles.ATTENDEE, Roles.ORGANIZER])
+    def test_non_admin_cannot_update(self, role):
         sport = SportFactory()
-        client = auth_client(attendee)
+        client = auth_client(UserFactory(role=role))
         response = client.patch(f"/sports/{sport.pk}/", {"name": "Renamed"})
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_organizer_cannot_update(self, organizer):
+    def test_admin_can_delete_unreferenced_sport(self, admin_user):
         sport = SportFactory()
-        client = auth_client(organizer)
-        response = client.patch(f"/sports/{sport.pk}/", {"name": "Renamed"})
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-
-    def test_admin_can_delete_unreferenced_sport(self, admin):
-        sport = SportFactory()
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.delete(f"/sports/{sport.pk}/")
         assert response.status_code == status.HTTP_204_NO_CONTENT
         assert not Sport.objects.filter(pk=sport.pk).exists()
 
-    def test_admin_cannot_delete_sport_referenced_via_team(self, admin):
+    def test_admin_cannot_delete_sport_referenced_via_team(self, admin_user):
         sport = SportFactory()
         home = TeamFactory(sport=sport)
         away = TeamFactory(sport=sport)
         EventFactory(
             event_type=Event.EventType.SPORTS_MATCH, home_team=home, away_team=away
         )
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.delete(f"/sports/{sport.pk}/")
         assert response.status_code == status.HTTP_409_CONFLICT
         assert Sport.objects.filter(pk=sport.pk).exists()
@@ -130,9 +99,9 @@ class TestSportEndpoint:
         response = api_client.delete(f"/sports/{sport.pk}/")
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_organizer_cannot_delete(self, organizer):
+    def test_organizer_cannot_delete(self, organizer_user):
         sport = SportFactory()
-        client = auth_client(organizer)
+        client = auth_client(organizer_user)
         response = client.delete(f"/sports/{sport.pk}/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
@@ -150,25 +119,18 @@ class TestLeagueEndpoint:
         response = api_client.get(self.url)
         assert response.status_code == status.HTTP_200_OK
 
-    def test_admin_can_create(self, admin):
+    def test_admin_can_create(self, admin_user):
         sport = SportFactory()
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.post(
             self.url, {"sport": str(sport.pk), "name": "Premier League"}
         )
         assert response.status_code == status.HTTP_201_CREATED
 
-    def test_attendee_cannot_create(self, attendee):
+    @pytest.mark.parametrize("role", [Roles.ATTENDEE, Roles.ORGANIZER])
+    def test_non_admin_cannot_create(self, role):
         sport = SportFactory()
-        client = auth_client(attendee)
-        response = client.post(
-            self.url, {"sport": str(sport.pk), "name": "Premier League"}
-        )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-
-    def test_organizer_cannot_create(self, organizer):
-        sport = SportFactory()
-        client = auth_client(organizer)
+        client = auth_client(UserFactory(role=role))
         response = client.post(
             self.url, {"sport": str(sport.pk), "name": "Premier League"}
         )
@@ -181,15 +143,15 @@ class TestLeagueEndpoint:
         )
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_blank_name_rejected(self, admin):
+    def test_blank_name_rejected(self, admin_user):
         sport = SportFactory()
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.post(self.url, {"sport": str(sport.pk), "name": "   "})
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_admin_can_update_name(self, admin):
+    def test_admin_can_update_name(self, admin_user):
         league = LeagueFactory(name="Premier League")
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.patch(f"/leagues/{league.pk}/", {"name": "EPL"})
         assert response.status_code == status.HTTP_200_OK
         league.refresh_from_db()
@@ -200,41 +162,36 @@ class TestLeagueEndpoint:
         response = api_client.patch(f"/leagues/{league.pk}/", {"name": "Renamed"})
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_attendee_cannot_update(self, attendee):
+    @pytest.mark.parametrize("role", [Roles.ATTENDEE, Roles.ORGANIZER])
+    def test_non_admin_cannot_update(self, role):
         league = LeagueFactory()
-        client = auth_client(attendee)
+        client = auth_client(UserFactory(role=role))
         response = client.patch(f"/leagues/{league.pk}/", {"name": "Renamed"})
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_organizer_cannot_update(self, organizer):
-        league = LeagueFactory()
-        client = auth_client(organizer)
-        response = client.patch(f"/leagues/{league.pk}/", {"name": "Renamed"})
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-
-    def test_admin_can_reassign_sport_when_unreferenced(self, admin):
+    def test_admin_can_reassign_sport_when_unreferenced(self, admin_user):
         league = LeagueFactory()
         new_sport = SportFactory()
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.patch(f"/leagues/{league.pk}/", {"sport": str(new_sport.pk)})
         assert response.status_code == status.HTTP_200_OK
         league.refresh_from_db()
         assert league.sport_id == new_sport.id
 
-    def test_admin_cannot_reassign_sport_when_referenced_by_event(self, admin):
+    def test_admin_cannot_reassign_sport_when_referenced_by_event(self, admin_user):
         league = LeagueFactory()
         EventFactory(event_type=Event.EventType.SPORTS_MATCH, league=league)
         new_sport = SportFactory()
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.patch(f"/leagues/{league.pk}/", {"sport": str(new_sport.pk)})
         assert response.status_code == status.HTTP_409_CONFLICT
         league.refresh_from_db()
         assert league.sport_id != new_sport.id
 
-    def test_resending_same_sport_is_not_blocked_even_when_referenced(self, admin):
+    def test_resending_same_sport_is_not_blocked_even_when_referenced(self, admin_user):
         league = LeagueFactory()
         EventFactory(event_type=Event.EventType.SPORTS_MATCH, league=league)
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.patch(
             f"/leagues/{league.pk}/",
             {"sport": str(league.sport_id), "name": "Renamed League"},
@@ -243,23 +200,23 @@ class TestLeagueEndpoint:
         league.refresh_from_db()
         assert league.name == "Renamed League"
 
-    def test_name_only_update_not_blocked_when_referenced(self, admin):
+    def test_name_only_update_not_blocked_when_referenced(self, admin_user):
         league = LeagueFactory()
         EventFactory(event_type=Event.EventType.SPORTS_MATCH, league=league)
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.patch(f"/leagues/{league.pk}/", {"name": "New Name"})
         assert response.status_code == status.HTTP_200_OK
 
-    def test_admin_can_delete_unreferenced_league(self, admin):
+    def test_admin_can_delete_unreferenced_league(self, admin_user):
         league = LeagueFactory()
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.delete(f"/leagues/{league.pk}/")
         assert response.status_code == status.HTTP_204_NO_CONTENT
 
-    def test_admin_cannot_delete_league_referenced_by_event(self, admin):
+    def test_admin_cannot_delete_league_referenced_by_event(self, admin_user):
         league = LeagueFactory()
         EventFactory(event_type=Event.EventType.SPORTS_MATCH, league=league)
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.delete(f"/leagues/{league.pk}/")
         assert response.status_code == status.HTTP_409_CONFLICT
 
@@ -268,16 +225,16 @@ class TestLeagueEndpoint:
         response = api_client.delete(f"/leagues/{league.pk}/")
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_organizer_cannot_delete(self, organizer):
+    def test_organizer_cannot_delete(self, organizer_user):
         league = LeagueFactory()
-        client = auth_client(organizer)
+        client = auth_client(organizer_user)
         response = client.delete(f"/leagues/{league.pk}/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_duplicate_name_within_sport_rejected(self, admin):
+    def test_duplicate_name_within_sport_rejected(self, admin_user):
         sport = SportFactory()
         LeagueFactory(sport=sport, name="Premier League")
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.post(
             self.url, {"sport": str(sport.pk), "name": "Premier League"}
         )
@@ -293,8 +250,6 @@ class TestLeagueEndpoint:
         assert names == ["League A"]
 
     def test_filter_by_nonexistent_sport_returns_empty(self, api_client):
-        import uuid
-
         LeagueFactory()
         response = api_client.get(self.url, {"sport": str(uuid.uuid4())})
         assert results(response) == []
@@ -318,21 +273,16 @@ class TestTeamEndpoint:
         response = api_client.get(self.url)
         assert response.status_code == status.HTTP_200_OK
 
-    def test_admin_can_create(self, admin):
+    def test_admin_can_create(self, admin_user):
         sport = SportFactory()
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.post(self.url, {"sport": str(sport.pk), "name": "Arsenal"})
         assert response.status_code == status.HTTP_201_CREATED
 
-    def test_attendee_cannot_create(self, attendee):
+    @pytest.mark.parametrize("role", [Roles.ATTENDEE, Roles.ORGANIZER])
+    def test_non_admin_cannot_create(self, role):
         sport = SportFactory()
-        client = auth_client(attendee)
-        response = client.post(self.url, {"sport": str(sport.pk), "name": "Arsenal"})
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-
-    def test_organizer_cannot_create(self, organizer):
-        sport = SportFactory()
-        client = auth_client(organizer)
+        client = auth_client(UserFactory(role=role))
         response = client.post(self.url, {"sport": str(sport.pk), "name": "Arsenal"})
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
@@ -343,16 +293,16 @@ class TestTeamEndpoint:
         )
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_blank_name_rejected(self, admin):
+    def test_blank_name_rejected(self, admin_user):
         sport = SportFactory()
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.post(self.url, {"sport": str(sport.pk), "name": "   "})
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_duplicate_name_within_sport_rejected(self, admin):
+    def test_duplicate_name_within_sport_rejected(self, admin_user):
         sport = SportFactory()
         TeamFactory(sport=sport, name="Arsenal")
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.post(self.url, {"sport": str(sport.pk), "name": "Arsenal"})
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
@@ -366,8 +316,6 @@ class TestTeamEndpoint:
         assert names == ["Team A"]
 
     def test_filter_by_nonexistent_sport_returns_empty(self, api_client):
-        import uuid
-
         TeamFactory()
         response = api_client.get(self.url, {"sport": str(uuid.uuid4())})
         assert results(response) == []
@@ -377,9 +325,9 @@ class TestTeamEndpoint:
         response = api_client.get(self.url, {"sport": "not-a-uuid"})
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_admin_can_update_name(self, admin):
+    def test_admin_can_update_name(self, admin_user):
         team = TeamFactory(name="Arsenal")
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.patch(f"/teams/{team.pk}/", {"name": "Arsenal FC"})
         assert response.status_code == status.HTTP_200_OK
         team.refresh_from_db()
@@ -390,61 +338,47 @@ class TestTeamEndpoint:
         response = api_client.patch(f"/teams/{team.pk}/", {"name": "Renamed"})
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_attendee_cannot_update(self, attendee):
+    @pytest.mark.parametrize("role", [Roles.ATTENDEE, Roles.ORGANIZER])
+    def test_non_admin_cannot_update(self, role):
         team = TeamFactory()
-        client = auth_client(attendee)
+        client = auth_client(UserFactory(role=role))
         response = client.patch(f"/teams/{team.pk}/", {"name": "Renamed"})
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_organizer_cannot_update(self, organizer):
-        team = TeamFactory()
-        client = auth_client(organizer)
-        response = client.patch(f"/teams/{team.pk}/", {"name": "Renamed"})
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-
-    def test_admin_can_reassign_sport_when_unreferenced(self, admin):
+    def test_admin_can_reassign_sport_when_unreferenced(self, admin_user):
         team = TeamFactory()
         new_sport = SportFactory()
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.patch(f"/teams/{team.pk}/", {"sport": str(new_sport.pk)})
         assert response.status_code == status.HTTP_200_OK
         team.refresh_from_db()
         assert team.sport_id == new_sport.id
 
-    def test_admin_cannot_reassign_sport_when_referenced_as_home_team(self, admin):
+    @pytest.mark.parametrize("side", ["home", "away"])
+    def test_admin_cannot_reassign_sport_of_a_team_in_a_match(self, admin_user, side):
         sport = SportFactory()
-        home = TeamFactory(sport=sport)
-        away = TeamFactory(sport=sport)
+        teams = {"home": TeamFactory(sport=sport), "away": TeamFactory(sport=sport)}
         EventFactory(
-            event_type=Event.EventType.SPORTS_MATCH, home_team=home, away_team=away
+            event_type=Event.EventType.SPORTS_MATCH,
+            home_team=teams["home"],
+            away_team=teams["away"],
         )
         new_sport = SportFactory()
-        client = auth_client(admin)
-        response = client.patch(f"/teams/{home.pk}/", {"sport": str(new_sport.pk)})
+        team = teams[side]
+        client = auth_client(admin_user)
+        response = client.patch(f"/teams/{team.pk}/", {"sport": str(new_sport.pk)})
         assert response.status_code == status.HTTP_409_CONFLICT
-        home.refresh_from_db()
-        assert home.sport_id != new_sport.id
+        team.refresh_from_db()
+        assert team.sport_id != new_sport.id
 
-    def test_admin_cannot_reassign_sport_when_referenced_as_away_team(self, admin):
+    def test_resending_same_sport_is_not_blocked_even_when_referenced(self, admin_user):
         sport = SportFactory()
         home = TeamFactory(sport=sport)
         away = TeamFactory(sport=sport)
         EventFactory(
             event_type=Event.EventType.SPORTS_MATCH, home_team=home, away_team=away
         )
-        new_sport = SportFactory()
-        client = auth_client(admin)
-        response = client.patch(f"/teams/{away.pk}/", {"sport": str(new_sport.pk)})
-        assert response.status_code == status.HTTP_409_CONFLICT
-
-    def test_resending_same_sport_is_not_blocked_even_when_referenced(self, admin):
-        sport = SportFactory()
-        home = TeamFactory(sport=sport)
-        away = TeamFactory(sport=sport)
-        EventFactory(
-            event_type=Event.EventType.SPORTS_MATCH, home_team=home, away_team=away
-        )
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.patch(
             f"/teams/{home.pk}/",
             {"sport": str(home.sport_id), "name": "Renamed Team"},
@@ -453,43 +387,34 @@ class TestTeamEndpoint:
         home.refresh_from_db()
         assert home.name == "Renamed Team"
 
-    def test_name_only_update_not_blocked_when_referenced(self, admin):
+    def test_name_only_update_not_blocked_when_referenced(self, admin_user):
         sport = SportFactory()
         home = TeamFactory(sport=sport)
         away = TeamFactory(sport=sport)
         EventFactory(
             event_type=Event.EventType.SPORTS_MATCH, home_team=home, away_team=away
         )
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.patch(f"/teams/{home.pk}/", {"name": "New Name"})
         assert response.status_code == status.HTTP_200_OK
 
-    def test_admin_can_delete_unreferenced_team(self, admin):
+    def test_admin_can_delete_unreferenced_team(self, admin_user):
         team = TeamFactory()
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.delete(f"/teams/{team.pk}/")
         assert response.status_code == status.HTTP_204_NO_CONTENT
 
-    def test_admin_cannot_delete_team_referenced_as_home_team(self, admin):
+    @pytest.mark.parametrize("side", ["home", "away"])
+    def test_admin_cannot_delete_a_team_in_a_match(self, admin_user, side):
         sport = SportFactory()
-        home = TeamFactory(sport=sport)
-        away = TeamFactory(sport=sport)
+        teams = {"home": TeamFactory(sport=sport), "away": TeamFactory(sport=sport)}
         EventFactory(
-            event_type=Event.EventType.SPORTS_MATCH, home_team=home, away_team=away
+            event_type=Event.EventType.SPORTS_MATCH,
+            home_team=teams["home"],
+            away_team=teams["away"],
         )
-        client = auth_client(admin)
-        response = client.delete(f"/teams/{home.pk}/")
-        assert response.status_code == status.HTTP_409_CONFLICT
-
-    def test_admin_cannot_delete_team_referenced_as_away_team(self, admin):
-        sport = SportFactory()
-        home = TeamFactory(sport=sport)
-        away = TeamFactory(sport=sport)
-        EventFactory(
-            event_type=Event.EventType.SPORTS_MATCH, home_team=home, away_team=away
-        )
-        client = auth_client(admin)
-        response = client.delete(f"/teams/{away.pk}/")
+        client = auth_client(admin_user)
+        response = client.delete(f"/teams/{teams[side].pk}/")
         assert response.status_code == status.HTTP_409_CONFLICT
 
     def test_anonymous_cannot_delete(self, api_client):
@@ -497,8 +422,8 @@ class TestTeamEndpoint:
         response = api_client.delete(f"/teams/{team.pk}/")
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_organizer_cannot_delete(self, organizer):
+    def test_organizer_cannot_delete(self, organizer_user):
         team = TeamFactory()
-        client = auth_client(organizer)
+        client = auth_client(organizer_user)
         response = client.delete(f"/teams/{team.pk}/")
         assert response.status_code == status.HTTP_403_FORBIDDEN

@@ -1,8 +1,9 @@
 from django.db import models
 from django.db.models.functions import Lower
 
+from apps.common.constants import IMAGE_EXTENSION_VALIDATOR
 from apps.common.models import UUIDBaseModel
-from apps.common.validators import IMAGE_EXTENSION_VALIDATOR, validate_image_upload_size
+from apps.common.validators import validate_image_upload_size
 
 _LOGO_KWARGS = {
     "upload_to": "team_league_logos/",

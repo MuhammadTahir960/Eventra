@@ -29,16 +29,11 @@ def test_sport_name_free_raises_nothing():
     ensure_unique_sport_name("Football")
 
 
-def test_sport_name_taken_raises_duplicate_error():
+@pytest.mark.parametrize("name", ["Football", "FOOTBALL"])
+def test_sport_name_taken_raises_duplicate_error(name):
     SportFactory(name="Football")
     with pytest.raises(DuplicateSportError):
-        ensure_unique_sport_name("Football")
-
-
-def test_sport_name_check_is_case_insensitive():
-    SportFactory(name="Football")
-    with pytest.raises(DuplicateSportError):
-        ensure_unique_sport_name("FOOTBALL")
+        ensure_unique_sport_name(name)
 
 
 def test_sport_exclude_pk_allows_keeping_same_name():
@@ -56,18 +51,14 @@ def test_league_name_free_raises_nothing():
     ensure_unique_league_name(sport, "Premier League")
 
 
-def test_league_name_taken_within_sport_raises_duplicate_error():
+@pytest.mark.parametrize(
+    "name", ["Premier League", "PREMIER LEAGUE"]
+)
+def test_league_name_taken_within_sport_raises_duplicate_error(name):
     sport = SportFactory()
     LeagueFactory(sport=sport, name="Premier League")
     with pytest.raises(DuplicateLeagueError):
-        ensure_unique_league_name(sport, "Premier League")
-
-
-def test_league_name_check_is_case_insensitive():
-    sport = SportFactory()
-    LeagueFactory(sport=sport, name="Premier League")
-    with pytest.raises(DuplicateLeagueError):
-        ensure_unique_league_name(sport, "PREMIER LEAGUE")
+        ensure_unique_league_name(sport, name)
 
 
 def test_league_name_taken_in_different_sport_does_not_conflict():
@@ -92,18 +83,12 @@ def test_team_name_free_raises_nothing():
     ensure_unique_team_name(sport, "Arsenal")
 
 
-def test_team_name_taken_within_sport_raises_duplicate_error():
+@pytest.mark.parametrize("name", ["Arsenal", "ARSENAL"])
+def test_team_name_taken_within_sport_raises_duplicate_error(name):
     sport = SportFactory()
     TeamFactory(sport=sport, name="Arsenal")
     with pytest.raises(DuplicateTeamError):
-        ensure_unique_team_name(sport, "Arsenal")
-
-
-def test_team_name_check_is_case_insensitive():
-    sport = SportFactory()
-    TeamFactory(sport=sport, name="Arsenal")
-    with pytest.raises(DuplicateTeamError):
-        ensure_unique_team_name(sport, "ARSENAL")
+        ensure_unique_team_name(sport, name)
 
 
 def test_team_name_taken_in_different_sport_does_not_conflict():
@@ -154,28 +139,17 @@ def test_team_reassignment_allowed_when_unreferenced():
     ensure_team_sport_reassignable(team, new_sport)
 
 
-def test_team_reassignment_blocked_when_referenced_as_home_team():
+@pytest.mark.parametrize("side", ["home", "away"])
+def test_team_reassignment_blocked_when_the_team_is_in_a_match(side):
     sport = SportFactory()
-    home = TeamFactory(sport=sport)
-    away = TeamFactory(sport=sport)
+    teams = {"home": TeamFactory(sport=sport), "away": TeamFactory(sport=sport)}
     EventFactory(
-        event_type=Event.EventType.SPORTS_MATCH, home_team=home, away_team=away
+        event_type=Event.EventType.SPORTS_MATCH,
+        home_team=teams["home"],
+        away_team=teams["away"],
     )
-    new_sport = SportFactory()
     with pytest.raises(TeamSportReassignmentBlockedError):
-        ensure_team_sport_reassignable(home, new_sport)
-
-
-def test_team_reassignment_blocked_when_referenced_as_away_team():
-    sport = SportFactory()
-    home = TeamFactory(sport=sport)
-    away = TeamFactory(sport=sport)
-    EventFactory(
-        event_type=Event.EventType.SPORTS_MATCH, home_team=home, away_team=away
-    )
-    new_sport = SportFactory()
-    with pytest.raises(TeamSportReassignmentBlockedError):
-        ensure_team_sport_reassignable(away, new_sport)
+        ensure_team_sport_reassignable(teams[side], SportFactory())
 
 
 def test_team_reassignment_to_same_sport_is_a_noop_even_when_referenced():

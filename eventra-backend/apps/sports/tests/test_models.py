@@ -12,16 +12,11 @@ pytestmark = pytest.mark.django_db
 # ==================================================
 
 
-def test_duplicate_sport_name_rejected_at_db_level():
+@pytest.mark.parametrize("name", ["Football", "FOOTBALL"])
+def test_duplicate_sport_name_rejected_at_db_level(name):
     SportFactory(name="Football")
     with pytest.raises(IntegrityError):
-        SportFactory(name="Football")
-
-
-def test_duplicate_sport_name_case_insensitive_rejected_at_db_level():
-    SportFactory(name="Football")
-    with pytest.raises(IntegrityError):
-        SportFactory(name="FOOTBALL")
+        SportFactory(name=name)
 
 
 def test_sport_str_returns_name():
@@ -41,18 +36,14 @@ def test_sports_ordered_by_name():
 # ==================================================
 
 
-def test_duplicate_league_name_within_same_sport_rejected():
+@pytest.mark.parametrize(
+    "name", ["Premier League", "PREMIER LEAGUE"]
+)
+def test_duplicate_league_name_within_same_sport_rejected(name):
     sport = SportFactory()
     LeagueFactory(sport=sport, name="Premier League")
     with pytest.raises(IntegrityError):
-        LeagueFactory(sport=sport, name="Premier League")
-
-
-def test_duplicate_league_name_case_insensitive_within_same_sport_rejected():
-    sport = SportFactory()
-    LeagueFactory(sport=sport, name="Premier League")
-    with pytest.raises(IntegrityError):
-        LeagueFactory(sport=sport, name="PREMIER LEAGUE")
+        LeagueFactory(sport=sport, name=name)
 
 
 def test_same_league_name_allowed_across_different_sports():
@@ -78,18 +69,12 @@ def test_leagues_cascade_delete_when_sport_deleted():
 # ==================================================
 
 
-def test_duplicate_team_name_within_same_sport_rejected():
+@pytest.mark.parametrize("name", ["Arsenal", "ARSENAL"])
+def test_duplicate_team_name_within_same_sport_rejected(name):
     sport = SportFactory()
     TeamFactory(sport=sport, name="Arsenal")
     with pytest.raises(IntegrityError):
-        TeamFactory(sport=sport, name="Arsenal")
-
-
-def test_duplicate_team_name_case_insensitive_within_same_sport_rejected():
-    sport = SportFactory()
-    TeamFactory(sport=sport, name="Arsenal")
-    with pytest.raises(IntegrityError):
-        TeamFactory(sport=sport, name="ARSENAL")
+        TeamFactory(sport=sport, name=name)
 
 
 def test_same_team_name_allowed_across_different_sports():
