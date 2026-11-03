@@ -7,8 +7,13 @@ from django.core.validators import (
 from django.db import models
 from django.db.models.functions import Lower
 
+from apps.common.constants import IMAGE_EXTENSION_VALIDATOR
 from apps.common.models import SoftDeleteModel, UUIDBaseModel
-from apps.common.validators import IMAGE_EXTENSION_VALIDATOR, validate_image_upload_size
+from apps.common.validators import (
+    validate_display_name,
+    validate_image_upload_size,
+    validate_proper_name,
+)
 
 
 class Venue(SoftDeleteModel):
@@ -19,10 +24,14 @@ class Venue(SoftDeleteModel):
         U_SHAPE = "u_shape", "U-shape"
         SEMICIRCLE = "semicircle", "Semicircle"
 
-    name = models.CharField(max_length=200, validators=[MinLengthValidator(2)])
-    address = models.CharField(max_length=255)
-    city = models.CharField(max_length=100, db_index=True)
-    country = models.CharField(max_length=100)
+    name = models.CharField(
+        max_length=200, validators=[MinLengthValidator(2), validate_display_name]
+    )
+    address = models.CharField(max_length=255, validators=[validate_display_name])
+    city = models.CharField(
+        max_length=100, db_index=True, validators=[validate_proper_name]
+    )
+    country = models.CharField(max_length=100, validators=[validate_proper_name])
     capacity = models.PositiveIntegerField(
         validators=[MinValueValidator(1), MaxValueValidator(150_000)]
     )
@@ -82,8 +91,8 @@ class VenueRequest(UUIDBaseModel):
         on_delete=models.CASCADE,
         related_name="venue_requests",
     )
-    venue_name = models.CharField(max_length=200)
-    city = models.CharField(max_length=100)
+    venue_name = models.CharField(max_length=200, validators=[validate_display_name])
+    city = models.CharField(max_length=100, validators=[validate_proper_name])
     notes = models.TextField(blank=True, default="")
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.PENDING

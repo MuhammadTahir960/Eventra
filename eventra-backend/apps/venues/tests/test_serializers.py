@@ -4,6 +4,7 @@ from ..factories import SeatFactory, VenueFactory
 from ..serializers import (
     BulkSeatTemplateSerializer,
     SeatSerializer,
+    VenueRequestSerializer,
     VenueSerializer,
 )
 
@@ -48,16 +49,12 @@ def test_id_created_at_updated_at_are_read_only():
 # ==================================================
 
 
-def test_duplicate_active_name_and_city_rejected():
+@pytest.mark.parametrize(
+    "name, city", [("Arena One", "Nairobi"), ("ARENA ONE", "NAIROBI")]
+)
+def test_duplicate_active_name_and_city_rejected(name, city):
     VenueFactory(name="Arena One", city="Nairobi")
-    serializer = VenueSerializer(data=_venue_payload(name="Arena One", city="Nairobi"))
-    assert serializer.is_valid() is False
-    assert "name" in serializer.errors
-
-
-def test_duplicate_check_is_case_insensitive():
-    VenueFactory(name="Arena One", city="Nairobi")
-    serializer = VenueSerializer(data=_venue_payload(name="ARENA ONE", city="NAIROBI"))
+    serializer = VenueSerializer(data=_venue_payload(name=name, city=city))
     assert serializer.is_valid() is False
     assert "name" in serializer.errors
 
@@ -198,22 +195,15 @@ def test_section_with_no_rows_rejected():
     assert serializer.is_valid() is False
 
 
-def test_seat_count_below_minimum_rejected():
+@pytest.mark.parametrize("seat_count", [0, 501])
+def test_seat_count_outside_1_to_500_rejected(seat_count):
     serializer = BulkSeatTemplateSerializer(
         data={
             "sections": [
-                {"name": "Main Stand", "rows": [{"row_label": "A", "seat_count": 0}]}
-            ]
-        }
-    )
-    assert serializer.is_valid() is False
-
-
-def test_seat_count_above_maximum_rejected():
-    serializer = BulkSeatTemplateSerializer(
-        data={
-            "sections": [
-                {"name": "Main Stand", "rows": [{"row_label": "A", "seat_count": 501}]}
+                {
+                    "name": "Main Stand",
+                    "rows": [{"row_label": "A", "seat_count": seat_count}],
+                }
             ]
         }
     )
@@ -289,3 +279,30 @@ def test_missing_sections_key_rejected():
     serializer = BulkSeatTemplateSerializer(data={})
     assert serializer.is_valid() is False
     assert "sections" in serializer.errors
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "St. James' Park",
+        "O2 Arena",
+        "Royal Albert Hall",
+        "Hall 3/4",
+        "Arena & Conference Centre",
+        "Wembley Stadium (Club Wembley)",
+        "قذافی اسٹیڈیم",
+    ],
+)
+def test_professional_venue_names_pass(name):
+    serializer = VenueSerializer(data=_venue_payload(name=name))
+    assert serializer.is_valid(), serializer.errors
+
+
+@pytest.mark.parametrize(
+    "name", ["<Arena>", "Hall <3", "Stadium 😀", "[VIP] Hall", "Hall!!!"]
+)
+def test_unprofessional_venue_names_fail_in_venues_and_requests(name):
+    venue = VenueSerializer(data=_venue_payload(name=name))
+    request = VenueRequestSerializer(data={"venue_name": name, "city": "Riverside"})
+    assert not venue.is_valid() and "name" in venue.errors
+    assert not request.is_valid() and "venue_name" in request.errors
