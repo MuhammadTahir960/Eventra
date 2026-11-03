@@ -12,11 +12,12 @@ import {
 } from '@/features/events/components/EventCard'
 import { EventMedia } from '@/features/events/components/EventMedia'
 import { MatchRow } from '@/features/events/components/MatchRow'
-import { DEFAULT_FILTERS } from '@/features/events/filters'
+import { DEFAULT_FILTERS } from '@/features/events/constants'
 import { useEvents } from '@/features/events/hooks'
 import { bySoonest, useEventLookups } from '@/features/events/lookups'
 import { formatDateTimeLong } from '@/lib/format'
 import { usePageTitle } from '@/lib/use-page-title'
+import { CategoryIcon } from '@/features/catalog/CategoryIcon'
 
 function SectionHeading({
   id,
@@ -189,8 +190,9 @@ export function HomePage() {
               <li key={category.id}>
                 <Link
                   to={`/events?category=${category.id}`}
-                  className="inline-flex h-10 items-center rounded-full border border-hairline-strong bg-card px-4 text-[15px] transition-colors hover:border-ink"
+                  className="inline-flex h-10 items-center gap-2 rounded-full border border-hairline-strong bg-card px-4 text-[15px] transition-colors hover:border-ink"
                 >
+                  <CategoryIcon icon={category.icon} />
                   {category.name}
                 </Link>
               </li>
