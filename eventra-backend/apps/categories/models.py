@@ -5,9 +5,26 @@ from apps.common.models import SoftDeleteModel
 
 
 class Category(SoftDeleteModel):
+    class Icon(models.TextChoices):
+        MUSIC = "music", "Music"
+        MICROPHONE = "microphone", "Microphone"
+        LAUGH = "laugh", "Laughing face"
+        FOOTBALL = "football", "Football"
+        BOXING = "boxing", "Boxing glove"
+        GAMEPAD = "gamepad", "Game controller"
+        TOOLS = "tools", "Tools"
+        PRESENTATION = "presentation", "Presentation"
+        THEATRE = "theatre", "Theatre masks"
+        QUILL = "quill", "Quill"
+        PARTY = "party", "Party"
+        FOOD = "food", "Food"
+        PALETTE = "palette", "Palette"
+        BALLOONS = "balloons", "Balloons"
+        TICKET = "ticket", "Ticket"
+
     name = models.CharField(max_length=100)
     slug = models.SlugField(max_length=100, blank=True)
-    icon = models.CharField(max_length=50, blank=True)
+    icon = models.CharField(max_length=20, choices=Icon.choices, default=Icon.TICKET)
     sort_order = models.PositiveIntegerField(default=0)
     admin_only = models.BooleanField(default=False)
 

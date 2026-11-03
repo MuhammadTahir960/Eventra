@@ -9,6 +9,6 @@ class CategoryFactory(DjangoModelFactory):
         model = Category
 
     name = factory.Sequence(lambda n: f"Category {n}")
-    icon = "star"
+    icon = "music"
     sort_order = 0
     is_active = True
