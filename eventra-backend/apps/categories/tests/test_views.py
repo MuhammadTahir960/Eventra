@@ -2,12 +2,10 @@ import uuid
 
 import pytest
 from rest_framework import status
-from rest_framework.test import APIClient
-from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.common.constants import Roles
 from apps.users.factories import UserFactory
-from tests.helpers import results
+from tests.helpers import auth_client, results
 
 from ..factories import CategoryFactory
 from ..models import Category
@@ -15,30 +13,8 @@ from ..models import Category
 pytestmark = pytest.mark.django_db
 
 
-def auth_client(user):
-    client = APIClient()
-    access = RefreshToken.for_user(user).access_token
-    client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
-    return client
-
-
-@pytest.fixture
-def admin():
-    return UserFactory(role=Roles.ADMIN)
-
-
-@pytest.fixture
-def organizer():
-    return UserFactory(role=Roles.ORGANIZER)
-
-
-@pytest.fixture
-def attendee():
-    return UserFactory(role=Roles.ATTENDEE)
-
-
 def _payload(**overrides):
-    payload = {"name": "New Category", "icon": "star", "sort_order": 0}
+    payload = {"name": "New Category", "icon": "music", "sort_order": 0}
     payload.update(overrides)
     return payload
 
@@ -85,8 +61,8 @@ class TestListAndRetrieveCategory:
 class TestCreateCategory:
     url = "/categories/"
 
-    def test_admin_can_create(self, admin):
-        client = auth_client(admin)
+    def test_admin_can_create(self, admin_user):
+        client = auth_client(admin_user)
         response = client.post(self.url, _payload())
         assert response.status_code == status.HTTP_201_CREATED
         assert Category.objects.filter(name="New Category").exists()
@@ -95,24 +71,21 @@ class TestCreateCategory:
         response = api_client.post(self.url, _payload())
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_attendee_cannot_create(self, attendee):
-        client = auth_client(attendee)
+    @pytest.mark.parametrize("role", [Roles.ATTENDEE, Roles.ORGANIZER])
+    def test_non_admin_cannot_create(self, role):
+        user = UserFactory(role=role)
+        client = auth_client(user)
         response = client.post(self.url, _payload())
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_organizer_cannot_create(self, organizer):
-        client = auth_client(organizer)
-        response = client.post(self.url, _payload())
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-
-    def test_duplicate_name_rejected(self, admin):
+    def test_duplicate_name_rejected(self, admin_user):
         CategoryFactory(name="Music")
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.post(self.url, _payload(name="Music"))
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_blank_name_rejected(self, admin):
-        client = auth_client(admin)
+    def test_blank_name_rejected(self, admin_user):
+        client = auth_client(admin_user)
         response = client.post(self.url, _payload(name=""))
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
@@ -123,23 +96,19 @@ class TestCreateCategory:
 
 
 class TestUpdateCategory:
-    def test_admin_can_update(self, admin):
+    def test_admin_can_update(self, admin_user):
         category = CategoryFactory(name="Old Name")
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.patch(f"/categories/{category.pk}/", {"name": "New Name"})
         assert response.status_code == status.HTTP_200_OK
         category.refresh_from_db()
         assert category.name == "New Name"
 
-    def test_attendee_cannot_update(self, attendee):
+    @pytest.mark.parametrize("role", [Roles.ATTENDEE, Roles.ORGANIZER])
+    def test_non_admin_cannot_update(self, role):
+        user = UserFactory(role=role)
         category = CategoryFactory(name="Old Name")
-        client = auth_client(attendee)
-        response = client.patch(f"/categories/{category.pk}/", {"name": "New Name"})
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-
-    def test_organizer_cannot_update(self, organizer):
-        category = CategoryFactory(name="Old Name")
-        client = auth_client(organizer)
+        client = auth_client(user)
         response = client.patch(f"/categories/{category.pk}/", {"name": "New Name"})
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
@@ -148,16 +117,16 @@ class TestUpdateCategory:
         response = api_client.patch(f"/categories/{category.pk}/", {"name": "New Name"})
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_update_into_duplicate_name_rejected(self, admin):
+    def test_update_into_duplicate_name_rejected(self, admin_user):
         CategoryFactory(name="Taken")
         category = CategoryFactory(name="Original")
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.patch(f"/categories/{category.pk}/", {"name": "Taken"})
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_put_is_not_allowed_even_for_admin(self, admin):
+    def test_put_is_not_allowed_even_for_admin(self, admin_user):
         category = CategoryFactory(name="Old Name")
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.put(f"/categories/{category.pk}/", _payload())
         assert response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
 
@@ -168,41 +137,37 @@ class TestUpdateCategory:
 
 
 class TestDestroyCategory:
-    def test_admin_soft_deletes_by_default(self, admin):
+    def test_admin_soft_deletes_by_default(self, admin_user):
         category = CategoryFactory()
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.delete(f"/categories/{category.pk}/")
         assert response.status_code == status.HTTP_204_NO_CONTENT
         category.refresh_from_db()
         assert category.is_active is False
 
-    def test_admin_hard_deletes_with_query_param(self, admin):
+    def test_admin_hard_deletes_with_query_param(self, admin_user):
         category = CategoryFactory()
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.delete(f"/categories/{category.pk}/?hard=true")
         assert response.status_code == status.HTTP_204_NO_CONTENT
         assert Category.all_objects.filter(pk=category.pk).exists() is False
 
-    def test_soft_deleting_already_inactive_returns_404(self, admin):
+    def test_soft_deleting_already_inactive_returns_404(self, admin_user):
         category = CategoryFactory(is_active=False)
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.delete(f"/categories/{category.pk}/")
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
-    def test_destroy_nonexistent_returns_404(self, admin):
-        client = auth_client(admin)
+    def test_destroy_nonexistent_returns_404(self, admin_user):
+        client = auth_client(admin_user)
         response = client.delete(f"/categories/{uuid.uuid4()}/")
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
-    def test_attendee_cannot_delete(self, attendee):
+    @pytest.mark.parametrize("role", [Roles.ATTENDEE, Roles.ORGANIZER])
+    def test_non_admin_cannot_delete(self, role):
+        user = UserFactory(role=role)
         category = CategoryFactory()
-        client = auth_client(attendee)
-        response = client.delete(f"/categories/{category.pk}/")
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-
-    def test_organizer_cannot_delete(self, organizer):
-        category = CategoryFactory()
-        client = auth_client(organizer)
+        client = auth_client(user)
         response = client.delete(f"/categories/{category.pk}/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
@@ -211,9 +176,9 @@ class TestDestroyCategory:
         response = api_client.delete(f"/categories/{category.pk}/")
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_attendee_cannot_hard_delete(self, attendee):
+    def test_attendee_cannot_hard_delete(self, attendee_user):
         category = CategoryFactory()
-        client = auth_client(attendee)
+        client = auth_client(attendee_user)
         response = client.delete(f"/categories/{category.pk}/?hard=true")
         assert response.status_code == status.HTTP_403_FORBIDDEN
         assert Category.all_objects.filter(pk=category.pk).exists()
@@ -225,23 +190,19 @@ class TestDestroyCategory:
 
 
 class TestRestoreCategory:
-    def test_admin_can_restore(self, admin):
+    def test_admin_can_restore(self, admin_user):
         category = CategoryFactory(is_active=False)
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.post(f"/categories/{category.pk}/restore/")
         assert response.status_code == status.HTTP_200_OK
         category.refresh_from_db()
         assert category.is_active is True
 
-    def test_attendee_cannot_restore(self, attendee):
+    @pytest.mark.parametrize("role", [Roles.ATTENDEE, Roles.ORGANIZER])
+    def test_non_admin_cannot_restore(self, role):
+        user = UserFactory(role=role)
         category = CategoryFactory(is_active=False)
-        client = auth_client(attendee)
-        response = client.post(f"/categories/{category.pk}/restore/")
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-
-    def test_organizer_cannot_restore(self, organizer):
-        category = CategoryFactory(is_active=False)
-        client = auth_client(organizer)
+        client = auth_client(user)
         response = client.post(f"/categories/{category.pk}/restore/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
@@ -250,21 +211,21 @@ class TestRestoreCategory:
         response = api_client.post(f"/categories/{category.pk}/restore/")
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_restoring_already_active_returns_409(self, admin):
+    def test_restoring_already_active_returns_409(self, admin_user):
         category = CategoryFactory(is_active=True)
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.post(f"/categories/{category.pk}/restore/")
         assert response.status_code == status.HTTP_409_CONFLICT
 
-    def test_restoring_nonexistent_returns_404(self, admin):
-        client = auth_client(admin)
+    def test_restoring_nonexistent_returns_404(self, admin_user):
+        client = auth_client(admin_user)
         response = client.post(f"/categories/{uuid.uuid4()}/restore/")
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
-    def test_restore_blocked_by_conflicting_active_category(self, admin):
+    def test_restore_blocked_by_conflicting_active_category(self, admin_user):
         CategoryFactory(name="Music", is_active=True)
         deleted = CategoryFactory(name="Music", is_active=False)
-        client = auth_client(admin)
+        client = auth_client(admin_user)
         response = client.post(f"/categories/{deleted.pk}/restore/")
         assert response.status_code == status.HTTP_409_CONFLICT
         deleted.refresh_from_db()
