@@ -7,6 +7,7 @@ from django.core.validators import EmailValidator
 from django.db import models
 
 from apps.common.constants import Roles
+from apps.common.validators import validate_proper_name
 
 
 class UserManager(BaseUserManager):
@@ -51,8 +52,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     email = models.EmailField(unique=True, db_index=True)
-    first_name = models.CharField(max_length=50)
-    last_name = models.CharField(max_length=50)
+    first_name = models.CharField(max_length=50, validators=[validate_proper_name])
+    last_name = models.CharField(max_length=50, validators=[validate_proper_name])
     role = models.CharField(
         max_length=20, choices=Roles.choices, default=Roles.ATTENDEE
     )
@@ -88,4 +89,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     REQUIRED_FIELDS = []
 
     def __str__(self):
-        return f"{self.first_name} {self.last_name}"
+        return self.full_name
+
+    @property
+    def full_name(self):
+        return f"{self.first_name} {self.last_name}".strip()

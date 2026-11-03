@@ -3,7 +3,6 @@ from rest_framework import serializers
 
 from .validators import (
     validate_multiline_text,
-    validate_person_name,
     validate_single_line_text,
 )
 
@@ -22,16 +21,6 @@ class AllowedTextMixin:
                     validate_multiline_text if multiline else validate_single_line_text
                 )
         return fields
-
-
-class PersonNameMixin:
-    def validate_first_name(self, value):
-        validate_person_name(value)
-        return value
-
-    def validate_last_name(self, value):
-        validate_person_name(value)
-        return value
 
 
 class IntegrityErrorHandlingMixin:
