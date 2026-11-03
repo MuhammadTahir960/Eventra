@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, apiFetch, configureApiAuth } from './api-client'
+import {
+  ApiError,
+  apiFetch,
+  configureApiAuth,
+  errorMessage,
+  firstFieldErrors,
+} from './api-client'
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -98,5 +104,22 @@ describe('apiFetch', () => {
   it('reports an unreachable server as status 0', async () => {
     fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'))
     await expect(apiFetch('/events/')).rejects.toMatchObject({ status: 0 })
+  })
+})
+
+describe('errorMessage and firstFieldErrors', () => {
+  const invalid = new ApiError(400, 'Check the form.', {
+    email: ['Enter a valid email.', 'Too long.'],
+    detail: 'ignored',
+  })
+
+  it("use the server's words for an API error", () => {
+    expect(errorMessage(invalid, 'Fallback')).toBe('Check the form.')
+    expect(firstFieldErrors(invalid)).toEqual({ email: 'Enter a valid email.' })
+  })
+
+  it('fall back for anything else (a bug or a network failure)', () => {
+    expect(errorMessage(new TypeError('x'), 'Fallback')).toBe('Fallback')
+    expect(firstFieldErrors(new TypeError('x'))).toEqual({})
   })
 })
