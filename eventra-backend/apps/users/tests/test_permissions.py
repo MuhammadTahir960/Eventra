@@ -1,7 +1,7 @@
 import uuid
+from types import SimpleNamespace
 
 import pytest
-from django.contrib.auth.models import AnonymousUser
 
 from apps.common.constants import Roles
 from apps.common.permissions import (
@@ -10,220 +10,86 @@ from apps.common.permissions import (
     IsOrganizer,
     IsOwnerOrAdmin,
 )
+from apps.tickets.permissions import IsTicketEventOwnerOrAdmin
+from apps.users.factories import UserFactory
+from tests.helpers import fake_request, user_with_role
 
-from ..factories import UserFactory
+pytestmark = pytest.mark.django_db
 
-SOMEONE_ELSES_ID = uuid.uuid4()
-
-
-class FakeRequest:
-    def __init__(self, user):
-        self.user = user
+ROLES = [None, Roles.ATTENDEE, Roles.ORGANIZER, Roles.ADMIN]
 
 
-class FakeObj:
-    def __init__(self, user_id):
-        self.user_id = user_id
+@pytest.mark.parametrize("role", ROLES)
+def test_is_organizer_allows_organizers_only(role):
+    request = fake_request(user_with_role(role))
+    assert IsOrganizer().has_permission(request, None) is (role == Roles.ORGANIZER)
 
 
-# ==================================================
-# IsOrganizer
-# ==================================================
+@pytest.mark.parametrize("role", ROLES)
+def test_is_admin_allows_admins_only(role):
+    request = fake_request(user_with_role(role))
+    assert IsAdmin().has_permission(request, None) is (role == Roles.ADMIN)
 
 
-@pytest.mark.django_db
-def test_is_organizer_denies_anonymous():
-    request = FakeRequest(AnonymousUser())
-    assert IsOrganizer().has_permission(request, None) is False
+@pytest.mark.parametrize(
+    "role, method, allowed",
+    [
+        (None, "GET", True),
+        (Roles.ATTENDEE, "GET", True),
+        (None, "POST", False),
+        (Roles.ATTENDEE, "POST", False),
+        (Roles.ORGANIZER, "PATCH", False),
+        (Roles.ADMIN, "DELETE", True),
+    ],
+)
+def test_is_admin_for_write_lets_anyone_read_and_admins_write(role, method, allowed):
+    request = fake_request(user_with_role(role), method)
+    assert IsAdminForWrite().has_permission(request, None) is allowed
 
 
-@pytest.mark.django_db
-def test_is_organizer_denies_attendee():
-    user = UserFactory(role=Roles.ATTENDEE)
-    request = FakeRequest(user)
-    assert IsOrganizer().has_permission(request, None) is False
+@pytest.mark.parametrize(
+    "role, owns_it, allowed",
+    [
+        (None, False, False),
+        (Roles.ATTENDEE, False, False),
+        (Roles.ORGANIZER, False, False),
+        (Roles.ATTENDEE, True, True),
+        (Roles.ADMIN, False, True),
+    ],
+)
+def test_is_owner_or_admin_allows_the_owner_and_admins(role, owns_it, allowed):
+    user = user_with_role(role)
+    obj = type("Owned", (), {"user_id": user.id if owns_it else uuid.uuid4()})()
+    request = fake_request(user)
+    assert IsOwnerOrAdmin().has_object_permission(request, None, obj) is allowed
 
 
-@pytest.mark.django_db
-def test_is_organizer_allows_organizer():
+@pytest.mark.parametrize("role, allowed", [(None, False), (Roles.ATTENDEE, True)])
+def test_is_owner_or_admin_needs_only_a_signed_in_user_to_reach_the_object(
+    role, allowed
+):
+    request = fake_request(user_with_role(role))
+    assert IsOwnerOrAdmin().has_permission(request, None) is allowed
+
+
+@pytest.mark.parametrize("owns_it, allowed", [(True, True), (False, False)])
+def test_is_owner_or_admin_reads_the_owner_from_the_views_owner_field(owns_it, allowed):
     user = UserFactory(role=Roles.ORGANIZER)
-    request = FakeRequest(user)
-    assert IsOrganizer().has_permission(request, None) is True
+    obj = SimpleNamespace(organizer_id=user.id if owns_it else uuid.uuid4())
+    view = SimpleNamespace(owner_field="organizer_id")
+    request = fake_request(user)
+    assert IsOwnerOrAdmin().has_object_permission(request, view, obj) is allowed
 
 
-@pytest.mark.django_db
-def test_is_organizer_denies_admin():
-    user = UserFactory(role=Roles.ADMIN)
-    request = FakeRequest(user)
-    assert IsOrganizer().has_permission(request, None) is False
-
-
-# ==================================================
-# IsAdmin
-# ==================================================
-
-
-@pytest.mark.django_db
-def test_is_admin_denies_anonymous():
-    request = FakeRequest(AnonymousUser())
-    assert IsAdmin().has_permission(request, None) is False
-
-
-@pytest.mark.django_db
-def test_is_admin_denies_attendee():
-    user = UserFactory(role=Roles.ATTENDEE)
-    request = FakeRequest(user)
-    assert IsAdmin().has_permission(request, None) is False
-
-
-@pytest.mark.django_db
-def test_is_admin_denies_organizer():
+@pytest.mark.parametrize("owns_it, allowed", [(True, True), (False, False)])
+def test_is_owner_or_admin_follows_a_dotted_owner_field(owns_it, allowed):
     user = UserFactory(role=Roles.ORGANIZER)
-    request = FakeRequest(user)
-    assert IsAdmin().has_permission(request, None) is False
-
-
-@pytest.mark.django_db
-def test_is_admin_allows_admin():
-    user = UserFactory(role=Roles.ADMIN)
-    request = FakeRequest(user)
-    assert IsAdmin().has_permission(request, None) is True
-
-
-# ==================================================
-# IsAdminForWrite
-# ==================================================
-
-
-class FakeMethodRequest:
-    def __init__(self, user, method):
-        self.user = user
-        self.method = method
-
-
-@pytest.mark.django_db
-def test_is_admin_for_write_allows_safe_method_for_anonymous():
-    request = FakeMethodRequest(AnonymousUser(), method="GET")
-    assert IsAdminForWrite().has_permission(request, None) is True
-
-
-@pytest.mark.django_db
-def test_is_admin_for_write_allows_safe_method_for_any_authenticated_role():
-    user = UserFactory(role=Roles.ATTENDEE)
-    request = FakeMethodRequest(user, method="GET")
-    assert IsAdminForWrite().has_permission(request, None) is True
-
-
-@pytest.mark.django_db
-def test_is_admin_for_write_denies_write_method_for_anonymous():
-    request = FakeMethodRequest(AnonymousUser(), method="POST")
-    assert IsAdminForWrite().has_permission(request, None) is False
-
-
-@pytest.mark.django_db
-def test_is_admin_for_write_denies_write_method_for_attendee():
-    user = UserFactory(role=Roles.ATTENDEE)
-    request = FakeMethodRequest(user, method="POST")
-    assert IsAdminForWrite().has_permission(request, None) is False
-
-
-@pytest.mark.django_db
-def test_is_admin_for_write_denies_write_method_for_organizer():
-    user = UserFactory(role=Roles.ORGANIZER)
-    request = FakeMethodRequest(user, method="PATCH")
-    assert IsAdminForWrite().has_permission(request, None) is False
-
-
-@pytest.mark.django_db
-def test_is_admin_for_write_allows_write_method_for_admin():
-    user = UserFactory(role=Roles.ADMIN)
-    request = FakeMethodRequest(user, method="DELETE")
-    assert IsAdminForWrite().has_permission(request, None) is True
-
-
-# ==================================================
-# IsOwnerOrAdmin
-# ==================================================
-
-
-@pytest.mark.django_db
-def test_is_owner_or_admin_denies_anonymous():
-    request = FakeRequest(AnonymousUser())
-    obj = FakeObj(user_id=999)
-    assert IsOwnerOrAdmin().has_object_permission(request, None, obj) is False
-
-
-@pytest.mark.django_db
-def test_is_owner_or_admin_denies_non_owner_attendee():
-    user = UserFactory(role=Roles.ATTENDEE)
-    request = FakeRequest(user)
-    obj = FakeObj(user_id=SOMEONE_ELSES_ID)
-    assert IsOwnerOrAdmin().has_object_permission(request, None, obj) is False
-
-
-@pytest.mark.django_db
-def test_is_owner_or_admin_allows_actual_owner():
-    user = UserFactory(role=Roles.ATTENDEE)
-    request = FakeRequest(user)
-    obj = FakeObj(user_id=user.id)
-    assert IsOwnerOrAdmin().has_object_permission(request, None, obj) is True
-
-
-@pytest.mark.django_db
-def test_is_owner_or_admin_allows_admin_regardless_of_ownership():
-    admin = UserFactory(role=Roles.ADMIN)
-    request = FakeRequest(admin)
-    obj = FakeObj(user_id=SOMEONE_ELSES_ID)
-    assert IsOwnerOrAdmin().has_object_permission(request, None, obj) is True
-
-
-@pytest.mark.django_db
-def test_is_owner_or_admin_denies_non_owner_organizer():
-    user = UserFactory(role=Roles.ORGANIZER)
-    request = FakeRequest(user)
-    obj = FakeObj(user_id=SOMEONE_ELSES_ID)
-    assert IsOwnerOrAdmin().has_object_permission(request, None, obj) is False
-
-
-@pytest.mark.django_db
-def test_is_owner_or_admin_has_permission_is_not_restricted_by_role_or_ownership():
-    user = UserFactory(role=Roles.ATTENDEE)
-    request = FakeRequest(user)
-    assert IsOwnerOrAdmin().has_permission(request, None) is True
-
-
-@pytest.mark.django_db
-def test_is_owner_or_admin_has_permission_denies_anonymous():
-    request = FakeRequest(AnonymousUser())
-    assert IsOwnerOrAdmin().has_permission(request, None) is False
-
-
-class FakeObjWithOrganizerId:
-    def __init__(self, organizer_id):
-        self.organizer_id = organizer_id
-
-
-class FakeViewWithOwnerField:
-    owner_field = "organizer_id"
-
-
-@pytest.mark.django_db
-def test_is_owner_or_admin_respects_view_owner_field_override():
-    user = UserFactory(role=Roles.ORGANIZER)
-    request = FakeRequest(user)
-    obj = FakeObjWithOrganizerId(organizer_id=user.id)
-    assert (
-        IsOwnerOrAdmin().has_object_permission(request, FakeViewWithOwnerField(), obj)
-        is True
+    owner_id = user.id if owns_it else uuid.uuid4()
+    ticket = SimpleNamespace(
+        event_seat=SimpleNamespace(event=SimpleNamespace(organizer_id=owner_id))
     )
-
-
-@pytest.mark.django_db
-def test_is_owner_or_admin_owner_field_override_denies_non_owner():
-    user = UserFactory(role=Roles.ORGANIZER)
-    request = FakeRequest(user)
-    obj = FakeObjWithOrganizerId(organizer_id=SOMEONE_ELSES_ID)
+    request = fake_request(user)
     assert (
-        IsOwnerOrAdmin().has_object_permission(request, FakeViewWithOwnerField(), obj)
-        is False
+        IsTicketEventOwnerOrAdmin().has_object_permission(request, None, ticket)
+        is allowed
     )

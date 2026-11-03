@@ -1,65 +1,28 @@
 import pytest
-from django.contrib.auth.models import AnonymousUser
 
 from apps.common.constants import Roles
 from apps.users.factories import UserFactory
+from tests.helpers import fake_request, user_with_role
 
 from ..factories import EventFactory
-from ..permissions import IsEventOwnerOrAdminForDelete
-
-
-class FakeRequest:
-    def __init__(self, user):
-        self.user = user
-
+from ..permissions import IsEventOwnerOrAdmin
 
 pytestmark = pytest.mark.django_db
 
-# ==================================================
-# IsEventOwnerOrAdminForDelete
-# ==================================================
 
-
-def test_delete_permission_true_for_owner():
-    organizer = UserFactory(role=Roles.ORGANIZER)
-    event = EventFactory(organizer=organizer)
-    assert (
-        IsEventOwnerOrAdminForDelete().has_object_permission(
-            FakeRequest(organizer), None, event
-        )
-        is True
+@pytest.mark.parametrize(
+    "role, owns_it, allowed",
+    [
+        (Roles.ORGANIZER, True, True),
+        (Roles.ADMIN, False, True),
+        (Roles.ORGANIZER, False, False),
+        (None, False, False),
+    ],
+)
+def test_the_owner_or_an_admin_may_act_on_an_event(role, owns_it, allowed):
+    user = user_with_role(role)
+    event = EventFactory(
+        organizer=user if owns_it else UserFactory(role=Roles.ORGANIZER)
     )
-
-
-def test_delete_permission_true_for_admin_on_someone_elses_event():
-    organizer = UserFactory(role=Roles.ORGANIZER)
-    admin = UserFactory(role=Roles.ADMIN)
-    event = EventFactory(organizer=organizer)
-    assert (
-        IsEventOwnerOrAdminForDelete().has_object_permission(
-            FakeRequest(admin), None, event
-        )
-        is True
-    )
-
-
-def test_delete_permission_false_for_non_owner_organizer():
-    owner = UserFactory(role=Roles.ORGANIZER)
-    other = UserFactory(role=Roles.ORGANIZER)
-    event = EventFactory(organizer=owner)
-    assert (
-        IsEventOwnerOrAdminForDelete().has_object_permission(
-            FakeRequest(other), None, event
-        )
-        is False
-    )
-
-
-def test_delete_permission_false_for_anonymous():
-    event = EventFactory()
-    assert (
-        IsEventOwnerOrAdminForDelete().has_object_permission(
-            FakeRequest(AnonymousUser()), None, event
-        )
-        is False
-    )
+    request = fake_request(user)
+    assert IsEventOwnerOrAdmin().has_object_permission(request, None, event) is allowed

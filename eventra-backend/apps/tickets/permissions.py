@@ -1,15 +1,5 @@
-from rest_framework.permissions import BasePermission
-
-from apps.common.constants import Roles
+from apps.common.permissions import IsOwnerOrAdmin
 
 
-class IsTicketEventOwnerStrict(BasePermission):
-    def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated)
-
-    def has_object_permission(self, request, view, obj):
-        if not (request.user and request.user.is_authenticated):
-            return False
-        if request.user.role == Roles.ADMIN:
-            return True
-        return obj.event_seat.event.organizer_id == request.user.id
+class IsTicketEventOwnerOrAdmin(IsOwnerOrAdmin):
+    owner_field = "event_seat.event.organizer_id"
