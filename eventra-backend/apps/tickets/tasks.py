@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 @shared_task
 def generate_ticket_pdf(booking_id):
     tickets = Ticket.objects.filter(booking_id=booking_id).select_related(
-        "event_seat", "event_seat__event", "event_seat__seat"
+        "event_seat", "event_seat__event", "event_seat__seat", "booking__user"
     )
 
     for ticket in tickets:

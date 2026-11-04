@@ -3,18 +3,31 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.bookings.models import Booking
+
 from .models import Ticket
-from .permissions import IsTicketEventOwnerStrict
+from .permissions import IsTicketEventOwnerOrAdmin
 from .serializers import TicketSerializer
 from .services import (
-    TicketAlreadyCancelledError,
     TicketAlreadyUsedError,
+    TicketNotValidError,
     TicketWrongEventError,
     render_ticket_pdf,
     validate_ticket,
 )
 
-_TICKET_RELATED = ("event_seat", "event_seat__event", "event_seat__seat", "booking")
+_TICKET_RELATED = (
+    "event_seat",
+    "event_seat__event",
+    "event_seat__seat",
+    "booking__user",
+)
+
+
+def _own_tickets(user):
+    return Ticket.objects.filter(
+        booking__user=user, booking__status__in=Booking.PAID_STATUSES
+    ).select_related(*_TICKET_RELATED)
 
 
 class TicketListView(generics.ListAPIView):
@@ -22,9 +35,7 @@ class TicketListView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return Ticket.objects.filter(booking__user=self.request.user).select_related(
-            *_TICKET_RELATED
-        )
+        return _own_tickets(self.request.user)
 
 
 class TicketDetailView(generics.RetrieveAPIView):
@@ -34,9 +45,7 @@ class TicketDetailView(generics.RetrieveAPIView):
     lookup_url_kwarg = "id"
 
     def get_queryset(self):
-        return Ticket.objects.filter(booking__user=self.request.user).select_related(
-            *_TICKET_RELATED
-        )
+        return _own_tickets(self.request.user)
 
 
 class TicketDownloadView(APIView):
@@ -44,12 +53,7 @@ class TicketDownloadView(APIView):
     throttle_scope = "ticket-download"
 
     def get(self, request, id):
-        ticket = generics.get_object_or_404(
-            Ticket.objects.filter(booking__user=request.user).select_related(
-                *_TICKET_RELATED
-            ),
-            id=id,
-        )
+        ticket = generics.get_object_or_404(_own_tickets(request.user), id=id)
         pdf_bytes = render_ticket_pdf(ticket)
         response = HttpResponse(pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = (
@@ -59,7 +63,7 @@ class TicketDownloadView(APIView):
 
 
 class TicketValidateView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsTicketEventOwnerStrict]
+    permission_classes = [permissions.IsAuthenticated, IsTicketEventOwnerOrAdmin]
 
     def post(self, request, event_id, ticket_id):
         ticket = generics.get_object_or_404(
@@ -73,7 +77,7 @@ class TicketValidateView(APIView):
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         except TicketAlreadyUsedError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        except TicketAlreadyCancelledError as exc:
+        except TicketNotValidError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
         return Response(TicketSerializer(ticket).data, status=status.HTTP_200_OK)

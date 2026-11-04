@@ -20,7 +20,7 @@ class TicketAlreadyUsedError(Exception):
     """Raised when a valid-status check finds the ticket already used."""
 
 
-class TicketAlreadyCancelledError(Exception):
+class TicketNotValidError(Exception):
     """Raised when a valid-status check finds the ticket cancelled."""
 
 
@@ -74,6 +74,11 @@ def _ticket_pdf_cache_key(ticket_id) -> str:
     return f"ticket-pdf:{ticket_id}"
 
 
+def forget_ticket_pdfs(tickets) -> None:
+    ids = tickets.values_list("id", flat=True)
+    cache.delete_many([_ticket_pdf_cache_key(ticket_id) for ticket_id in ids])
+
+
 def get_or_render_ticket_pdf(ticket: Ticket) -> bytes:
     key = _ticket_pdf_cache_key(ticket.id)
     cached = cache.get(key)
@@ -98,8 +103,10 @@ def validate_ticket(*, ticket: Ticket, event_id) -> Ticket:
 
         if locked_ticket.status == Ticket.Status.USED:
             raise TicketAlreadyUsedError("Ticket already used")
-        if locked_ticket.status == Ticket.Status.CANCELLED:
-            raise TicketAlreadyCancelledError("Ticket cancelled")
+        if locked_ticket.status != Ticket.Status.VALID:
+            raise TicketNotValidError(
+                "This ticket isn't valid: it was cancelled or never paid for."
+            )
 
         locked_ticket.status = Ticket.Status.USED
         locked_ticket.save(update_fields=["status", "updated_at"])
