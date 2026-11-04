@@ -24,13 +24,6 @@ class EventSeat(UUIDBaseModel):
     price_override = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True
     )
-    held_booking = models.ForeignKey(
-        "bookings.Booking",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="held_event_seats",
-    )
 
     class Meta:
         constraints = [
@@ -43,6 +36,12 @@ class EventSeat(UUIDBaseModel):
 
     def __str__(self) -> str:
         return f"{self.event.title} — {self.seat} ({self.status})"
+
+    @property
+    def price(self):
+        if self.price_override is not None:
+            return self.price_override
+        return self.ticket_tier.price
 
 
 class SeatHold(UUIDBaseModel):
