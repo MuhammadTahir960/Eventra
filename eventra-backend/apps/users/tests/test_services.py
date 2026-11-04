@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from django.core import mail
+from django.core.cache import cache
 from django.db import OperationalError, connection
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -20,15 +21,19 @@ from apps.bookings.services import create_booking_from_hold
 from apps.common.constants import Roles
 from apps.events.factories import EventFactory
 from apps.events.models import Event
+from apps.payments.models import Refund
 from apps.payouts.factories import OrganizerPayoutFactory
 from apps.payouts.models import OrganizerPayout
 from apps.seating.factories import EventSeatFactory, SeatHoldFactory
 from apps.seating.models import EventSeat
+from apps.tickets.factories import TicketFactory
 from apps.tickets.models import Ticket
+from apps.tickets.services import _ticket_pdf_cache_key
 from apps.users.tokens import (
     verify_password_reset_token,
     verify_token,
 )
+from tests.helpers import failed_refund
 
 from ..factories import UserFactory
 from ..models import User
@@ -466,7 +471,7 @@ PASSWORD = "testpass123"
 def _ticket(user, event, status=Booking.Status.CONFIRMED):
     booking = BookingFactory(user=user, status=status)
     seat = EventSeatFactory(event=event, status=EventSeat.Status.BOOKED)
-    Ticket.objects.create(booking=booking, event_seat=seat, status=Ticket.Status.VALID)
+    TicketFactory(booking=booking, event_seat=seat, status=Ticket.Status.VALID)
     return booking
 
 
@@ -529,7 +534,7 @@ def test_attendee_with_tickets_for_an_upcoming_event_is_blocked_until_it_passes(
 def test_checkout_in_progress_and_unfinished_refund_block_deletion():
     user = UserFactory()
     BookingFactory(user=user, status=Booking.Status.PENDING)
-    BookingFactory(user=user, status=Booking.Status.REFUND_FAILED)
+    failed_refund(BookingFactory(user=user, status=Booking.Status.REFUNDED))
     reasons = _reasons(user)
     assert "checkout in progress" in reasons
     assert "refund to you" in reasons
@@ -560,7 +565,7 @@ def test_organizer_whose_events_are_all_settled_can_leave():
 def test_organizer_with_refunds_still_running_is_blocked():
     user = UserFactory(role=Roles.ORGANIZER)
     cancelled = EventFactory(organizer=user, status=Event.Status.CANCELLED)
-    _ticket(UserFactory(), cancelled, status=Booking.Status.REFUND_FAILED)
+    failed_refund(_ticket(UserFactory(), cancelled, status=Booking.Status.REFUNDED))
     assert "still in progress" in _reasons(user)
 
 
@@ -638,3 +643,32 @@ def test_a_blocked_deletion_leaves_the_users_holds_untouched():
         delete_account(user, PASSWORD)
     hold.refresh_from_db()
     assert hold.expires_at == expires_at
+
+
+@pytest.mark.django_db
+def test_a_partial_refund_still_on_its_way_blocks_deletion():
+    user = UserFactory()
+    Refund.objects.create(
+        booking=BookingFactory(user=user, status=Booking.Status.CONFIRMED),
+        reason=Refund.Reason.PRICE_DROP,
+        key="price_drop-test",
+    )
+    assert "refund to you" in _reasons(user)
+
+
+@pytest.mark.django_db
+def test_tickets_show_the_buyers_name_until_the_account_is_deleted(
+    django_capture_on_commit_callbacks,
+):
+    user = UserFactory(first_name="Alex", last_name="Rivera")
+    event = EventFactory(status=Event.Status.COMPLETED, completed_at=timezone.now())
+    ticket = _ticket(user, event).tickets.get()
+    assert ticket.attendee_name == "Alex Rivera"
+    cache.set(_ticket_pdf_cache_key(ticket.id), b"%PDF cached with the name")
+
+    with django_capture_on_commit_callbacks(execute=True):
+        delete_account(user, PASSWORD)
+
+    ticket = Ticket.objects.select_related("booking__user").get(pk=ticket.pk)
+    assert ticket.attendee_name == ""
+    assert cache.get(_ticket_pdf_cache_key(ticket.id)) is None
