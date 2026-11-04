@@ -6,11 +6,12 @@ from django.db import connection
 from apps.bookings.factories import BookingFactory
 from apps.events.factories import EventFactory
 from apps.seating.factories import EventSeatFactory
+from apps.tickets.factories import TicketFactory
 
 from ..models import Ticket
 from ..services import (
-    TicketAlreadyCancelledError,
     TicketAlreadyUsedError,
+    TicketNotValidError,
     TicketWrongEventError,
     render_ticket_pdf,
     validate_ticket,
@@ -23,7 +24,7 @@ class TestValidateTicket:
     def test_happy_path_flips_status_to_used(self):
         event = EventFactory(status="approved")
         seat = EventSeatFactory(event=event)
-        ticket = Ticket.objects.create(
+        ticket = TicketFactory(
             booking=BookingFactory(), event_seat=seat, status=Ticket.Status.VALID
         )
 
@@ -36,7 +37,7 @@ class TestValidateTicket:
         event = EventFactory(status="approved")
         other_event = EventFactory(status="approved")
         seat = EventSeatFactory(event=event)
-        ticket = Ticket.objects.create(
+        ticket = TicketFactory(
             booking=BookingFactory(), event_seat=seat, status=Ticket.Status.VALID
         )
 
@@ -49,28 +50,31 @@ class TestValidateTicket:
     def test_already_used_raises(self):
         event = EventFactory(status="approved")
         seat = EventSeatFactory(event=event)
-        ticket = Ticket.objects.create(
+        ticket = TicketFactory(
             booking=BookingFactory(), event_seat=seat, status=Ticket.Status.USED
         )
 
         with pytest.raises(TicketAlreadyUsedError):
             validate_ticket(ticket=ticket, event_id=event.id)
 
-    def test_cancelled_raises(self):
+    @pytest.mark.parametrize(
+        "status", [Ticket.Status.CANCELLED, Ticket.Status.PENDING]
+    )
+    def test_cancelled_or_unpaid_raises(self, status):
         event = EventFactory(status="approved")
         seat = EventSeatFactory(event=event)
-        ticket = Ticket.objects.create(
-            booking=BookingFactory(), event_seat=seat, status=Ticket.Status.CANCELLED
-        )
+        ticket = TicketFactory(booking=BookingFactory(), event_seat=seat, status=status)
 
-        with pytest.raises(TicketAlreadyCancelledError):
+        with pytest.raises(TicketNotValidError):
             validate_ticket(ticket=ticket, event_id=event.id)
+        ticket.refresh_from_db()
+        assert ticket.status == status
 
     def test_wrong_event_check_runs_before_status_check(self):
         event = EventFactory(status="approved")
         other_event = EventFactory(status="approved")
         seat = EventSeatFactory(event=event)
-        ticket = Ticket.objects.create(
+        ticket = TicketFactory(
             booking=BookingFactory(), event_seat=seat, status=Ticket.Status.USED
         )
 
@@ -81,7 +85,7 @@ class TestValidateTicket:
     def test_concurrent_scans_of_the_same_ticket_yield_exactly_one_success(self):
         event = EventFactory(status="approved")
         seat = EventSeatFactory(event=event)
-        ticket = Ticket.objects.create(
+        ticket = TicketFactory(
             booking=BookingFactory(), event_seat=seat, status=Ticket.Status.VALID
         )
 
@@ -118,7 +122,7 @@ class TestRenderTicketPdf:
     def test_returns_bytes_and_embeds_ticket_code(self, monkeypatch):
         event = EventFactory(status="approved")
         seat = EventSeatFactory(event=event)
-        ticket = Ticket.objects.create(booking=BookingFactory(), event_seat=seat)
+        ticket = TicketFactory(booking=BookingFactory(), event_seat=seat)
 
         captured_html = {}
 
