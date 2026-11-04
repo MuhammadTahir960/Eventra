@@ -3,7 +3,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.payments.serializers import CheckoutResponseSerializer
-from apps.payments.services import PaymentGatewayError
+from apps.payments.services import (
+    PaymentGatewayError,
+    RefundRequestNotAllowedError,
+    refund_on_request,
+)
 
 from .models import Booking
 from .serializers import BookingSerializer, HoldIdSerializer
@@ -22,7 +26,9 @@ class BookingListCreateView(generics.ListCreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return Booking.objects.filter(user=self.request.user)
+        return Booking.objects.filter(user=self.request.user).prefetch_related(
+            "tickets"
+        )
 
     def get_serializer_class(self):
         return BookingSerializer
@@ -87,3 +93,18 @@ class BookingCheckoutView(APIView):
         return Response(
             CheckoutResponseSerializer(payment).data, status=status.HTTP_200_OK
         )
+
+
+class BookingRefundsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = "booking-refund"
+
+    def post(self, request, id):
+        booking = generics.get_object_or_404(
+            Booking.objects.filter(user=request.user), id=id
+        )
+        try:
+            booking = refund_on_request(booking)
+        except RefundRequestNotAllowedError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        return Response(BookingSerializer(booking).data, status=status.HTTP_201_CREATED)
