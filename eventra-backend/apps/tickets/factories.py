@@ -13,4 +13,5 @@ class TicketFactory(DjangoModelFactory):
 
     booking = factory.SubFactory(BookingFactory)
     event_seat = factory.SubFactory(EventSeatFactory)
+    price = factory.LazyAttribute(lambda o: o.event_seat.price)
     status = Ticket.Status.VALID
