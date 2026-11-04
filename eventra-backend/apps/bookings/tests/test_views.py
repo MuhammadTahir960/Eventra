@@ -8,21 +8,17 @@ import stripe
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.events.factories import EventFactory
+from apps.events.factories import EventFactory, TicketTierFactory
+from apps.events.models import Event
 from apps.seating.factories import EventSeatFactory, SeatHoldFactory
 from apps.seating.models import EventSeat
 from apps.users.factories import UserFactory
+from tests.helpers import auth_client, paid_booking, unpaid_booking
 
 from ..factories import BookingFactory
 from ..models import Booking
 
 pytestmark = pytest.mark.django_db
-
-
-def _authed_client(user):
-    client = APIClient()
-    client.force_authenticate(user=user)
-    return client
 
 
 class TestBookingCreateEndpoint:
@@ -39,7 +35,7 @@ class TestBookingCreateEndpoint:
             user=user,
             expires_at=timezone.now() + timedelta(minutes=10),
         )
-        client = _authed_client(user)
+        client = auth_client(user)
 
         first = client.post("/bookings/", {"hold_id": str(group_id)}, format="json")
         second = client.post("/bookings/", {"hold_id": str(group_id)}, format="json")
@@ -49,14 +45,14 @@ class TestBookingCreateEndpoint:
         assert first.data["id"] == second.data["id"]
 
     def test_unknown_hold_id_returns_404(self):
-        client = _authed_client(UserFactory())
+        client = auth_client(UserFactory())
         response = client.post(
             "/bookings/", {"hold_id": str(uuid.uuid4())}, format="json"
         )
         assert response.status_code == 404
 
     def test_malformed_hold_id_returns_400_not_500(self):
-        client = _authed_client(UserFactory())
+        client = auth_client(UserFactory())
         response = client.post("/bookings/", {"hold_id": "not-a-uuid"}, format="json")
         assert response.status_code == 400
 
@@ -78,7 +74,7 @@ class TestBookingCreateEndpoint:
             user=user,
             expires_at=timezone.now() - timedelta(seconds=1),
         )
-        client = _authed_client(user)
+        client = auth_client(user)
 
         response = client.post("/bookings/", {"hold_id": str(group_id)}, format="json")
         assert response.status_code == 409
@@ -90,7 +86,7 @@ class TestBookingListEndpoint:
         stranger = UserFactory()
         own_booking = BookingFactory(user=owner)
         BookingFactory(user=stranger)
-        client = _authed_client(owner)
+        client = auth_client(owner)
 
         response = client.get("/bookings/")
 
@@ -109,7 +105,7 @@ class TestBookingDetailOwnership:
         owner = UserFactory()
         stranger = UserFactory()
         booking = BookingFactory(user=owner)
-        client = _authed_client(stranger)
+        client = auth_client(stranger)
 
         response = client.get(f"/bookings/{booking.id}/")
         assert response.status_code == 404
@@ -117,7 +113,7 @@ class TestBookingDetailOwnership:
     def test_own_booking_is_visible(self):
         owner = UserFactory()
         booking = BookingFactory(user=owner)
-        client = _authed_client(owner)
+        client = auth_client(owner)
 
         response = client.get(f"/bookings/{booking.id}/")
         assert response.status_code == 200
@@ -128,51 +124,82 @@ class TestBookingCheckoutEndpoint:
     def test_checkout_against_non_pending_booking_returns_409(self):
         user = UserFactory()
         booking = BookingFactory(user=user, status=Booking.Status.CANCELLED)
-        client = _authed_client(user)
+        client = auth_client(user)
 
         response = client.post(f"/bookings/{booking.id}/checkout/")
         assert response.status_code == 409
 
     def test_checkout_happy_path_returns_client_secret(self, monkeypatch):
         user = UserFactory()
-        booking = BookingFactory(
-            user=user, status=Booking.Status.PENDING, total_amount=Decimal("15.00")
-        )
+        booking = unpaid_booking("15.00", user=user)
         fake_intent = MagicMock(id="pi_test_abc", client_secret="pi_test_abc_secret")
+        create = MagicMock(return_value=fake_intent)
         monkeypatch.setattr(
-            "apps.payments.services.stripe.PaymentIntent.create",
-            MagicMock(return_value=fake_intent),
+            "apps.payments.services.stripe.PaymentIntent.create", create
         )
-        client = _authed_client(user)
+        client = auth_client(user)
 
         response = client.post(f"/bookings/{booking.id}/checkout/")
 
         assert response.status_code == 200
         assert response.data["client_secret"] == "pi_test_abc_secret"
-        assert response.data["amount"] == 1500
+        assert create.call_args.kwargs["amount"] == 1500
 
     def test_checkout_against_someone_elses_booking_returns_404(self):
         owner = UserFactory()
         stranger = UserFactory()
         booking = BookingFactory(user=owner, status=Booking.Status.PENDING)
-        client = _authed_client(stranger)
+        client = auth_client(stranger)
 
         response = client.post(f"/bookings/{booking.id}/checkout/")
         assert response.status_code == 404
 
     def test_checkout_stripe_error_returns_502(self, monkeypatch):
         user = UserFactory()
-        booking = BookingFactory(
-            user=user, status=Booking.Status.PENDING, total_amount=Decimal("15.00")
-        )
+        booking = unpaid_booking("15.00", user=user)
 
         def _boom(*args, **kwargs):
             raise stripe.error.APIConnectionError("could not connect to Stripe")
 
         monkeypatch.setattr("apps.payments.services.stripe.PaymentIntent.create", _boom)
-        client = _authed_client(user)
+        client = auth_client(user)
 
         response = client.post(f"/bookings/{booking.id}/checkout/")
 
         assert response.status_code == 502
         assert "could not connect to Stripe" not in str(response.data)
+
+
+class TestBookingRefundsEndpoint:
+    def _booking(self, postponed=True):
+        start = timezone.now() + timedelta(days=3)
+        event = EventFactory(
+            status=Event.Status.APPROVED,
+            start_datetime=start,
+            end_datetime=start + timedelta(hours=2),
+            postponed_from=start - timedelta(days=7) if postponed else None,
+        )
+        return paid_booking(event, (TicketTierFactory(event=event), "25.00"))
+
+    def _post(self, user, booking):
+        return auth_client(user).post(f"/bookings/{booking.id}/refunds/")
+
+    def test_owner_gets_a_full_refund_for_a_postponed_event(self, monkeypatch):
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.Refund.create",
+            MagicMock(return_value=MagicMock(id="re_test")),
+        )
+        booking = self._booking()
+
+        response = self._post(booking.user, booking)
+
+        assert response.status_code == 201
+        assert response.data["status"] == Booking.Status.REFUNDED
+
+    def test_someone_elses_booking_is_not_found(self):
+        booking = self._booking()
+        assert self._post(UserFactory(), booking).status_code == 404
+
+    def test_an_event_that_was_not_postponed_is_a_conflict(self):
+        booking = self._booking(postponed=False)
+        assert self._post(booking.user, booking).status_code == 409

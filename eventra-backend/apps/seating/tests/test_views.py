@@ -7,7 +7,6 @@ from django.conf import settings
 from django.db import connection
 from rest_framework import status
 from rest_framework.test import APIClient
-from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.bookings.models import Booking
 from apps.bookings.views import BookingCheckoutView
@@ -19,6 +18,7 @@ from apps.events.factories import (
 from apps.events.models import Event
 from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory
+from tests.helpers import auth_client
 
 from ..factories import EventSeatFactory
 from ..models import EventSeat
@@ -26,13 +26,6 @@ from ..services import MAX_SEATS_PER_HOLD
 from ..views import EventSeatHoldView
 
 pytestmark = pytest.mark.django_db
-
-
-def auth_client(user):
-    client = APIClient()
-    access = RefreshToken.for_user(user).access_token
-    client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
-    return client
 
 
 def _seated_approved_event(organizer=None, section="Main"):
@@ -332,7 +325,7 @@ class TestHoldSeats:
         seat_a.refresh_from_db()
         assert first.status == Booking.Status.CANCELLED
         assert seat_a.status == EventSeat.Status.AVAILABLE
-        assert seat_a.held_booking_id is None
+        assert not first.held_seats().exists()
 
     def test_release_frees_the_users_unpaid_booking(
         self, organizer_user, attendee_user

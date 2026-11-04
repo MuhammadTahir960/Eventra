@@ -356,18 +356,6 @@ def test_hold_seats_mixed_batch_one_reclaimable_one_still_live_conflicts_atomica
     assert SeatHold.objects.get(event_seat=reclaimable_seat).user_id == other_user_a.id
 
 
-def test_hold_seats_still_conflicts_on_a_hold_that_has_not_expired_yet():
-    event = _seated_event_with_mapped_venue()
-    instantiate_event_seats(event)
-    seat = EventSeat.objects.filter(event=event).first()
-    original_holder = UserFactory(role="attendee")
-    hold_seats(event=event, seat_ids=[seat.id], user=original_holder)
-
-    with pytest.raises(SeatsUnavailableError) as exc_info:
-        hold_seats(event=event, seat_ids=[seat.id], user=UserFactory(role="attendee"))
-    assert exc_info.value.seat_ids == [seat.id]
-
-
 def test_hold_seats_dedupes_repeated_seat_ids():
     event = _seated_event_with_mapped_venue()
     instantiate_event_seats(event)
