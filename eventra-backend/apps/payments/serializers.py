@@ -10,7 +10,11 @@ class CheckoutResponseSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Payment
-        fields = ["client_secret", "publishable_key", "amount", "currency", "status"]
+        fields = ["client_secret", "publishable_key", "status"]
 
     def get_publishable_key(self, obj):
         return settings.STRIPE_PUBLISHABLE_KEY
+
+
+class PartialRefundSerializer(serializers.Serializer):
+    percent = serializers.IntegerField(min_value=1, max_value=99)
