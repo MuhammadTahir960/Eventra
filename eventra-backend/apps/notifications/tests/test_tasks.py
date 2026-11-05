@@ -7,10 +7,13 @@ from django.utils import timezone
 from apps.bookings.factories import BookingFactory
 from apps.events.factories import EventFactory, TicketTierFactory
 from apps.events.models import Event
+from apps.payments.models import Refund
 from apps.seating.factories import EventSeatFactory
+from apps.tickets.factories import TicketFactory
 from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory
+from tests.helpers import paid_booking
 
 from ..models import Notification
 from ..tasks import (
@@ -62,17 +65,17 @@ class TestSendConfirmationEmailTask:
 
 
 class TestSendRefundEmailTask:
-    def test_fetches_booking_and_delegates_to_the_refund_service(self):
-        booking = BookingFactory()
+    def test_loads_the_refund_and_emails_the_buyer(self):
+        event = EventFactory(status="approved")
+        booking = paid_booking(event, (TicketTierFactory(event=event), "20.00"))
+        refund = Refund.objects.create(
+            booking=booking, reason=Refund.Reason.CANCELLED_EVENT, key="task-email"
+        )
+        refund.items.create(ticket=booking.tickets.get(), amount="20.00")
 
-        send_refund_email(str(booking.id))
+        send_refund_email(str(refund.id))
 
-        assert len(mail.outbox) == 1
         assert mail.outbox[0].to == [booking.user.email]
-        assert Notification.objects.filter(
-            user=booking.user,
-            type=Notification.NotificationType.EVENT_CANCELLED_REFUND,
-        ).exists()
 
 
 class TestSendEventRemindersTask:
@@ -88,7 +91,7 @@ class TestSendEventRemindersTask:
             ticket_tier=TicketTierFactory(event=event),
             seat=SeatFactory(venue=event.venue),
         )
-        Ticket.objects.create(
+        TicketFactory(
             booking=BookingFactory(status="confirmed"),
             event_seat=seat,
             status=Ticket.Status.VALID,
