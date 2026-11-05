@@ -16,7 +16,6 @@ class OrganizerPayout(UUIDBaseModel):
 
     gross_revenue = models.DecimalField(max_digits=10, decimal_places=2)
     platform_fee = models.DecimalField(max_digits=10, decimal_places=2)
-    net_amount = models.DecimalField(max_digits=10, decimal_places=2)
 
     status = models.CharField(
         max_length=20,
@@ -24,11 +23,6 @@ class OrganizerPayout(UUIDBaseModel):
         default=Status.PENDING,
         db_index=True,
     )
-
-    payout_reference = models.CharField(max_length=50, unique=True)
-
-    period_start = models.DateTimeField()
-    period_end = models.DateTimeField()
 
     settled_at = models.DateTimeField(null=True, blank=True)
 
@@ -39,4 +33,8 @@ class OrganizerPayout(UUIDBaseModel):
         ordering = ["-created_at"]
 
     def __str__(self) -> str:
-        return f"Payout {self.payout_reference} ({self.status})"
+        return f"Payout for {self.event_id} ({self.status})"
+
+    @property
+    def net_amount(self):
+        return self.gross_revenue - self.platform_fee

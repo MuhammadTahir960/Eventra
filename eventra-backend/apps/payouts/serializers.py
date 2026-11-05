@@ -8,6 +8,9 @@ from .services import payout_available_at, split_gross_revenue
 class OrganizerPayoutSerializer(serializers.ModelSerializer):
     event_id = serializers.UUIDField(source="event.id", read_only=True)
     event_title = serializers.CharField(source="event.title", read_only=True)
+    net_amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True
+    )
 
     class Meta:
         model = OrganizerPayout
@@ -19,9 +22,6 @@ class OrganizerPayoutSerializer(serializers.ModelSerializer):
             "platform_fee",
             "net_amount",
             "status",
-            "payout_reference",
-            "period_start",
-            "period_end",
             "settled_at",
             "created_at",
         ]
@@ -32,6 +32,7 @@ class TicketSaleSerializer(serializers.Serializer):
     ticket_id = serializers.UUIDField()
     ticket_code = serializers.CharField()
     amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    refunded = serializers.DecimalField(max_digits=10, decimal_places=2)
     status = serializers.ChoiceField(choices=["confirmed", "refunded"])
 
 
