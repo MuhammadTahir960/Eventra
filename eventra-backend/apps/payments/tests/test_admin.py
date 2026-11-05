@@ -2,6 +2,9 @@ import pytest
 from django.contrib.admin.sites import AdminSite
 
 from apps.bookings.factories import BookingFactory
+from apps.seating.factories import EventSeatFactory
+from apps.tickets.factories import TicketFactory
+from apps.tickets.models import Ticket
 
 from ..admin import PaymentAdmin
 from ..models import Payment
@@ -14,8 +17,6 @@ def test_stripe_identity_fields_are_not_editable_in_admin_form():
         booking=BookingFactory(),
         stripe_payment_intent_id="pi_test123",
         client_secret="pi_test123_secret_abc",
-        amount=1999,
-        currency="usd",
         status=Payment.Status.PENDING,
     )
 
@@ -31,8 +32,6 @@ def test_stripe_identity_fields_still_visible_for_support_debugging():
         booking=BookingFactory(),
         stripe_payment_intent_id="pi_test456",
         client_secret="pi_test456_secret_xyz",
-        amount=500,
-        currency="usd",
         status=Payment.Status.SUCCEEDED,
     )
 
@@ -41,3 +40,20 @@ def test_stripe_identity_fields_still_visible_for_support_debugging():
 
     assert "client_secret" in all_fields
     assert "stripe_payment_intent_id" in all_fields
+
+
+def test_payments_list_names_the_event_of_an_orphaned_payment():
+    booking = BookingFactory(status="cancelled")
+    seat = EventSeatFactory()
+    TicketFactory(booking=booking, event_seat=seat, status=Ticket.Status.CANCELLED)
+    Payment.objects.create(
+        booking=booking,
+        stripe_payment_intent_id="pi_orphan",
+        client_secret="pi_orphan_secret",
+        status=Payment.Status.SUCCEEDED,
+    )
+
+    admin = PaymentAdmin(Payment, AdminSite())
+    payment = admin.get_queryset(request=None).get()
+
+    assert admin.event(payment) == seat.event.title

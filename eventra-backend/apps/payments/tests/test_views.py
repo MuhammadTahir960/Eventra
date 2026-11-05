@@ -3,6 +3,12 @@ from unittest.mock import MagicMock
 import pytest
 from rest_framework.test import APIClient
 
+from apps.common.constants import Roles
+from apps.events.factories import EventFactory, TicketTierFactory
+from apps.events.models import Event
+from apps.users.factories import UserFactory
+from tests.helpers import paid_booking
+
 pytestmark = pytest.mark.django_db
 
 
@@ -120,3 +126,36 @@ class TestStripeWebhookView:
             HTTP_STRIPE_SIGNATURE="valid",
         )
         assert response.status_code == 200
+
+
+class TestAdminEventPartialRefundsView:
+    def _post(self, role, event, percent):
+        client = APIClient()
+        client.force_authenticate(UserFactory(role=role))
+        return client.post(
+            f"/admin/events/{event.id}/partial-refunds/",
+            {"percent": percent},
+            format="json",
+        )
+
+    def test_admin_refunds_a_share_once(self, monkeypatch):
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.Refund.create",
+            MagicMock(return_value=MagicMock(id="re_test")),
+        )
+        event = EventFactory(status=Event.Status.COMPLETED)
+        paid_booking(event, (TicketTierFactory(event=event), "40.00"))
+
+        response = self._post(Roles.ADMIN, event, 25)
+        assert response.status_code == 201
+        assert response.data == {"refunds": 1, "amount": "10.00"}
+        assert self._post(Roles.ADMIN, event, 25).status_code == 409
+
+    @pytest.mark.parametrize("percent", [0, 100, "ten"])
+    def test_percent_must_be_1_to_99(self, percent):
+        event = EventFactory(status=Event.Status.COMPLETED)
+        assert self._post(Roles.ADMIN, event, percent).status_code == 400
+
+    def test_organizer_is_forbidden(self):
+        event = EventFactory(status=Event.Status.COMPLETED)
+        assert self._post(Roles.ORGANIZER, event, 10).status_code == 403
