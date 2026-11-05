@@ -11,7 +11,6 @@ class Payment(UUIDBaseModel):
         SUCCEEDED = "succeeded", "Succeeded"
         FAILED = "failed", "Failed"
         CANCELED = "canceled", "Canceled"
-        REFUNDED = "refunded", "Refunded"
 
     booking = models.OneToOneField(
         Booking,
@@ -27,22 +26,11 @@ class Payment(UUIDBaseModel):
 
     client_secret = models.CharField(max_length=255, blank=True, default="")
 
-    amount = models.IntegerField(
-        help_text=(
-            "Smallest currency unit (cents) -- int(round(total_amount * 100)). "
-            "Never the same decimal-dollars representation as Booking.total_amount."
-        )
-    )
-
-    currency = models.CharField(max_length=3, default="usd")
-
     status = models.CharField(
         max_length=20,
         choices=Status.choices,
         default=Status.PENDING,
     )
-
-    refund_attempts = models.PositiveSmallIntegerField(default=0)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -59,3 +47,66 @@ class Payment(UUIDBaseModel):
 
     def __str__(self):
         return f"Payment for booking {self.booking_id} ({self.status})"
+
+
+class Refund(UUIDBaseModel):
+    class Reason(models.TextChoices):
+        CANCELLED_EVENT = "cancelled_event", "Event cancelled"
+        UNAVAILABLE = "unavailable", "Booking couldn't be completed"
+        POSTPONED = "postponed", "Refund requested after postponement"
+        ABANDONED_EVENT = "abandoned_event", "Event abandoned"
+        PRICE_DROP = "price_drop", "Price lowered"
+
+    FULL_REASONS = (Reason.CANCELLED_EVENT, Reason.UNAVAILABLE, Reason.POSTPONED)
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+
+    booking = models.ForeignKey(
+        Booking, on_delete=models.PROTECT, related_name="refunds"
+    )
+    reason = models.CharField(max_length=20, choices=Reason.choices)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True
+    )
+    attempts = models.PositiveSmallIntegerField(default=0)
+    stripe_refund_id = models.CharField(max_length=255, blank=True, default="")
+    key = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["booking"],
+                condition=Q(reason__in=["cancelled_event", "unavailable", "postponed"]),
+                name="uniq_full_refund_per_booking",
+            )
+        ]
+
+    def __str__(self):
+        return f"Refund {self.id} ({self.reason}, {self.status})"
+
+
+class RefundItem(UUIDBaseModel):
+    refund = models.ForeignKey(Refund, on_delete=models.PROTECT, related_name="items")
+    ticket = models.ForeignKey(
+        "tickets.Ticket", on_delete=models.PROTECT, related_name="refund_items"
+    )
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["refund", "ticket"], name="uniq_refund_item_seat"
+            ),
+            models.CheckConstraint(
+                condition=models.Q(amount__gt=0), name="refund_item_amount_positive"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.amount} for {self.ticket_id}"
