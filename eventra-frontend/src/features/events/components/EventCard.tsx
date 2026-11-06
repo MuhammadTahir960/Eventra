@@ -5,6 +5,7 @@ import { EVENT_STATUS } from '../status'
 import type { EventItem } from '../types'
 import type { EventRefs } from '../lookups'
 import { EventMedia } from './EventMedia'
+import { PostponedFrom } from './PostponedFrom'
 
 // One link per card (the title); the whole card is clickable through the
 // stretched ::after, so keyboard and screen reader users get one stop.
@@ -33,6 +34,7 @@ export function EventCard({
           >
             {formatDateTime(event.start_datetime)}
           </time>
+          <PostponedFrom event={event} />
           {event.status !== 'approved' && (
             <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
           )}

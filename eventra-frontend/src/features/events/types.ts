@@ -26,6 +26,8 @@ export interface EventItem {
   end_datetime: string
   // Set when the event is marked completed; payouts open 24h later
   completed_at: string | null
+  // The first start date, kept when the event is postponed; null otherwise
+  postponed_from: string | null
   is_active: boolean
   created_at: string
   updated_at: string

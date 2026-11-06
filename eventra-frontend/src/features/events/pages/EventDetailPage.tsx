@@ -1,14 +1,13 @@
 import { HugeiconsIcon } from '@hugeicons/react'
 import { ArrowLeft01Icon } from '@hugeicons/core-free-icons'
 import { Link, useParams } from 'react-router-dom'
-import { EmptyState } from '@/components/EmptyState'
 import { Notice } from '@/components/Notice'
 import { StatusBadge } from '@/components/StatusBadge'
 import { TicketStub } from '@/components/TicketStub'
 import { ButtonLink } from '@/components/ui/button-link'
 import { useAuth } from '@/features/auth/auth-store'
 import { useLeagues } from '@/features/catalog/hooks'
-import { ApiError } from '@/lib/api-client'
+import { ApiError, errorMessage } from '@/lib/api-client'
 import { formatDateTimeLong, formatMoney } from '@/lib/format'
 import { isUuid } from '@/lib/ids'
 import { toCents } from '@/lib/money'
@@ -18,22 +17,8 @@ import { useEventLookups } from '../lookups'
 import { BLOCKER_MESSAGE, EVENT_STATUS, bookingBlocker } from '../status'
 import type { TicketTier } from '../types'
 import { usePageTitle } from '@/lib/use-page-title'
-
-function NotFound() {
-  return (
-    <div className="gutter mx-auto max-w-[1200px] pt-16">
-      <EmptyState
-        title="Event not found"
-        body="It may have been removed, or the link is wrong."
-        action={
-          <ButtonLink variant="ink" to="/events">
-            Browse events
-          </ButtonLink>
-        }
-      />
-    </div>
-  )
-}
+import { PostponedFrom } from '../components/PostponedFrom'
+import { EventNotFound } from '../components/EventNotFound'
 
 function lowestPrice(tiers: TicketTier[]): string | null {
   if (tiers.length === 0) return null
@@ -53,7 +38,7 @@ export function EventDetailPage() {
   const leagues = useLeagues(isMatch)
 
   // Malformed ids never reach the API; the query is disabled for them
-  if (!isUuid(id)) return <NotFound />
+  if (!isUuid(id)) return <EventNotFound />
 
   if (event.isPending) {
     return (
@@ -70,14 +55,12 @@ export function EventDetailPage() {
 
   if (event.isError) {
     if (event.error instanceof ApiError && event.error.status === 404) {
-      return <NotFound />
+      return <EventNotFound />
     }
     return (
       <div className="gutter mx-auto max-w-xl pt-16">
         <Notice tone="error">
-          {event.error instanceof ApiError
-            ? event.error.message
-            : 'This event could not be loaded.'}{' '}
+          {errorMessage(event.error, 'This event could not be loaded.')}{' '}
           <button
             type="button"
             className="font-medium underline"
@@ -131,6 +114,7 @@ export function EventDetailPage() {
               >
                 {formatDateTimeLong(item.start_datetime)}
               </time>
+              <PostponedFrom event={item} />
               {item.status !== 'approved' && (
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
               )}
