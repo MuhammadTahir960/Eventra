@@ -34,3 +34,11 @@ def test_tier_price_is_editable_until_seats_exist():
         event=tier.event, ticket_tier=tier, seat=SeatFactory(venue=tier.event.venue)
     )
     assert "price" in admin.get_readonly_fields(request=None, obj=tier)
+
+
+def test_django_admin_applies_the_event_title_rule(rf, admin_user):
+    request = rf.get("/")
+    request.user = admin_user
+    form_class = EventAdmin(Event, AdminSite()).get_form(request)
+    assert "title" in form_class(data={"title": "Party <3"}).errors
+    assert "title" not in form_class(data={"title": "R&B Night: Vol. 2"}).errors
