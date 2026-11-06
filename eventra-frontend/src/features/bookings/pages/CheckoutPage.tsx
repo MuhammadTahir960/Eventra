@@ -14,7 +14,7 @@ import { SwapLabel } from '@/components/SwapLabel'
 import { TicketStub } from '@/components/TicketStub'
 import { Button } from '@/components/ui/button'
 import { ButtonLink } from '@/components/ui/button-link'
-import { ApiError } from '@/lib/api-client'
+import { ApiError, errorMessage } from '@/lib/api-client'
 import { formatMoney } from '@/lib/format'
 import { isUuid } from '@/lib/ids'
 import { ReceiptPrinter, type PrinterStage } from '../components/ReceiptPrinter'
@@ -31,6 +31,8 @@ import {
   useTimeLeft,
 } from '../hooks'
 import { usePageTitle } from '@/lib/use-page-title'
+import { LoadingBlock } from '@/components/LoadingBlock'
+import { TotalRow } from '@/components/TotalRow'
 
 const clockFormat = new Intl.DateTimeFormat(undefined, {
   hour: 'numeric',
@@ -56,7 +58,8 @@ const APPEARANCE: Appearance = {
     '.Input': { borderColor: '#cfcbc0', boxShadow: 'none' },
     '.Input:focus': {
       borderColor: '#c9431f',
-      boxShadow: '0 0 0 3px rgb(201 67 31 / 0.15)',
+      // Stripe's appearance API rejects the `rgb(r g b / a)` form
+      boxShadow: '0 0 0 3px rgba(201, 67, 31, 0.15)',
     },
     '.Label': { fontWeight: '500', color: '#141413' },
   },
@@ -127,7 +130,10 @@ function PaymentForm({
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-5">
-      <PaymentElement options={{ layout: 'tabs' }} />
+      {/* Link would add bank and Klarna tabs on top of the card-only intent */}
+      <PaymentElement
+        options={{ layout: 'tabs', wallets: { link: 'never' } }}
+      />
       {error && <Notice tone="error">{error}</Notice>}
       <Button
         type="submit"
@@ -154,14 +160,7 @@ function OrderSummary({
     <TicketStub
       as="section"
       aria-label="Order summary"
-      stub={
-        <div className="flex items-baseline justify-between">
-          <span className="font-medium">Total</span>
-          <span className="tabular text-xl font-semibold">
-            {formatMoney(total)}
-          </span>
-        </div>
-      }
+      stub={<TotalRow total={total} />}
     >
       <h2 className="text-lg font-semibold tracking-tight">Order summary</h2>
       {context ? (
@@ -385,16 +384,13 @@ export function CheckoutPage() {
               )}
               <TestCardHint />
               {checkout.isPending ? (
-                <div
-                  aria-busy="true"
-                  aria-label="Loading payment form"
-                  className="h-64 animate-pulse rounded-lg bg-muted"
-                />
+                <LoadingBlock label="Loading payment form" className="h-64" />
               ) : checkout.isError ? (
                 <Notice tone="error">
-                  {checkout.error instanceof ApiError
-                    ? checkout.error.message
-                    : 'The payment form could not be loaded.'}{' '}
+                  {errorMessage(
+                    checkout.error,
+                    'The payment form could not be loaded.',
+                  )}{' '}
                   <button
                     type="button"
                     className="font-medium underline"

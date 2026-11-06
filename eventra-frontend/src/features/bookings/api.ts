@@ -5,10 +5,6 @@ import type { Booking, EventSeat } from '@/features/seating/types'
 export interface CheckoutResponse {
   client_secret: string
   publishable_key: string
-  // Whole cents (Stripe's unit), not dollars: display the booking's
-  // total_amount instead
-  amount: number
-  currency: string
   status: string
 }
 

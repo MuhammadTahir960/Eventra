@@ -27,7 +27,7 @@ export interface HoldResponse {
 // caller keeps those itself (they are passed along to checkout).
 export interface Booking {
   id: string
-  status: 'pending' | 'confirmed' | 'cancelled' | 'refunded' | 'refund_failed'
+  status: 'pending' | 'confirmed' | 'cancelled' | 'refunded'
   total_amount: string
   source_hold_group_id: string
   created_at: string
