@@ -2,16 +2,19 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { EmptyState } from '@/components/EmptyState'
+import { FormField } from '@/components/FormField'
 import { Notice } from '@/components/Notice'
 import { PageHeader } from '@/components/PageHeader'
 import { StatusBadge } from '@/components/StatusBadge'
 import { Button } from '@/components/ui/button'
-import { ApiError, apiFetch } from '@/lib/api-client'
+import { Input } from '@/components/ui/input'
+import { apiFetch, errorMessage, firstFieldErrors } from '@/lib/api-client'
 import { formatDateTime, formatMoney } from '@/lib/format'
 import {
   PAYOUT_STATUS,
   useAwaitingPayouts,
   usePayOut,
+  useRefundPart,
   usePayouts,
   type AwaitingPayout,
   type Payout,
@@ -19,6 +22,8 @@ import {
 import { usePageTitle } from '@/lib/use-page-title'
 import { CancelEventButton } from './OrganizerEventsPage'
 import { toast } from 'sonner'
+import { TableFrame } from '@/components/TableFrame'
+import { LoadingBlock } from '@/components/LoadingBlock'
 
 function RetryButton({ payout }: { payout: Payout }) {
   const client = useQueryClient()
@@ -57,9 +62,7 @@ function RetryButton({ payout }: { payout: Payout }) {
     >
       {settle.isError && (
         <Notice tone="error">
-          {settle.error instanceof ApiError
-            ? settle.error.message
-            : 'The payout could not be retried.'}
+          {errorMessage(settle.error, 'The payout could not be retried.')}
         </Notice>
       )}
     </ConfirmDialog>
@@ -99,9 +102,85 @@ function PayOutButton({ row }: { row: AwaitingPayout }) {
     >
       {payOut.isError && (
         <Notice tone="error">
-          {payOut.error instanceof ApiError
-            ? payOut.error.message
-            : 'The payout could not be made.'}
+          {errorMessage(payOut.error, 'The payout could not be made.')}
+        </Notice>
+      )}
+    </ConfirmDialog>
+  )
+}
+
+// An event cut short: every buyer gets the same share back, once, before payout
+function RefundPartButton({ row }: { row: AwaitingPayout }) {
+  const [open, setOpen] = useState(false)
+  const [percent, setPercent] = useState('')
+  const [touched, setTouched] = useState(false)
+  const refund = useRefundPart()
+  const value = Number(percent)
+  const valid = Number.isInteger(value) && value >= 1 && value <= 99
+  const serverError = firstFieldErrors(refund.error).percent
+
+  return (
+    <ConfirmDialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        setPercent('')
+        setTouched(false)
+        if (!next) refund.reset()
+      }}
+      trigger={
+        <Button variant="outline" size="sm">
+          Refund part
+        </Button>
+      }
+      title="Refund part of every ticket?"
+      description={`Each buyer of "${row.event_title}" gets this share of what they paid back on their card. The payout shrinks to match. This can be done once.`}
+      confirmLabel="Refund buyers"
+      destructive
+      pending={refund.isPending}
+      onConfirm={() => {
+        setTouched(true)
+        if (!valid) return
+        refund.mutate(
+          { eventId: row.event_id, percent: value },
+          {
+            onSuccess: (result) => {
+              setOpen(false)
+              const buyers =
+                result.refunds === 1
+                  ? '1 buyer is'
+                  : `${result.refunds} buyers are`
+              toast.success(`Refunding ${formatMoney(result.amount)}`, {
+                description: `${buyers} being refunded and emailed.`,
+              })
+            },
+          },
+        )
+      }}
+    >
+      <FormField
+        id={`refund-part-${row.event_id}`}
+        label="Percent to refund"
+        error={
+          touched && !valid ? 'Enter a whole number from 1 to 99.' : serverError
+        }
+      >
+        {(control) => (
+          <Input
+            {...control}
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={99}
+            step={1}
+            value={percent}
+            onChange={(e) => setPercent(e.target.value)}
+          />
+        )}
+      </FormField>
+      {refund.isError && !serverError && (
+        <Notice tone="error" className="mt-3">
+          {errorMessage(refund.error, 'The refund could not be started.')}
         </Notice>
       )}
     </ConfirmDialog>
@@ -123,60 +202,59 @@ function AwaitingPayouts({ scope }: { scope: 'organizer' | 'admin' }) {
       <h2 className="font-display text-2xl">
         {scope === 'admin' ? 'Ready to pay out' : 'Upcoming'}
       </h2>
-      <div className="relative overflow-x-auto rounded-lg border border-border bg-card">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th scope="col">Event</th>
-              <th scope="col" className="num">
-                Net
-              </th>
-              <th scope="col" className="text-right">
-                Payout
-              </th>
+      <TableFrame>
+        <thead>
+          <tr>
+            <th scope="col">Event</th>
+            <th scope="col" className="num">
+              Net
+            </th>
+            <th scope="col" className="text-right">
+              Payout
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.event_id}>
+              <td className="min-w-56">
+                <span className="font-medium">{row.event_title}</span>
+                <span className="tabular block text-[13px] text-muted-foreground">
+                  {scope === 'admin' && `${row.organizer_name} · `}
+                  Ended {formatDateTime(row.completed_at)}
+                </span>
+              </td>
+              <td className="num font-semibold">
+                {formatMoney(row.net_amount)}
+              </td>
+              <td>
+                <div className="flex items-center justify-end gap-2">
+                  {scope === 'admin' && row.eligible ? (
+                    <PayOutButton row={row} />
+                  ) : (
+                    <span className="tabular text-[13px] text-muted-foreground">
+                      {scope === 'admin' || !row.eligible
+                        ? `Available from ${formatDateTime(row.payout_available_at)}`
+                        : 'Waiting for an admin'}
+                    </span>
+                  )}
+                  {/* Pay the organizer or refund the buyers: one decision, one place */}
+                  {scope === 'admin' && <RefundPartButton row={row} />}
+                  {scope === 'admin' && (
+                    <CancelEventButton
+                      event={{
+                        id: row.event_id,
+                        title: row.event_title,
+                        status: 'completed',
+                      }}
+                    />
+                  )}
+                </div>
+              </td>
             </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.event_id}>
-                <td className="min-w-56">
-                  <span className="font-medium">{row.event_title}</span>
-                  <span className="tabular block text-[13px] text-muted-foreground">
-                    {scope === 'admin' && `${row.organizer_name} · `}
-                    Ended {formatDateTime(row.completed_at)}
-                  </span>
-                </td>
-                <td className="num font-semibold">
-                  {formatMoney(row.net_amount)}
-                </td>
-                <td>
-                  <div className="flex items-center justify-end gap-2">
-                    {scope === 'admin' && row.eligible ? (
-                      <PayOutButton row={row} />
-                    ) : (
-                      <span className="tabular text-[13px] text-muted-foreground">
-                        {scope === 'admin' || !row.eligible
-                          ? `Available from ${formatDateTime(row.payout_available_at)}`
-                          : 'Waiting for an admin'}
-                      </span>
-                    )}
-                    {/* Pay the organizer or refund the buyers: one decision, one place */}
-                    {scope === 'admin' && (
-                      <CancelEventButton
-                        event={{
-                          id: row.event_id,
-                          title: row.event_title,
-                          status: 'completed',
-                        }}
-                      />
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+          ))}
+        </tbody>
+      </TableFrame>
     </section>
   )
 }
@@ -205,79 +283,71 @@ export function PayoutsPage({ scope }: { scope: 'organizer' | 'admin' }) {
       {payouts.isError ? (
         <Notice tone="error">{payouts.error.message}</Notice>
       ) : payouts.isPending ? (
-        <div
-          aria-busy="true"
-          aria-label="Loading payouts"
-          className="h-64 animate-pulse rounded-lg bg-muted"
-        />
+        <LoadingBlock label="Loading payouts" className="h-64" />
       ) : list.length === 0 ? (
         <EmptyState
           title="No payouts yet"
           body="A payout appears here once an event with ticket sales has finished."
         />
       ) : (
-        <div className="relative overflow-x-auto rounded-lg border border-border bg-card">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th scope="col">Event</th>
-                <th scope="col" className="num">
-                  Gross
+        <TableFrame>
+          <thead>
+            <tr>
+              <th scope="col">Event</th>
+              <th scope="col" className="num">
+                Gross
+              </th>
+              <th scope="col" className="num">
+                Fee
+              </th>
+              <th scope="col" className="num">
+                Net
+              </th>
+              <th scope="col">Status</th>
+              {scope === 'admin' && (
+                <th scope="col">
+                  <span className="sr-only">Actions</span>
                 </th>
-                <th scope="col" className="num">
-                  Fee
-                </th>
-                <th scope="col" className="num">
-                  Net
-                </th>
-                <th scope="col">Status</th>
-                {scope === 'admin' && (
-                  <th scope="col">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {list.map((payout) => {
-                const status = PAYOUT_STATUS[payout.status]
-                return (
-                  <tr key={payout.id}>
-                    <td className="min-w-56">
-                      <span className="font-medium">{payout.event_title}</span>
-                      <span className="tabular block text-[13px] text-muted-foreground">
-                        {payout.settled_at
-                          ? `Settled ${formatDateTime(payout.settled_at)}`
-                          : `Created ${formatDateTime(payout.created_at)}`}
-                      </span>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((payout) => {
+              const status = PAYOUT_STATUS[payout.status]
+              return (
+                <tr key={payout.id}>
+                  <td className="min-w-56">
+                    <span className="font-medium">{payout.event_title}</span>
+                    <span className="tabular block text-[13px] text-muted-foreground">
+                      {payout.settled_at
+                        ? `Settled ${formatDateTime(payout.settled_at)}`
+                        : `Created ${formatDateTime(payout.created_at)}`}
+                    </span>
+                  </td>
+                  <td className="num">{formatMoney(payout.gross_revenue)}</td>
+                  <td className="num text-muted-foreground">
+                    {formatMoney(payout.platform_fee)}
+                  </td>
+                  <td className="num font-semibold">
+                    {formatMoney(payout.net_amount)}
+                  </td>
+                  <td>
+                    <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                  </td>
+                  {scope === 'admin' && (
+                    <td className="text-right">
+                      {/* Payouts start settling when created; only a failed one needs a hand */}
+                      {(payout.status === 'pending' ||
+                        payout.status === 'failed') && (
+                        <RetryButton payout={payout} />
+                      )}
                     </td>
-                    <td className="num">{formatMoney(payout.gross_revenue)}</td>
-                    <td className="num text-muted-foreground">
-                      {formatMoney(payout.platform_fee)}
-                    </td>
-                    <td className="num font-semibold">
-                      {formatMoney(payout.net_amount)}
-                    </td>
-                    <td>
-                      <StatusBadge tone={status.tone}>
-                        {status.label}
-                      </StatusBadge>
-                    </td>
-                    {scope === 'admin' && (
-                      <td className="text-right">
-                        {/* Payouts start settling when created; only a failed one needs a hand */}
-                        {(payout.status === 'pending' ||
-                          payout.status === 'failed') && (
-                          <RetryButton payout={payout} />
-                        )}
-                      </td>
-                    )}
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+                  )}
+                </tr>
+              )
+            })}
+          </tbody>
+        </TableFrame>
       )}
     </div>
   )

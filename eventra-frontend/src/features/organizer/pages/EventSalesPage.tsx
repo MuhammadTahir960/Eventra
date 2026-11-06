@@ -3,11 +3,13 @@ import { Notice } from '@/components/Notice'
 import { PageHeader } from '@/components/PageHeader'
 import { StatusBadge } from '@/components/StatusBadge'
 import { useEvent } from '@/features/events/hooks'
-import { ApiError } from '@/lib/api-client'
+import { errorMessage } from '@/lib/api-client'
 import { formatMoney } from '@/lib/format'
 import { toCents } from '@/lib/money'
 import { useEventSales } from '../api'
 import { usePageTitle } from '@/lib/use-page-title'
+import { TableFrame } from '@/components/TableFrame'
+import { LoadingBlock } from '@/components/LoadingBlock'
 
 // Same maths as the backend (PLATFORM_FEE_PERCENTAGE in payouts/services.py):
 // a 10% fee rounded half-up to the cent, worked out in whole cents
@@ -37,9 +39,7 @@ export function EventSalesPage() {
   if (sales.isError) {
     return (
       <Notice tone="error">
-        {sales.error instanceof ApiError
-          ? sales.error.message
-          : 'Sales could not be loaded.'}
+        {errorMessage(sales.error, 'Sales could not be loaded.')}
       </Notice>
     )
   }
@@ -66,11 +66,7 @@ export function EventSalesPage() {
       />
 
       {sales.isPending ? (
-        <div
-          aria-busy="true"
-          aria-label="Loading sales"
-          className="h-64 animate-pulse rounded-lg bg-muted"
-        />
+        <LoadingBlock label="Loading sales" className="h-64" />
       ) : (
         <>
           <div className="grid gap-4 sm:grid-cols-3">
@@ -95,36 +91,41 @@ export function EventSalesPage() {
           {data!.tickets.length === 0 ? (
             <Notice>No tickets sold yet.</Notice>
           ) : (
-            <div className="relative overflow-x-auto rounded-lg border border-border bg-card">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th scope="col">Ticket</th>
-                    <th scope="col">Status</th>
-                    <th scope="col" className="num">
-                      Amount
-                    </th>
+            <TableFrame>
+              <thead>
+                <tr>
+                  <th scope="col">Ticket</th>
+                  <th scope="col">Status</th>
+                  <th scope="col" className="num">
+                    Amount
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {data!.tickets.map((ticket) => (
+                  <tr key={ticket.ticket_id}>
+                    <td className="tabular">{ticket.ticket_code}</td>
+                    <td>
+                      <StatusBadge
+                        tone={
+                          ticket.status === 'confirmed' ? 'success' : 'info'
+                        }
+                      >
+                        {ticket.status === 'confirmed' ? 'Sold' : 'Refunded'}
+                      </StatusBadge>
+                    </td>
+                    <td className="num">
+                      {formatMoney(ticket.amount)}
+                      {toCents(ticket.refunded) > 0 && (
+                        <span className="block text-[12.5px] text-muted-foreground">
+                          {formatMoney(ticket.refunded)} refunded
+                        </span>
+                      )}
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {data!.tickets.map((ticket) => (
-                    <tr key={ticket.ticket_id}>
-                      <td className="tabular">{ticket.ticket_code}</td>
-                      <td>
-                        <StatusBadge
-                          tone={
-                            ticket.status === 'confirmed' ? 'success' : 'info'
-                          }
-                        >
-                          {ticket.status === 'confirmed' ? 'Sold' : 'Refunded'}
-                        </StatusBadge>
-                      </td>
-                      <td className="num">{formatMoney(ticket.amount)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </TableFrame>
           )}
         </>
       )}

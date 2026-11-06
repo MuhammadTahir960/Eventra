@@ -1,5 +1,4 @@
-import { type FormEvent } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { EmptyState } from '@/components/EmptyState'
 import { Notice } from '@/components/Notice'
 import { PageHeader } from '@/components/PageHeader'
@@ -7,23 +6,25 @@ import { Pagination } from '@/components/Pagination'
 import { StatusBadge } from '@/components/StatusBadge'
 import { Button } from '@/components/ui/button'
 import { ButtonLink } from '@/components/ui/button-link'
-import { Input } from '@/components/ui/input'
-import { NativeSelect } from '@/components/ui/native-select'
 import { useEventLookups } from '@/features/events/lookups'
 import { EVENT_STATUS } from '@/features/events/status'
 import type { EventItem, EventStatus } from '@/features/events/types'
 import {
   CancelEventButton,
+  PostponeButton,
   RunningLateButton,
 } from '@/features/organizer/pages/OrganizerEventsPage'
-import { canRunLate } from '@/features/organizer/running-late'
-import { ApiError } from '@/lib/api-client'
-import { formatDateTime } from '@/lib/format'
+import { canPostpone, canRunLate } from '@/features/organizer/running-late'
+import { errorMessage } from '@/lib/api-client'
 import { pageParam } from '@/lib/ids'
-import { cn } from '@/lib/utils'
 import { useAdminEvents, useRetryRefunds, type AdminEventFilters } from '../api'
-import { usePageTitle } from '@/lib/use-page-title'
 import { toast } from 'sonner'
+import { EventTitleCell } from '@/features/events/components/EventTitleCell'
+import { TableFrame } from '@/components/TableFrame'
+import { LoadingBlock } from '@/components/LoadingBlock'
+import { SearchForm } from '@/components/SearchForm'
+import { NativeSelect } from '@/components/ui/native-select'
+import { usePageTitle } from '@/lib/use-page-title'
 
 function RetryRefundsButton({ event }: { event: EventItem }) {
   const retry = useRetryRefunds()
@@ -43,9 +44,7 @@ function RetryRefundsButton({ event }: { event: EventItem }) {
       </Button>
       {retry.isError && (
         <span className="text-[13px] text-danger">
-          {retry.error instanceof ApiError
-            ? retry.error.message
-            : 'Could not queue refunds.'}
+          {errorMessage(retry.error, 'Could not queue refunds.')}
         </span>
       )}
     </span>
@@ -74,16 +73,6 @@ export function AdminEventsPage() {
   const list = events.data?.results ?? []
   const { resolve } = useEventLookups(list)
 
-  function onSearch(submit: FormEvent<HTMLFormElement>) {
-    submit.preventDefault()
-    const value = new FormData(submit.currentTarget).get('q')
-    setFilters({
-      ...filters,
-      search: typeof value === 'string' ? value : '',
-      page: 1,
-    })
-  }
-
   return (
     <div className="flex flex-col gap-8">
       <PageHeader
@@ -98,28 +87,13 @@ export function AdminEventsPage() {
       />
 
       <div className="flex flex-col gap-3 sm:flex-row">
-        {/* key remounts the box when the URL search changes (back button) */}
-        <form
-          key={filters.search}
-          role="search"
-          onSubmit={onSearch}
-          className="flex flex-1 gap-2"
-        >
-          <label htmlFor="admin-event-search" className="sr-only">
-            Search events
-          </label>
-          <Input
-            id="admin-event-search"
-            name="q"
-            type="search"
-            maxLength={100}
-            placeholder="Search title or description…"
-            defaultValue={filters.search}
-          />
-          <Button type="submit" variant="outline">
-            Search
-          </Button>
-        </form>
+        <SearchForm
+          id="admin-event-search"
+          label="Search events"
+          placeholder="Search title or description…"
+          value={filters.search}
+          onSearch={(search) => setFilters({ ...filters, search, page: 1 })}
+        />
         <label htmlFor="admin-event-status" className="sr-only">
           Status
         </label>
@@ -147,11 +121,7 @@ export function AdminEventsPage() {
       {events.isError ? (
         <Notice tone="error">{events.error.message}</Notice>
       ) : events.isPending ? (
-        <div
-          aria-busy="true"
-          aria-label="Loading events"
-          className="h-64 animate-pulse rounded-lg bg-muted"
-        />
+        <LoadingBlock label="Loading events" className="h-64" />
       ) : list.length === 0 ? (
         <EmptyState
           title="No events match"
@@ -159,74 +129,58 @@ export function AdminEventsPage() {
         />
       ) : (
         <>
-          <div
-            className={cn(
-              'relative overflow-x-auto rounded-lg border border-border bg-card',
-              events.isPlaceholderData && 'opacity-60',
-            )}
-          >
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th scope="col">Event</th>
-                  <th scope="col">Venue</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.map((event) => {
-                  const status = EVENT_STATUS[event.status]
-                  const { venue } = resolve(event)
-                  return (
-                    <tr key={event.id}>
-                      <td className="min-w-64">
-                        <Link
-                          to={`/events/${event.id}`}
-                          className="font-medium underline-offset-4 hover:underline"
-                        >
-                          {event.title}
-                        </Link>
-                        <span className="tabular block text-[13px] text-muted-foreground">
-                          {formatDateTime(event.start_datetime)}
-                        </span>
-                      </td>
-                      <td className="text-muted-foreground">
-                        {venue ? `${venue.name}, ${venue.city}` : ''}
-                      </td>
-                      <td>
-                        <span className="flex flex-wrap gap-1.5">
-                          <StatusBadge tone={status.tone}>
-                            {status.label}
-                          </StatusBadge>
-                          {!event.is_active && (
-                            <StatusBadge tone="neutral">Removed</StatusBadge>
+          <TableFrame dimmed={events.isPlaceholderData}>
+            <thead>
+              <tr>
+                <th scope="col">Event</th>
+                <th scope="col">Venue</th>
+                <th scope="col">Status</th>
+                <th scope="col">
+                  <span className="sr-only">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((event) => {
+                const status = EVENT_STATUS[event.status]
+                const { venue } = resolve(event)
+                return (
+                  <tr key={event.id}>
+                    <EventTitleCell event={event} />
+                    <td className="text-muted-foreground">
+                      {venue ? `${venue.name}, ${venue.city}` : ''}
+                    </td>
+                    <td>
+                      <span className="flex flex-wrap gap-1.5">
+                        <StatusBadge tone={status.tone}>
+                          {status.label}
+                        </StatusBadge>
+                        {!event.is_active && (
+                          <StatusBadge tone="neutral">Removed</StatusBadge>
+                        )}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="flex justify-end gap-2">
+                        {event.status === 'cancelled' && (
+                          <RetryRefundsButton event={event} />
+                        )}
+                        {canPostpone(event) && <PostponeButton event={event} />}
+                        {canRunLate(event) && (
+                          <RunningLateButton event={event} />
+                        )}
+                        {/* Completed events are voided from the payouts page */}
+                        {event.status !== 'cancelled' &&
+                          event.status !== 'completed' && (
+                            <CancelEventButton event={event} />
                           )}
-                        </span>
-                      </td>
-                      <td>
-                        <div className="flex justify-end gap-2">
-                          {event.status === 'cancelled' && (
-                            <RetryRefundsButton event={event} />
-                          )}
-                          {canRunLate(event) && (
-                            <RunningLateButton event={event} />
-                          )}
-                          {/* Completed events are voided from the payouts page */}
-                          {event.status !== 'cancelled' &&
-                            event.status !== 'completed' && (
-                              <CancelEventButton event={event} />
-                            )}
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </TableFrame>
           <Pagination
             page={filters.page}
             count={events.data.count}
