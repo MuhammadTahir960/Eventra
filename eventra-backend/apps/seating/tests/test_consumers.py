@@ -15,12 +15,12 @@ from apps.users.factories import UserFactory
 from apps.users.services import issue_ws_ticket
 from apps.venues.factories import SeatFactory, VenueFactory
 
-from ..consumers import (
+from ..constants import (
     CLOSE_INVALID_TICKET,
     CLOSE_RATE_LIMITED,
     CLOSE_UNEXPECTED_MESSAGE,
-    SeatConsumer,
 )
+from ..consumers import SeatConsumer
 from ..models import EventSeat
 from ..routing import websocket_urlpatterns
 from ..services import hold_seats, instantiate_event_seats
@@ -37,6 +37,14 @@ async def _connect(event_slug, ticket):
     return communicator, connected, close_code_or_subprotocol
 
 
+async def _close_code(event_slug, ticket):
+    communicator, connected, _ = await _connect(event_slug, ticket)
+    assert connected
+    frame = await communicator.receive_output()
+    assert frame["type"] == "websocket.close"
+    return frame["code"]
+
+
 async def test_valid_ticket_is_accepted_and_sends_initial_state():
     user = await database_sync_to_async(UserFactory)()
     event = await database_sync_to_async(EventFactory)()
@@ -51,15 +59,10 @@ async def test_valid_ticket_is_accepted_and_sends_initial_state():
     await communicator.disconnect()
 
 
-async def test_invalid_ticket_is_rejected_before_accept():
+async def test_invalid_ticket_is_rejected():
     event = await database_sync_to_async(EventFactory)()
 
-    communicator, connected, close_code = await _connect(
-        event.slug, "not-a-real-ticket"
-    )
-
-    assert not connected
-    assert close_code == 4401
+    assert await _close_code(event.slug, "not-a-real-ticket") == 4401
 
 
 async def test_ticket_cannot_be_reused_for_a_second_connection():
@@ -71,11 +74,7 @@ async def test_ticket_cannot_be_reused_for_a_second_connection():
     assert first_connected
     await first_communicator.disconnect()
 
-    second_communicator, second_connected, close_code = await _connect(
-        event.slug, ticket
-    )
-    assert not second_connected
-    assert close_code == 4401
+    assert await _close_code(event.slug, ticket) == 4401
 
 
 async def test_event_not_visible_to_user_is_rejected():
@@ -85,20 +84,14 @@ async def test_event_not_visible_to_user_is_rejected():
     )
     ticket, _ = await database_sync_to_async(issue_ws_ticket)(user)
 
-    communicator, connected, close_code = await _connect(hidden_event.slug, ticket)
-
-    assert not connected
-    assert close_code == 4404
+    assert await _close_code(hidden_event.slug, ticket) == 4404
 
 
 async def test_nonexistent_event_slug_is_rejected():
     user = await database_sync_to_async(UserFactory)()
     ticket, _ = await database_sync_to_async(issue_ws_ticket)(user)
 
-    communicator, connected, close_code = await _connect("no-such-event-slug", ticket)
-
-    assert not connected
-    assert close_code == 4404
+    assert await _close_code("no-such-event-slug", ticket) == 4404
 
 
 async def test_deactivated_user_is_rejected_even_with_a_valid_unused_ticket():
@@ -106,10 +99,7 @@ async def test_deactivated_user_is_rejected_even_with_a_valid_unused_ticket():
     event = await database_sync_to_async(EventFactory)()
     ticket, _ = await database_sync_to_async(issue_ws_ticket)(user)
 
-    communicator, connected, close_code = await _connect(event.slug, ticket)
-
-    assert not connected
-    assert close_code == CLOSE_INVALID_TICKET
+    assert await _close_code(event.slug, ticket) == CLOSE_INVALID_TICKET
 
 
 async def test_deleted_user_is_rejected_even_with_a_valid_unused_ticket():
@@ -122,10 +112,7 @@ async def test_deleted_user_is_rejected_even_with_a_valid_unused_ticket():
     ticket = await database_sync_to_async(_issue_then_delete)()
     event = await database_sync_to_async(EventFactory)()
 
-    communicator, connected, close_code = await _connect(event.slug, ticket)
-
-    assert not connected
-    assert close_code == CLOSE_INVALID_TICKET
+    assert await _close_code(event.slug, ticket) == CLOSE_INVALID_TICKET
 
 
 async def test_organizer_can_connect_to_own_pending_event():
@@ -148,12 +135,7 @@ async def test_attendee_cannot_connect_to_someone_elses_pending_event():
     )
     ticket, _ = await database_sync_to_async(issue_ws_ticket)(attendee)
 
-    communicator, connected, close_code = await _connect(
-        someone_elses_pending_event.slug, ticket
-    )
-
-    assert not connected
-    assert close_code == 4404
+    assert await _close_code(someone_elses_pending_event.slug, ticket) == 4404
 
 
 async def test_client_sent_message_closes_connection():
@@ -191,8 +173,8 @@ async def test_binary_frame_closes_connection_instead_of_crashing():
 async def test_disconnect_after_rejected_connect_does_not_raise():
     event = await database_sync_to_async(EventFactory)()
 
-    communicator, connected, _ = await _connect(event.slug, "garbage-ticket")
-    assert not connected
+    communicator, _, _ = await _connect(event.slug, "garbage-ticket")
+    assert (await communicator.receive_output())["type"] == "websocket.close"
 
     await communicator.disconnect()
 
@@ -282,40 +264,30 @@ async def test_hold_seats_broadcasts_to_connected_clients():
     await communicator.disconnect()
 
 
-def test_get_client_ip_prefers_x_real_ip_because_nginx_overwrites_it():
+@pytest.mark.parametrize(
+    "headers, client, expected",
+    [
+        (
+            [
+                (b"x-forwarded-for", b"6.6.6.6, 203.0.113.5"),
+                (b"x-real-ip", b"203.0.113.5"),
+            ],
+            ("10.0.0.1", 12345),
+            "203.0.113.5",
+        ),
+        (
+            [(b"x-forwarded-for", b"6.6.6.6, 203.0.113.5")],
+            ("10.0.0.1", 12345),
+            "203.0.113.5",
+        ),
+        ([(b"x-real-ip", b"203.0.113.9")], ("10.0.0.1", 12345), "203.0.113.9"),
+        ([], ("127.0.0.1", 54321), "127.0.0.1"),
+    ],
+)
+def test_get_client_ip_trusts_the_proxy_not_the_client(headers, client, expected):
     consumer = SeatConsumer()
-    consumer.scope = {
-        "headers": [
-            (b"x-forwarded-for", b"6.6.6.6, 203.0.113.5"),
-            (b"x-real-ip", b"203.0.113.5"),
-        ],
-        "client": ("10.0.0.1", 12345),
-    }
-    assert consumer._get_client_ip() == "203.0.113.5"
-
-
-def test_get_client_ip_ignores_a_client_forged_leftmost_forwarded_for_entry():
-    consumer = SeatConsumer()
-    consumer.scope = {
-        "headers": [(b"x-forwarded-for", b"6.6.6.6, 203.0.113.5")],
-        "client": ("10.0.0.1", 12345),
-    }
-    assert consumer._get_client_ip() == "203.0.113.5"
-
-
-def test_get_client_ip_falls_back_to_x_real_ip_when_forwarded_for_is_absent():
-    consumer = SeatConsumer()
-    consumer.scope = {
-        "headers": [(b"x-real-ip", b"203.0.113.9")],
-        "client": ("10.0.0.1", 12345),
-    }
-    assert consumer._get_client_ip() == "203.0.113.9"
-
-
-def test_get_client_ip_falls_back_to_raw_asgi_client_when_no_proxy_headers():
-    consumer = SeatConsumer()
-    consumer.scope = {"headers": [], "client": ("127.0.0.1", 54321)}
-    assert consumer._get_client_ip() == "127.0.0.1"
+    consumer.scope = {"headers": headers, "client": client}
+    assert consumer._get_client_ip() == expected
 
 
 def test_get_client_ip_returns_unknown_when_nothing_is_available():
@@ -329,13 +301,9 @@ async def test_ip_rate_limit_rejects_connection_attempts_over_the_cap():
     event = await database_sync_to_async(EventFactory)()
 
     for _ in range(2):
-        _, connected, close_code = await _connect(event.slug, "garbage-ticket")
-        assert not connected
-        assert close_code == 4401
+        assert await _close_code(event.slug, "garbage-ticket") == 4401
 
-    _, connected, close_code = await _connect(event.slug, "garbage-ticket")
-    assert not connected
-    assert close_code == CLOSE_RATE_LIMITED
+    assert await _close_code(event.slug, "garbage-ticket") == CLOSE_RATE_LIMITED
 
 
 @override_settings(WS_CONNECT_RATE_LIMIT_PER_USER=2, WS_CONNECT_RATE_LIMIT_PER_IP=100)
@@ -350,9 +318,7 @@ async def test_user_rate_limit_rejects_connection_attempts_over_the_cap():
         await communicator.disconnect()
 
     ticket, _ = await database_sync_to_async(issue_ws_ticket)(user)
-    _, connected, close_code = await _connect(event.slug, ticket)
-    assert not connected
-    assert close_code == CLOSE_RATE_LIMITED
+    assert await _close_code(event.slug, ticket) == CLOSE_RATE_LIMITED
 
 
 @override_settings(WS_CONNECT_RATE_LIMIT_PER_IP=100, WS_CONNECT_RATE_LIMIT_PER_USER=100)
