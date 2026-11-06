@@ -10,7 +10,7 @@ import { TicketStub } from '@/components/TicketStub'
 import { Button } from '@/components/ui/button'
 import { ButtonLink } from '@/components/ui/button-link'
 import { useEventLookups } from '@/features/events/lookups'
-import { ApiError } from '@/lib/api-client'
+import { ApiError, errorMessage } from '@/lib/api-client'
 import { formatDateTimeLong } from '@/lib/format'
 import { isUuid } from '@/lib/ids'
 import { cn } from '@/lib/utils'
@@ -83,11 +83,7 @@ export function TicketPage() {
     try {
       await downloadTicketPdf(item)
     } catch (caught) {
-      setError(
-        caught instanceof ApiError
-          ? caught.message
-          : 'The PDF could not be downloaded.',
-      )
+      setError(errorMessage(caught, 'The PDF could not be downloaded.'))
     } finally {
       setDownloading(false)
     }
@@ -148,11 +144,19 @@ export function TicketPage() {
         {/* Section names run to 50 characters, so it spans the full width */}
         <dl className="mt-6 grid grid-cols-2 gap-4 border-t border-border pt-5">
           {[
+            ...(item.attendee_name ? [['Name', item.attendee_name]] : []),
             ['Section', item.section],
             ['Row', item.row_label],
             ['Seat', String(item.seat_number)],
-          ].map(([label, value], index) => (
-            <div key={label} className={index === 0 ? 'col-span-2' : undefined}>
+          ].map(([label, value]) => (
+            <div
+              key={label}
+              className={
+                label === 'Name' || label === 'Section'
+                  ? 'col-span-2'
+                  : undefined
+              }
+            >
               <dt className="text-[13px] text-muted-foreground">{label}</dt>
               <dd className="tabular mt-0.5 text-xl font-semibold">{value}</dd>
             </div>

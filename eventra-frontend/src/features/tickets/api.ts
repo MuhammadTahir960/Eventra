@@ -1,8 +1,14 @@
-import { useQueries, useQuery } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { apiDownload, apiFetch } from '@/lib/api-client'
 import { isUuid } from '@/lib/ids'
 import type { Page } from '@/lib/pagination'
 import type { EventItem } from '@/features/events/types'
+import { DAY_MS } from '@/lib/constants'
 
 export type TicketStatus = 'valid' | 'used' | 'cancelled'
 
@@ -40,6 +46,19 @@ export function useMyTickets() {
   })
 }
 
+// A postponed event's buyer takes a full refund instead of the new date.
+// The whole booking is refunded and its seats go back on sale.
+export function useRefundBooking() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (bookingId: string) =>
+      apiFetch(`/bookings/${bookingId}/refunds/`, { method: 'POST' }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['tickets'] })
+    },
+  })
+}
+
 export function useTicket(id: string | undefined) {
   return useQuery({
     queryKey: ['tickets', 'detail', id],
@@ -66,6 +85,19 @@ export function useEventsById(ids: string[]) {
     if (result.data) byId.set(result.data.id, result.data)
   }
   return { byId, isPending: results.some((result) => result.isPending) }
+}
+
+// Offered until a day before the new start (REFUND_REQUEST_CUTOFF_HOURS in
+// the backend's payments/services.py)
+export function canRefundPostponed(
+  event: EventItem,
+  now = Date.now(),
+): boolean {
+  return (
+    event.postponed_from !== null &&
+    event.status !== 'cancelled' &&
+    now < new Date(event.start_datetime).getTime() - DAY_MS
+  )
 }
 
 export async function downloadTicketPdf(ticket: Ticket) {
