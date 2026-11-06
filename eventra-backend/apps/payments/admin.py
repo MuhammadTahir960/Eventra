@@ -1,25 +1,27 @@
 from django.contrib import admin
+from django.db.models import OuterRef, Subquery
+
+from apps.common.admin import ReadOnlyRecordsMixin
+from apps.tickets.models import Ticket
 
 from .models import Payment
 
 
 @admin.register(Payment)
-class PaymentAdmin(admin.ModelAdmin):
+class PaymentAdmin(ReadOnlyRecordsMixin, admin.ModelAdmin):
     list_display = (
         "id",
         "booking",
+        "event",
         "status",
-        "amount",
-        "currency",
         "stripe_payment_intent_id",
-        "refund_attempts",
         "created_at",
     )
-    list_filter = ("status", "currency")
-    actions = ["retrigger_refund"]
+    list_filter = ("status",)
     search_fields = (
         "id",
         "booking__id",
+        "booking__tickets__event_seat__event__title",
         "stripe_payment_intent_id",
     )
     readonly_fields = (
@@ -30,10 +32,12 @@ class PaymentAdmin(admin.ModelAdmin):
     )
     ordering = ("-created_at",)
 
-    @admin.action(description="Retrigger automatic refund (reset failed attempts)")
-    def retrigger_refund(self, request, queryset):
-        updated = queryset.update(refund_attempts=0)
-        self.message_user(
-            request,
-            f"Reset refund attempts on {updated} payment(s); the sweeper will retry.",
-        )
+    def get_queryset(self, request):
+        event_title = Ticket.objects.filter(booking=OuterRef("booking")).values(
+            "event_seat__event__title"
+        )[:1]
+        return super().get_queryset(request).annotate(event_title=Subquery(event_title))
+
+    @admin.display(description="Event", ordering="event_title")
+    def event(self, payment):
+        return payment.event_title or "-"
