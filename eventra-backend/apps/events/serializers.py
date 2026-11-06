@@ -1,20 +1,21 @@
 from datetime import timedelta
 
-from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 
 from apps.common.constants import Roles
+from apps.common.permissions import has_role
 from apps.common.serializers import AllowedTextMixin, IntegrityErrorHandlingMixin
-from apps.common.validators import validate_event_title
+from apps.payments.services import refund_price_drops
 
-from .models import Event, TicketTier, TierSectionMapping
-from .services import (
+from .constants import (
     MAX_EVENT_LEAD_DAYS,
     MAX_EVENT_LENGTH_DAYS,
     ORGANIZER_MIN_NOTICE_HOURS,
-    ensure_tier_price_mutable,
+)
+from .models import Event, TicketTier, TierSectionMapping
+from .services import (
     resolve_create_status,
     should_retrigger_approval,
     should_retrigger_approval_for_tier,
@@ -26,6 +27,21 @@ def _is_organizer_or_admin_for_event(request, event) -> bool:
     if not (user and user.is_authenticated):
         return False
     return user.role == Roles.ADMIN or event.organizer_id == user.id
+
+
+def validate_schedule(start, end, now):
+    if end <= start:
+        raise serializers.ValidationError(
+            {"end_datetime": "The end must be after the start."}
+        )
+    if end - start > timedelta(days=MAX_EVENT_LENGTH_DAYS):
+        raise serializers.ValidationError(
+            {"end_datetime": f"An event can last at most {MAX_EVENT_LENGTH_DAYS} days."}
+        )
+    if start > now + timedelta(days=MAX_EVENT_LEAD_DAYS):
+        raise serializers.ValidationError(
+            {"start_datetime": "An event can start at most 2 years from now."}
+        )
 
 
 class EventSerializer(
@@ -54,6 +70,7 @@ class EventSerializer(
             "start_datetime",
             "end_datetime",
             "completed_at",
+            "postponed_from",
             "is_active",
             "created_at",
             "updated_at",
@@ -65,6 +82,7 @@ class EventSerializer(
             "status",
             "rejection_reason",
             "completed_at",
+            "postponed_from",
             "is_active",
             "created_at",
             "updated_at",
@@ -82,22 +100,10 @@ class EventSerializer(
             data.pop("rejection_reason", None)
         return data
 
-    def validate_title(self, value):
-        try:
-            validate_event_title(value)
-        except DjangoValidationError as exc:
-            raise serializers.ValidationError(exc.messages) from exc
-        return value
-
     def _actor_is_admin(self):
-        user = getattr(self.context.get("request"), "user", None)
-        return bool(user and user.is_authenticated and user.role == Roles.ADMIN)
+        return has_role(getattr(self.context.get("request"), "user", None), Roles.ADMIN)
 
     def _validate_start_window(self, start, now):
-        if start > now + timedelta(days=MAX_EVENT_LEAD_DAYS):
-            raise serializers.ValidationError(
-                {"start_datetime": "An event can start at most 2 years from now."}
-            )
         if not self._actor_is_admin() and start < now + timedelta(
             hours=ORGANIZER_MIN_NOTICE_HOURS
         ):
@@ -127,11 +133,6 @@ class EventSerializer(
     def validate(self, attrs):
         start = self._current(attrs, "start_datetime")
         end = self._current(attrs, "end_datetime")
-        if start and end and end <= start:
-            raise serializers.ValidationError(
-                {"end_datetime": "end_datetime must be after start_datetime."}
-            )
-
         now = timezone.now()
         start_changed = "start_datetime" in attrs and (
             self.instance is None
@@ -144,17 +145,8 @@ class EventSerializer(
         if start_changed:
             self._validate_start_window(attrs["start_datetime"], now)
         dates_changed = "start_datetime" in attrs or "end_datetime" in attrs
-        if (
-            dates_changed
-            and start
-            and end
-            and end - start > timedelta(days=MAX_EVENT_LENGTH_DAYS)
-        ):
-            raise serializers.ValidationError(
-                {
-                    "end_datetime": f"An event can last at most {MAX_EVENT_LENGTH_DAYS} days."
-                }
-            )
+        if dates_changed and start and end:
+            validate_schedule(start, end, now)
 
         if self.instance is not None and self.instance.event_seats.exists():
             for field in ("venue", "is_seated"):
@@ -228,6 +220,20 @@ class EventSerializer(
         return super().update(instance, validated_data)
 
 
+class PostponementSerializer(serializers.Serializer):
+    start_datetime = serializers.DateTimeField()
+    end_datetime = serializers.DateTimeField()
+
+    def validate(self, attrs):
+        start, end = attrs["start_datetime"], attrs["end_datetime"]
+        if start <= self.context["event"].start_datetime:
+            raise serializers.ValidationError(
+                {"start_datetime": "The new start must be later than the current one."}
+            )
+        validate_schedule(start, end, timezone.now())
+        return attrs
+
+
 class RunningLateSerializer(serializers.Serializer):
     end_datetime = serializers.DateTimeField()
 
@@ -256,14 +262,15 @@ class TicketTierSerializer(
             "price" in validated_data and validated_data["price"] != instance.price
         )
 
-        if price_changing:
-            ensure_tier_price_mutable(instance)
+        needs_review = price_changing and should_retrigger_approval_for_tier(instance)
+        if needs_review:
+            instance.event.status = Event.Status.PENDING_APPROVAL
+            instance.event.save(update_fields=["status", "updated_at"])
 
-            if should_retrigger_approval_for_tier(instance):
-                instance.event.status = Event.Status.PENDING_APPROVAL
-                instance.event.save(update_fields=["status", "updated_at"])
-
-        return super().update(instance, validated_data)
+        tier = super().update(instance, validated_data)
+        if price_changing and not needs_review:
+            refund_price_drops(tier.event)
+        return tier
 
 
 class TierSectionMappingSerializer(
@@ -278,6 +285,14 @@ class TierSectionMappingSerializer(
         model = TierSectionMapping
         fields = ["id", "ticket_tier", "event", "section", "created_at"]
         read_only_fields = ["id", "ticket_tier", "event", "created_at"]
+
+    def validate_section(self, value):
+        venue = self.context["event"].venue
+        if venue is None or not venue.seats.filter(section=value).exists():
+            raise serializers.ValidationError(
+                "This venue has no section with that name."
+            )
+        return value
 
     def validate(self, attrs):
         ticket_tier = self.context["ticket_tier"]
