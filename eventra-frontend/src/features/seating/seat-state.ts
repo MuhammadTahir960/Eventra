@@ -52,12 +52,17 @@ export function applySeatMessage(
 }
 
 // Seats from `selected` that someone else has taken in the meantime
+// `ownHold`: seats this tab is holding, so their "held" update is not a loss
 export function takenFromSelection(
   seats: EventSeat[],
   selected: ReadonlySet<string>,
+  ownHold: ReadonlySet<string> = new Set(),
 ): EventSeat[] {
   const unavailable: SeatStatus[] = ['held', 'booked']
   return seats.filter(
-    (seat) => selected.has(seat.id) && unavailable.includes(seat.status),
+    (seat) =>
+      selected.has(seat.id) &&
+      !ownHold.has(seat.id) &&
+      unavailable.includes(seat.status),
   )
 }

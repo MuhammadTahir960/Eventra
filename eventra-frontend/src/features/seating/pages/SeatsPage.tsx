@@ -1,18 +1,15 @@
 import { HugeiconsIcon } from '@hugeicons/react'
 import { ArrowLeft01Icon, Cancel01Icon } from '@hugeicons/core-free-icons'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { EmptyState } from '@/components/EmptyState'
 import { Notice } from '@/components/Notice'
 import { SwapLabel } from '@/components/SwapLabel'
 import { TicketStub } from '@/components/TicketStub'
 import { Button } from '@/components/ui/button'
-import { ButtonLink } from '@/components/ui/button-link'
-import { saveCheckoutContext } from '@/features/bookings/api'
 import { useEvent } from '@/features/events/hooks'
 import { useEventLookups } from '@/features/events/lookups'
 import { BLOCKER_MESSAGE, bookingBlocker } from '@/features/events/status'
-import { ApiError } from '@/lib/api-client'
+import { ApiError, errorMessage } from '@/lib/api-client'
 import { formatDateTime, formatMoney } from '@/lib/format'
 import { isUuid } from '@/lib/ids'
 import { sumPrices } from '@/lib/money'
@@ -24,6 +21,9 @@ import { compareNatural } from '../layout/layout'
 import { takenFromSelection } from '../seat-state'
 import { MAX_SEATS_PER_HOLD, type EventSeat } from '../types'
 import { usePageTitle } from '@/lib/use-page-title'
+import { TotalRow } from '@/components/TotalRow'
+import { EventNotFound } from '@/features/events/components/EventNotFound'
+import { saveCheckoutContext } from '@/features/bookings/api'
 
 const CONNECTION_TEXT: Record<ConnectionState, string> = {
   connecting: 'Connecting',
@@ -83,6 +83,8 @@ export function SeatsPage() {
     text: string
   } | null>(null)
   const [pending, setPending] = useState(false)
+  // Seats this tab is holding: their "held" broadcast is ours, not someone else's
+  const ownHold = useRef<ReadonlySet<string>>(new Set())
 
   const allSeats = useMemo(() => seats.data ?? [], [seats.data])
 
@@ -100,7 +102,7 @@ export function SeatsPage() {
 
   // Someone else took a seat in the cart: drop it and say which
   useEffect(() => {
-    const taken = takenFromSelection(allSeats, selected)
+    const taken = takenFromSelection(allSeats, selected, ownHold.current)
     if (taken.length === 0) return
     setSelected((current) => {
       const next = new Set(current)
@@ -140,6 +142,8 @@ export function SeatsPage() {
     if (!event.data || cart.length === 0) return
     setPending(true)
     setMessage(null)
+    // Set before the request: the hold's broadcast can arrive before its response
+    ownHold.current = new Set(cart.map((seat) => seat.id))
     try {
       // Shopping-cart model: hold and book on the same click
       const hold = await seatingApi.holdSeats(
@@ -156,6 +160,8 @@ export function SeatsPage() {
       navigate(`/checkout/${booking.id}`, { state: context })
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 409) {
+        // Holds are all-or-nothing, so a refused hold left none of these with us
+        ownHold.current = new Set()
         // The body names seats someone else holds or bought
         const ids = (caught.data as { seat_ids?: unknown } | undefined)
           ?.seat_ids
@@ -176,10 +182,10 @@ export function SeatsPage() {
       } else {
         setMessage({
           tone: 'error',
-          text:
-            caught instanceof ApiError
-              ? caught.message
-              : 'Checkout could not start. Please try again.',
+          text: errorMessage(
+            caught,
+            'Checkout could not start. Please try again.',
+          ),
         })
       }
       setPending(false)
@@ -192,19 +198,7 @@ export function SeatsPage() {
       event.error instanceof ApiError &&
       event.error.status === 404)
   ) {
-    return (
-      <div className="gutter mx-auto max-w-[1200px] pt-16">
-        <EmptyState
-          title="Event not found"
-          body="It may have been removed, or the link is wrong."
-          action={
-            <ButtonLink variant="ink" to="/events">
-              Browse events
-            </ButtonLink>
-          }
-        />
-      </div>
-    )
+    return <EventNotFound />
   }
 
   if (event.isPending) {
@@ -301,12 +295,7 @@ export function SeatsPage() {
               aria-label="Your selection"
               stub={
                 <div className="flex flex-col gap-4">
-                  <div className="flex items-baseline justify-between">
-                    <span className="font-medium">Total</span>
-                    <span className="tabular text-xl font-semibold">
-                      {formatMoney(total)}
-                    </span>
-                  </div>
+                  <TotalRow total={total} />
                   <Button
                     size="lg"
                     className="w-full"

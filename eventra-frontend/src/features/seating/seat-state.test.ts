@@ -122,4 +122,14 @@ describe('takenFromSelection', () => {
   it('ignores seats that were not selected', () => {
     expect(takenFromSelection([seat('s1', 'held')], new Set())).toEqual([])
   })
+
+  it("doesn't count this tab's own hold as taken", () => {
+    const seats = [seat('s1', 'held'), seat('s2', 'held')]
+    const taken = takenFromSelection(
+      seats,
+      new Set(['s1', 's2']),
+      new Set(['s1']),
+    )
+    expect(taken.map((s) => s.id)).toEqual(['s2'])
+  })
 })
