@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import {
-  DEFAULT_FILTERS,
-  parseFilters,
-  presetEnd,
-  toApiQuery,
-  toSearchParams,
-} from './filters'
+import { parseFilters, presetEnd, toApiQuery, toSearchParams } from './filters'
+import { DEFAULT_FILTERS } from './constants'
+import { DAY_MS } from '@/lib/constants'
 
 const UUID = '3f0c1a2e-8b7d-4c6e-9a10-5d2b7c9e4f11'
 
@@ -110,7 +106,7 @@ describe('presetEnd', () => {
   })
 
   it('spans 7 and 30 days for week and month', () => {
-    const day = 24 * 60 * 60 * 1000
+    const day = DAY_MS
     expect(presetEnd('week', wednesday)).toBe(
       new Date(wednesday.getTime() + 7 * day).toISOString(),
     )

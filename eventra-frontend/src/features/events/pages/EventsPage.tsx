@@ -4,7 +4,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { Notice } from '@/components/Notice'
 import { PageHeader } from '@/components/PageHeader'
 import { Pagination } from '@/components/Pagination'
-import { ApiError } from '@/lib/api-client'
+import { ApiError, errorMessage } from '@/lib/api-client'
 import { cn } from '@/lib/utils'
 import { EventCard, EventCardSkeleton } from '../components/EventCard'
 import { EventFiltersBar } from '../components/EventFiltersBar'
@@ -76,9 +76,7 @@ export function EventsPage() {
         </Notice>
       ) : events.isError ? (
         <Notice tone="error">
-          {events.error instanceof ApiError
-            ? events.error.message
-            : 'Events could not be loaded.'}{' '}
+          {errorMessage(events.error, 'Events could not be loaded.')}{' '}
           <button
             type="button"
             className="font-medium underline"
