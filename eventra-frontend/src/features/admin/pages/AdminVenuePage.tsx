@@ -12,7 +12,7 @@ import type { Venue } from '@/features/catalog/types'
 import { VenueMapPreview } from '@/features/seating/components/VenueMapPreview'
 import { useVenueTemplate } from '@/features/seating/hooks'
 import type { LayoutSeatInput } from '@/features/seating/layout/layout'
-import { ApiError, apiFetch } from '@/lib/api-client'
+import { apiFetch, errorMessage, firstFieldErrors } from '@/lib/api-client'
 import { isUuid } from '@/lib/ids'
 import {
   buildTemplate,
@@ -20,6 +20,7 @@ import {
   type SectionDraft,
 } from '../seat-template'
 import { usePageTitle } from '@/lib/use-page-title'
+import { LoadingBlock } from '@/components/LoadingBlock'
 
 const SHAPES = [
   ['oval', 'Oval (stadium)'],
@@ -32,16 +33,6 @@ const SHAPES = [
 // Matches the backend's shared image validators (apps/common/validators.py)
 const PHOTO_TYPES = 'image/jpeg,image/png,image/webp'
 const MAX_PHOTO_MB = 5
-
-const fieldErrorsOf = (caught: unknown): Record<string, string> =>
-  caught instanceof ApiError
-    ? Object.fromEntries(
-        Object.entries(caught.fieldErrors).map(([key, messages]) => [
-          key,
-          messages[0],
-        ]),
-      )
-    : {}
 
 function DetailsForm({ venue }: { venue: Venue | undefined }) {
   const client = useQueryClient()
@@ -83,7 +74,7 @@ function DetailsForm({ venue }: { venue: Venue | undefined }) {
       setSaved(true)
       if (!venue) navigate(`/admin/venues/${result.id}`, { replace: true })
     },
-    onError: (caught) => setErrors(fieldErrorsOf(caught)),
+    onError: (caught) => setErrors(firstFieldErrors(caught)),
   })
 
   function handleSubmit(event: FormEvent) {
@@ -129,9 +120,7 @@ function DetailsForm({ venue }: { venue: Venue | undefined }) {
         {saved && <Notice tone="success">Venue saved.</Notice>}
         {save.isError && Object.keys(errors).length === 0 && (
           <Notice tone="error">
-            {save.error instanceof ApiError
-              ? save.error.message
-              : 'The venue could not be saved.'}
+            {errorMessage(save.error, 'The venue could not be saved.')}
           </Notice>
         )}
         {text('name', 'Name', 200)}
@@ -420,9 +409,7 @@ function SeatTemplateEditor({ venue }: { venue: Venue }) {
         )}
         {create.isError && (
           <Notice tone="error">
-            {create.error instanceof ApiError
-              ? create.error.message
-              : 'The seat map could not be saved.'}
+            {errorMessage(create.error, 'The seat map could not be saved.')}
           </Notice>
         )}
         <Button
@@ -461,13 +448,7 @@ export function AdminVenuePage() {
   usePageTitle(isNew ? 'Add venue' : venue?.name)
 
   if (!isNew && venues.isPending) {
-    return (
-      <div
-        aria-busy="true"
-        aria-label="Loading venue"
-        className="h-96 animate-pulse rounded-lg bg-muted"
-      />
-    )
+    return <LoadingBlock label="Loading venue" className="h-96" />
   }
   if (!isNew && !venue) {
     return (

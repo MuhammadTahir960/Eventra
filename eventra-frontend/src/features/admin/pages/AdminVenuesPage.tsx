@@ -6,6 +6,7 @@ import { ButtonLink } from '@/components/ui/button-link'
 import { useVenues } from '@/features/catalog/hooks'
 import { ImageWithFallback } from '@/components/ImageWithFallback'
 import { usePageTitle } from '@/lib/use-page-title'
+import { LoadingBlock } from '@/components/LoadingBlock'
 
 function NoPhoto({ text }: { text: string }) {
   return (
@@ -35,11 +36,7 @@ export function AdminVenuesPage() {
       {venues.isError ? (
         <Notice tone="error">{venues.error.message}</Notice>
       ) : venues.isPending ? (
-        <div
-          aria-busy="true"
-          aria-label="Loading venues"
-          className="h-64 animate-pulse rounded-lg bg-muted"
-        />
+        <LoadingBlock label="Loading venues" className="h-64" />
       ) : list.length === 0 ? (
         <EmptyState
           title="No venues yet"

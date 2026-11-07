@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useTicketTiers } from '@/features/events/hooks'
 import { useEventLookups, type EventRefs } from '@/features/events/lookups'
 import { CancelEventButton } from '@/features/organizer/pages/OrganizerEventsPage'
-import { ApiError } from '@/lib/api-client'
+import { errorMessage } from '@/lib/api-client'
 import { formatDateTimeLong, formatMoney } from '@/lib/format'
 import {
   useApproveEvent,
@@ -21,9 +21,7 @@ import {
 } from '../api'
 import { usePageTitle } from '@/lib/use-page-title'
 import { toast } from 'sonner'
-
-const errorText = (caught: unknown, fallback: string) =>
-  caught instanceof ApiError ? caught.message : fallback
+import { LoadingBlock } from '@/components/LoadingBlock'
 
 function PendingEvent({
   event,
@@ -131,7 +129,10 @@ function PendingEvent({
               </FormField>
               {reject.isError && (
                 <Notice tone="error" className="mt-3">
-                  {errorText(reject.error, 'The event could not be rejected.')}
+                  {errorMessage(
+                    reject.error,
+                    'The event could not be rejected.',
+                  )}
                 </Notice>
               )}
             </ConfirmDialog>
@@ -155,7 +156,7 @@ function PendingEvent({
 
       {approve.isError && (
         <Notice tone="error" className="mt-4">
-          {errorText(approve.error, 'The event could not be approved.')}
+          {errorMessage(approve.error, 'The event could not be approved.')}
         </Notice>
       )}
 
@@ -202,11 +203,7 @@ export function ModerationPage() {
       {pending.isError ? (
         <Notice tone="error">{pending.error.message}</Notice>
       ) : pending.isPending ? (
-        <div
-          aria-busy="true"
-          aria-label="Loading queue"
-          className="h-64 animate-pulse rounded-lg bg-muted"
-        />
+        <LoadingBlock label="Loading queue" className="h-64" />
       ) : list.length === 0 ? (
         <EmptyState
           title="All caught up"

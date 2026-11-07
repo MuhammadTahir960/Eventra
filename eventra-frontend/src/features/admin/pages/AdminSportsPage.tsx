@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { useLeagues, useTeams } from '@/features/catalog/hooks'
 import type { League, Team } from '@/features/catalog/types'
-import { ApiError, apiFetch } from '@/lib/api-client'
+import { apiFetch, errorMessage, firstFieldErrors } from '@/lib/api-client'
 import { fetchAllPages } from '@/lib/pagination'
 import { ImageWithFallback } from '@/components/ImageWithFallback'
 import { initial } from '@/lib/initial'
@@ -22,11 +22,9 @@ interface Sport {
 const LOGO_TYPES = 'image/jpeg,image/png,image/webp'
 const MAX_LOGO_BYTES = 5 * 1024 * 1024
 
-const messageOf = (caught: unknown, fallback: string) => {
-  if (!(caught instanceof ApiError)) return fallback
-  const first = Object.values(caught.fieldErrors)[0]?.[0]
-  return first ?? caught.message
-}
+// The first field's message, else the general one
+const messageOf = (caught: unknown, fallback: string) =>
+  Object.values(firstFieldErrors(caught))[0] ?? errorMessage(caught, fallback)
 
 function useSports() {
   return useQuery({
