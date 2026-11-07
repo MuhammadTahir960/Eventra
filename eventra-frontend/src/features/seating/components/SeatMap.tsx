@@ -11,7 +11,15 @@ import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
 import { formatMoney } from '@/lib/format'
 import { toCents } from '@/lib/money'
-import { computeLayout, SEAT_RADIUS } from '../layout/layout'
+import { computeLayout } from '../layout/layout'
+import { SEAT_RADIUS } from '../layout/constants'
+import {
+  DRAG_THRESHOLD_PX,
+  STATE_TEXT,
+  TIER_SHADES,
+  ZOOM_STEP,
+  type DisplayState,
+} from '../constants'
 import {
   buildNavigation,
   isNavigationKey,
@@ -39,23 +47,7 @@ interface SeatMapProps {
   fieldLabel?: string
 }
 
-type DisplayState = 'available' | 'selected' | 'held' | 'booked'
-
-const STATE_TEXT: Record<DisplayState, string> = {
-  available: 'available',
-  selected: 'selected',
-  held: 'held by another buyer',
-  booked: 'sold',
-}
-
-// Tiers are told apart by warm neutral shades and their labels, never by
-// extra hues, so the ember of a selected seat is the only colour on the map
-const TIER_SHADES = ['#f1efe9', '#e6e2d8', '#dbd6c8', '#d0cab9', '#c5beab']
 const tierShade = (index: number) => TIER_SHADES[index % TIER_SHADES.length]
-
-// Movement below this many pixels is a tap on a seat, not a drag of the map
-const DRAG_THRESHOLD_PX = 5
-const ZOOM_STEP = 1.6
 
 // What a seat looks like in each state. Colour is never the only signal:
 // every state also has its own shape (outline, check, dashes, cross).
