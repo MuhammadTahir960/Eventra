@@ -7,7 +7,12 @@ import { HoldToConfirmButton } from '@/components/HoldToConfirmButton'
 import { Notice } from '@/components/Notice'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ApiError, apiFetch } from '@/lib/api-client'
+import {
+  ApiError,
+  apiFetch,
+  errorMessage,
+  firstFieldErrors,
+} from '@/lib/api-client'
 import { authStore } from '../auth-store'
 
 // Wipes the user's personal details; payment records stay. The server refuses
@@ -49,16 +54,11 @@ export function DeleteAccountSection() {
       // next tick overrides it (navigating first loses the race to the guard)
       setTimeout(() => void navigate('/', { replace: true }), 0)
     } catch (caught) {
+      const fromServer = firstFieldErrors(caught).password
       if (caught instanceof ApiError && caught.status === 409)
         setBlocked(caught.fieldErrors.reasons ?? [caught.message])
-      else if (caught instanceof ApiError && caught.fieldErrors.password)
-        setPasswordError(caught.fieldErrors.password[0])
-      else
-        setError(
-          caught instanceof ApiError
-            ? caught.message
-            : 'Your account could not be deleted.',
-        )
+      else if (fromServer) setPasswordError(fromServer)
+      else setError(errorMessage(caught, 'Your account could not be deleted.'))
       setAttempt((n) => n + 1)
     } finally {
       setPending(false)
