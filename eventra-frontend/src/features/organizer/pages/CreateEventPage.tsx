@@ -18,7 +18,7 @@ import { useAuth } from '@/features/auth/auth-store'
 import { VenueMapPreview } from '@/features/seating/components/VenueMapPreview'
 import { useVenueTemplate } from '@/features/seating/hooks'
 import { summarizeSections } from '@/features/seating/layout/summary'
-import { ApiError } from '@/lib/api-client'
+import { ApiError, errorMessage, firstFieldErrors } from '@/lib/api-client'
 import { isUuid } from '@/lib/ids'
 import { TierEditor } from '../components/TierEditor'
 import {
@@ -236,10 +236,10 @@ export function CreateEventPage() {
         inner instanceof ApiError &&
         inner.status === 400
       ) {
+        const server = firstFieldErrors(inner)
         const serverErrors: DraftErrors = {}
         for (const [backend, field] of Object.entries(SERVER_FIELD)) {
-          const message = inner.fieldErrors[backend]?.[0]
-          if (message) serverErrors[field] = message
+          if (server[backend]) serverErrors[field] = server[backend]
         }
         if (Object.keys(serverErrors).length > 0) {
           setErrors(serverErrors)
@@ -384,9 +384,10 @@ export function CreateEventPage() {
             )}
             {template.isError && (
               <Notice tone="error">
-                {template.error instanceof ApiError
-                  ? template.error.message
-                  : 'Could not load this venue’s seat map.'}
+                {errorMessage(
+                  template.error,
+                  'Could not load this venue’s seat map.',
+                )}
               </Notice>
             )}
             {noSeats && (

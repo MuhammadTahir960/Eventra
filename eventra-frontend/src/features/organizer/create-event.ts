@@ -1,5 +1,7 @@
 import { apiFetch, ApiError } from '@/lib/api-client'
 import type { EventItem, TicketTier } from '@/features/events/types'
+import { HOUR_MS } from '@/lib/constants'
+import { MAX_LEAD_DAYS, MAX_LENGTH_DAYS, PRICE_PATTERN } from './constants'
 
 // ---------- the form's data ----------
 
@@ -41,12 +43,6 @@ export function newTierKey(): string {
 }
 
 // ---------- validation (mirrors the backend; the server still has the final say) ----------
-
-const PRICE_PATTERN = /^\d{1,8}(\.\d{1,2})?$/
-
-const HOUR_MS = 60 * 60 * 1000
-const MAX_LENGTH_DAYS = 14
-const MAX_LEAD_DAYS = 730
 
 // `noticeHours`: organizers need 24h so an admin can review the event in time
 export function validateDraft(
