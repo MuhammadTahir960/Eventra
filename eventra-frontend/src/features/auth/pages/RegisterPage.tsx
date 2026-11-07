@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { ButtonLink } from '@/components/ui/button-link'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
-import { ApiError } from '@/lib/api-client'
+import { ApiError, errorMessage, firstFieldErrors } from '@/lib/api-client'
 import { authApi, type RegisterPayload } from '../api'
 import { AuthLayout } from '../components/AuthLayout'
 import { PasswordField } from '../components/PasswordField'
@@ -118,10 +118,10 @@ export function RegisterPage() {
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 400) {
         // Map the backend's per-field messages onto our form
+        const server = firstFieldErrors(caught)
         const serverErrors: Errors = {}
         for (const name of Object.keys(FIELD_ID) as FieldName[]) {
-          const message = caught.fieldErrors[name]?.[0]
-          if (message) serverErrors[name] = message
+          if (server[name]) serverErrors[name] = server[name]
         }
         // DRF's unique-field message is lower-case model wording
         if (serverErrors.email?.includes('already exists')) {
@@ -131,11 +131,11 @@ export function RegisterPage() {
         setErrors(serverErrors)
         if (Object.keys(serverErrors).length === 0) setFormError(caught.message)
         setFocusKey((key) => key + 1)
-      } else if (caught instanceof ApiError) {
-        // 429 (5 sign-ups per hour) and server errors
-        setFormError(caught.message)
       } else {
-        setFormError('Something went wrong. Please try again.')
+        // 429 (5 sign-ups per hour) and server errors
+        setFormError(
+          errorMessage(caught, 'Something went wrong. Please try again.'),
+        )
       }
     } finally {
       setPending(false)
