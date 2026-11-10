@@ -22,7 +22,7 @@ def set_category_icons(apps, schema_editor):
     Category = apps.get_model("categories", "Category")
     for name, icon in ICONS.items():
         Category._base_manager.filter(name__iexact=name).update(icon=icon)
-    Category._base_manager.filter(icon="").update(icon="ticket")
+    Category._base_manager.exclude(icon__in=ICONS.values()).update(icon="ticket")
 
 
 class Migration(migrations.Migration):
