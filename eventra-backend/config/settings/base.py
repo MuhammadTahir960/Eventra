@@ -249,6 +249,8 @@ REST_FRAMEWORK = {
         "venue-request": "10/hour",
         "seat-hold": "60/min",
         "checkout": "20/min",
+        "booking-refund": "10/hour",
+        "event-postpone": "10/hour",
         "anon": "100/min",
         "user": "300/min",
     },

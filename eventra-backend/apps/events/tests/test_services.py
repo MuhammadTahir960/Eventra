@@ -12,21 +12,24 @@ from apps.common.constants import Roles
 from apps.payouts.factories import OrganizerPayoutFactory
 from apps.seating.factories import EventSeatFactory
 from apps.seating.models import EventSeat
+from apps.tickets.factories import TicketFactory
 from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
 from apps.venues.factories import VenueFactory
+from tests.helpers import paid_booking
 
+from ..constants import MAX_EVENT_LENGTH_DAYS, RUNNING_LATE_OPENS_HOURS
 from ..factories import EventFactory, TicketTierFactory
 from ..models import Event
 from ..services import (
-    MAX_EVENT_LENGTH_DAYS,
-    RUNNING_LATE_OPENS_HOURS,
     DuplicateEventSlugError,
     EventEndNotExtendableError,
     EventNotCancellableError,
     EventNotDeletableError,
+    EventNotPostponableError,
     InvalidEventEndError,
     TierPriceImmutableError,
+    approve_event,
     cancel_event,
     complete_past_events,
     ensure_can_restore_event,
@@ -34,6 +37,7 @@ from ..services import (
     ensure_tier_price_mutable,
     extend_event_end,
     find_blocking_upcoming_event,
+    postpone_event,
     resolve_create_status,
     should_retrigger_approval,
     should_retrigger_approval_for_tier,
@@ -302,7 +306,7 @@ def test_returns_count_of_events_completed():
 def _sell_ticket(event):
     booking = BookingFactory(status=Booking.Status.CONFIRMED)
     seat = EventSeatFactory(event=event, status=EventSeat.Status.BOOKED)
-    Ticket.objects.create(booking=booking, event_seat=seat, status=Ticket.Status.VALID)
+    TicketFactory(booking=booking, event_seat=seat, status=Ticket.Status.VALID)
     return booking
 
 
@@ -484,3 +488,65 @@ def test_a_long_festival_can_run_late_up_to_the_length_limit():
     extend_event_end(event, now + timedelta(days=10, hours=2))
     with pytest.raises(InvalidEventEndError, match="14 days"):
         extend_event_end(event, now + timedelta(days=15))
+
+
+def test_postponing_keeps_the_original_date_and_emails_ticket_holders(
+    monkeypatch, django_capture_on_commit_callbacks
+):
+    task = MagicMock()
+    monkeypatch.setattr("apps.notifications.tasks.send_event_postponed_email", task)
+    event = EventFactory(status=Event.Status.APPROVED)
+    first_start = event.start_datetime
+    booking = paid_booking(event, (TicketTierFactory(event=event), "10.00"))
+
+    with django_capture_on_commit_callbacks(execute=True):
+        postpone_event(
+            event,
+            first_start + timedelta(days=7),
+            first_start + timedelta(days=7, hours=2),
+        )
+    postpone_event(
+        event, first_start + timedelta(days=9), first_start + timedelta(days=9, hours=2)
+    )
+
+    event.refresh_from_db()
+    assert event.postponed_from == first_start
+    assert event.start_datetime == first_start + timedelta(days=9)
+    task.delay.assert_called_once_with(str(event.id), str(booking.user_id))
+
+
+def test_postponing_only_moves_an_upcoming_event_later():
+    event = EventFactory(status=Event.Status.APPROVED)
+    start = event.start_datetime
+    with pytest.raises(EventNotPostponableError, match="just been moved"):
+        postpone_event(event, start - timedelta(hours=1), start + timedelta(hours=1))
+    with pytest.raises(EventNotPostponableError, match="started"):
+        postpone_event(
+            EventFactory(
+                status=Event.Status.APPROVED,
+                start_datetime=timezone.now() - timedelta(minutes=5),
+                end_datetime=timezone.now() + timedelta(hours=1),
+            ),
+            start + timedelta(days=1),
+            start + timedelta(days=1, hours=2),
+        )
+    with pytest.raises(EventNotPostponableError, match="on sale or in review"):
+        postpone_event(
+            EventFactory(status=Event.Status.CANCELLED),
+            start + timedelta(days=1),
+            start + timedelta(days=1, hours=2),
+        )
+
+
+def test_approving_a_price_drop_refunds_the_difference(monkeypatch):
+    create = MagicMock(return_value=MagicMock(id="re_test"))
+    monkeypatch.setattr("apps.payments.services.stripe.Refund.create", create)
+    event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+    tier = TicketTierFactory(event=event, price="50.00")
+    booking = paid_booking(event, (tier, "50.00"))
+    tier.price = "35.00"
+    tier.save()
+
+    approve_event(event)
+
+    assert booking.refunds.get().items.get().amount == 15

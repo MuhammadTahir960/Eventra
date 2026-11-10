@@ -1,12 +1,13 @@
 from django.contrib import admin
 
+from apps.common.admin import ReadOnlyRecordsMixin
+
 from .models import OrganizerPayout
 
 
 @admin.register(OrganizerPayout)
-class OrganizerPayoutAdmin(admin.ModelAdmin):
+class OrganizerPayoutAdmin(ReadOnlyRecordsMixin, admin.ModelAdmin):
     list_display = (
-        "payout_reference",
         "event",
         "status",
         "gross_revenue",
@@ -16,6 +17,6 @@ class OrganizerPayoutAdmin(admin.ModelAdmin):
         "created_at",
     )
     list_filter = ("status",)
-    search_fields = ("payout_reference", "event__title")
+    search_fields = ("event__title",)
     readonly_fields = ("created_at", "updated_at")
     ordering = ("-created_at",)

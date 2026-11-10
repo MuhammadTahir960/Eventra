@@ -12,13 +12,14 @@ from apps.common.constants import Roles
 from apps.common.mixins import SoftDeleteRestoreMixin
 from apps.common.permissions import IsAdmin, IsEventOwnerStrict, IsOrganizer
 from apps.common.validators import has_allowed_text
-from apps.payments.tasks import refund_event_bookings_task
+from apps.payments.tasks import refund_event_bookings_task, retry_event_refunds_task
 
 from .models import EVENT_SEARCH_CONFIG, Event, TicketTier
-from .permissions import IsEventOwnerOrAdminForDelete
+from .permissions import IsEventOwnerOrAdmin
 from .serializers import (
     EventSerializer,
     PendingEventSerializer,
+    PostponementSerializer,
     RunningLateSerializer,
     TicketTierSerializer,
     TierSectionMappingSerializer,
@@ -31,10 +32,10 @@ from .services import (
     EventNotDeletableError,
     EventNotEditableError,
     EventNotPendingApprovalError,
+    EventNotPostponableError,
     EventRejectionReasonRequiredError,
     InvalidEventEndError,
     SeatMapLockedError,
-    TierPriceImmutableError,
     approve_event,
     cancel_event,
     ensure_can_restore_event,
@@ -44,6 +45,7 @@ from .services import (
     extend_event_end,
     lock_event,
     paid_bookings,
+    postpone_event,
     reject_event,
     visible_events_for_ticket_holder,
     visible_events_for_user,
@@ -104,24 +106,32 @@ class EventFilterSet(django_filters.FilterSet):
         )
 
 
+def _save_locked(event, serializer, success_status, *checks):
+    checks = (ensure_event_editable, *checks)
+    try:
+        for check in checks:
+            check(event)
+        serializer.is_valid(raise_exception=True)
+        with transaction.atomic():
+            lock_event(event)
+            for check in checks:
+                check(event)
+            serializer.save()
+    except (EventNotEditableError, SeatMapLockedError) as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+    return Response(serializer.data, status=success_status)
+
+
 class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
     serializer_class = EventSerializer
     filterset_class = EventFilterSet
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ["get", "post", "patch", "delete"]
+    throttle_scope = None
 
     def get_queryset(self):
         user = self.request.user
-        include_inactive = str(
-            self.request.query_params.get("include_inactive", "")
-        ).lower() in ("1", "true", "yes")
-
-        if (
-            user
-            and user.is_authenticated
-            and user.role == Roles.ADMIN
-            and include_inactive
-        ):
+        if self.include_inactive():
             return Event.all_objects.select_related(
                 "venue", "category", "organizer", "league", "home_team", "away_team"
             ).order_by("-start_datetime", "id")
@@ -139,9 +149,9 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
         if self.action in ("update", "partial_update"):
             return [permissions.IsAuthenticated(), IsEventOwnerStrict()]
         if self.action == "destroy":
-            return [permissions.IsAuthenticated(), IsEventOwnerOrAdminForDelete()]
-        if self.action in ("cancel", "extend_end"):
-            return [permissions.IsAuthenticated(), IsEventOwnerOrAdminForDelete()]
+            return [permissions.IsAuthenticated(), IsEventOwnerOrAdmin()]
+        if self.action in ("cancel", "extend_end", "postponements"):
+            return [permissions.IsAuthenticated(), IsEventOwnerOrAdmin()]
         if self.action == "restore":
             return [IsAdmin()]
         return [perm() for perm in self.permission_classes]
@@ -214,6 +224,21 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
 
         return Response(self.get_serializer(event).data)
 
+    @action(detail=True, methods=["post"], throttle_scope="event-postpone")
+    def postponements(self, request, pk=None):
+        event = self.get_object()
+        serializer = PostponementSerializer(data=request.data, context={"event": event})
+        serializer.is_valid(raise_exception=True)
+        try:
+            postpone_event(
+                event,
+                serializer.validated_data["start_datetime"],
+                serializer.validated_data["end_datetime"],
+            )
+        except EventNotPostponableError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        return Response(self.get_serializer(event).data, status=status.HTTP_201_CREATED)
+
     @action(detail=True, methods=["post"], url_path="extend-end")
     def extend_end(self, request, pk=None):
         event = self.get_object()
@@ -248,23 +273,10 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
             raise NotAuthenticated()
         if not IsEventOwnerStrict().has_object_permission(request, self, event):
             raise PermissionDenied("Only the event's owner may add ticket tiers.")
-        try:
-            ensure_event_editable(event)
-        except EventNotEditableError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-
         serializer = TicketTierSerializer(
             data=request.data, context={"event": event, "request": request}
         )
-        serializer.is_valid(raise_exception=True)
-        try:
-            with transaction.atomic():
-                lock_event(event)
-                ensure_event_editable(event)
-                serializer.save()
-        except EventNotEditableError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return _save_locked(event, serializer, status.HTTP_201_CREATED)
 
     @action(
         detail=True,
@@ -275,30 +287,14 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
     def ticket_tier_update(self, request, pk=None, tier_id=None):
         event = self.get_object()
         tier = get_object_or_404(TicketTier, pk=tier_id, event=event)
-
-        try:
-            ensure_event_editable(event)
-        except EventNotEditableError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-
+        tier.event = event
         serializer = TicketTierSerializer(
             tier,
             data=request.data,
             partial=True,
             context={"event": event, "request": request},
         )
-        serializer.is_valid(raise_exception=True)
-
-        try:
-            with transaction.atomic():
-                lock_event(event)
-                ensure_event_editable(event)
-                tier.event = event
-                serializer.save()
-        except (EventNotEditableError, TierPriceImmutableError) as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-
-        return Response(serializer.data)
+        return _save_locked(event, serializer, status.HTTP_200_OK)
 
     @action(
         detail=True,
@@ -309,27 +305,13 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
     def ticket_tier_add_section(self, request, pk=None, tier_id=None):
         event = self.get_object()
         tier = get_object_or_404(TicketTier, pk=tier_id, event=event)
-
-        try:
-            ensure_event_editable(event)
-            ensure_sections_mappable(event)
-        except (EventNotEditableError, SeatMapLockedError) as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-
+        tier.event = event
         serializer = TierSectionMappingSerializer(
             data=request.data, context={"event": event, "ticket_tier": tier}
         )
-        serializer.is_valid(raise_exception=True)
-        try:
-            with transaction.atomic():
-                lock_event(event)
-                ensure_event_editable(event)
-                ensure_sections_mappable(event)
-                tier.event = event
-                serializer.save()
-        except (EventNotEditableError, SeatMapLockedError) as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return _save_locked(
+            event, serializer, status.HTTP_201_CREATED, ensure_sections_mappable
+        )
 
 
 class EventRetryRefundsView(views.APIView):
@@ -337,14 +319,7 @@ class EventRetryRefundsView(views.APIView):
 
     def post(self, request, event_id):
         event = get_object_or_404(Event.all_objects, pk=event_id)
-
-        if event.status != Event.Status.CANCELLED:
-            return Response(
-                {"detail": "Retrying refunds only makes sense for a cancelled event."},
-                status=status.HTTP_409_CONFLICT,
-            )
-
-        refund_event_bookings_task.delay(str(event.id), retry_failed=True)
+        retry_event_refunds_task.delay(str(event.id))
 
         return Response(status=status.HTTP_202_ACCEPTED)
 

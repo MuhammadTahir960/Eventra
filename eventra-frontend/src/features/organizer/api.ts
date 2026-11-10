@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api-client'
 import { isUuid } from '@/lib/ids'
 import type { Page } from '@/lib/pagination'
@@ -37,18 +42,21 @@ export function useUpdateEvent(id: string) {
   })
 }
 
+// Every list and page that shows an event, after its owner or an admin changes it
+function refreshEvent(client: QueryClient, event: EventItem) {
+  client.setQueryData(['events', 'detail', event.id], event)
+  void client.invalidateQueries({ queryKey: ['organizer'] })
+  void client.invalidateQueries({ queryKey: ['admin'] })
+  void client.invalidateQueries({ queryKey: ['events', 'list'] })
+}
+
 // Owner or admin. Cancelling refunds every booking, so callers confirm first.
 export function useCancelEvent() {
   const client = useQueryClient()
   return useMutation({
     mutationFn: (id: string) =>
       apiFetch<EventItem>(`/events/${id}/cancel/`, { method: 'POST' }),
-    onSuccess: (event) => {
-      client.setQueryData(['events', 'detail', event.id], event)
-      void client.invalidateQueries({ queryKey: ['organizer'] })
-      void client.invalidateQueries({ queryKey: ['admin'] })
-      void client.invalidateQueries({ queryKey: ['events', 'list'] })
-    },
+    onSuccess: (event) => refreshEvent(client, event),
   })
 }
 
@@ -62,11 +70,21 @@ export function useRunningLate(id: string) {
         method: 'POST',
         body: { end_datetime: endDatetime },
       }),
-    onSuccess: (event) => {
-      client.setQueryData(['events', 'detail', event.id], event)
-      void client.invalidateQueries({ queryKey: ['organizer'] })
-      void client.invalidateQueries({ queryKey: ['admin'] })
-    },
+    onSuccess: (event) => refreshEvent(client, event),
+  })
+}
+
+// Owner or admin: move the whole event to a later date. Tickets stay valid;
+// buyers are emailed and can ask for a refund until a day before.
+export function usePostponeEvent(id: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (dates: { start_datetime: string; end_datetime: string }) =>
+      apiFetch<EventItem>(`/events/${id}/postponements/`, {
+        method: 'POST',
+        body: dates,
+      }),
+    onSuccess: (event) => refreshEvent(client, event),
   })
 }
 
@@ -79,7 +97,9 @@ export interface EventSales {
   tickets: {
     ticket_id: string
     ticket_code: string
+    // What the buyer paid, net of partial refunds
     amount: string
+    refunded: string
     status: 'confirmed' | 'refunded'
   }[]
 }
@@ -107,9 +127,6 @@ export interface Payout {
   platform_fee: string
   net_amount: string
   status: PayoutStatus
-  payout_reference: string
-  period_start: string | null
-  period_end: string | null
   settled_at: string | null
   created_at: string
 }
@@ -169,6 +186,22 @@ export function usePayOut() {
   return useMutation({
     mutationFn: (eventId: string) =>
       apiFetch<Payout>(`/admin/events/${eventId}/payouts/`, { method: 'POST' }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['admin', 'payouts'] })
+    },
+  })
+}
+
+// Admin only: refund every buyer a share of what they paid (an event that
+// was cut short). Allowed once per event, before the payout.
+export function useRefundPart() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ eventId, percent }: { eventId: string; percent: number }) =>
+      apiFetch<{ refunds: number; amount: string }>(
+        `/admin/events/${eventId}/partial-refunds/`,
+        { method: 'POST', body: { percent } },
+      ),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ['admin', 'payouts'] })
     },

@@ -9,18 +9,21 @@ import stripe
 from django.db import IntegrityError, connection
 from django.utils import timezone
 
-from apps.events.factories import EventFactory
+from apps.events.factories import EventFactory, TicketTierFactory
+from apps.events.models import Event
 from apps.payments.factories import PaymentFactory
-from apps.payments.models import Payment
-from apps.payments.services import PaymentGatewayError
 from apps.seating.factories import EventSeatFactory, SeatHoldFactory
 from apps.seating.models import EventSeat, SeatHold
 from apps.users.factories import UserFactory
+from tests.helpers import paid_booking, unpaid_booking
 
 from ..factories import BookingFactory
 from ..models import Booking
 from ..services import (
+    BOOKING_EXPIRY_MINUTES,
+    BookingExpiredError,
     BookingNotPendingError,
+    EventClosedError,
     HoldExpiredError,
     HoldNotFoundError,
     checkout_booking,
@@ -58,7 +61,46 @@ class TestCreateBookingFromHold:
         assert booking.status == Booking.Status.PENDING
         assert booking.total_amount == Decimal("25.00")
         assert booking.source_hold_group_id == group_id
-        assert booking.idempotency_key
+
+    def test_records_each_seat_with_its_price_and_totals_them(self):
+        user = UserFactory()
+        event = EventFactory(status="approved")
+        group_id, cheap = _held_seat_with_hold(user, event=event, price=Decimal("20"))
+        _, dear = _held_seat_with_hold(
+            user, event=event, price=Decimal("35.50"), group_id=group_id
+        )
+
+        booking, _ = create_booking_from_hold(group_id, user)
+
+        items = {item.event_seat_id: item for item in booking.tickets.all()}
+        assert items.keys() == {cheap.id, dear.id}
+        assert items[cheap.id].price == Decimal("20.00")
+        assert items[dear.id].price == Decimal("35.50")
+        assert {item.event_seat.event_id for item in items.values()} == {event.id}
+        assert booking.total_amount == Decimal("55.50")
+
+    def test_replay_adds_no_duplicate_items(self):
+        user = UserFactory()
+        group_id, _ = _held_seat_with_hold(user)
+
+        booking, _ = create_booking_from_hold(group_id, user)
+        create_booking_from_hold(group_id, user)
+
+        assert booking.tickets.count() == 1
+
+    def test_items_outlive_the_seat_link_when_a_booking_expires(self):
+        user = UserFactory()
+        group_id, seat = _held_seat_with_hold(user)
+        booking, _ = create_booking_from_hold(group_id, user)
+        Booking.objects.filter(pk=booking.pk).update(
+            created_at=timezone.now() - timedelta(hours=1)
+        )
+
+        sweep_expired_pending_bookings()
+
+        seat.refresh_from_db()
+        assert not booking.held_seats().filter(id=seat.id).exists()
+        assert booking.tickets.get().event_seat_id == seat.id
 
     def test_deletes_the_hold_group_and_leaves_seat_held(self):
         user = UserFactory()
@@ -160,11 +202,11 @@ class TestCreateBookingFromHold:
         assert len(results) == 2
         assert len({r[0] for r in results}) == 1
         assert sorted(r[1] for r in results) == [False, True]
-        seat.refresh_from_db()
-        assert seat.held_booking_id == results[0][0]
+        winner = Booking.objects.get(id=results[0][0])
+        assert winner.held_seats().filter(id=seat.id).exists()
 
     @pytest.mark.django_db(transaction=True)
-    def test_integrity_error_backstop_still_sets_held_booking_id(self, monkeypatch):
+    def test_integrity_error_backstop_returns_the_winning_booking(self, monkeypatch):
         user = UserFactory()
         group_id, seat = _held_seat_with_hold(user)
 
@@ -176,9 +218,7 @@ class TestCreateBookingFromHold:
                 winner_holder["booking"] = real_create(
                     user=user,
                     status=Booking.Status.PENDING,
-                    total_amount=Decimal("49.99"),
                     source_hold_group_id=group_id,
-                    idempotency_key=str(uuid.uuid4()),
                 )
                 connection.close()
 
@@ -195,8 +235,6 @@ class TestCreateBookingFromHold:
 
         assert booking.id == winner_holder["booking"].id
         assert created is False
-        seat.refresh_from_db()
-        assert seat.held_booking_id == winner_holder["booking"].id
 
 
 class TestCheckoutBooking:
@@ -205,141 +243,31 @@ class TestCheckoutBooking:
         with pytest.raises(BookingNotPendingError):
             checkout_booking(booking)
 
-    def test_retry_with_existing_payment_row_missing_intent_id_recovers(
-        self, monkeypatch
-    ):
-        booking = BookingFactory(
-            status=Booking.Status.PENDING, total_amount=Decimal("12.00")
-        )
-        Payment.objects.create(
-            booking=booking,
-            stripe_payment_intent_id="",
-            client_secret="",
-            amount=1200,
-            currency="usd",
-            status=Payment.Status.PENDING,
-        )
-        fake_intent = MagicMock(id="pi_recovered", client_secret="secret_recovered")
+    def test_refuses_an_expired_booking_without_calling_stripe(self, monkeypatch):
+        create = MagicMock()
         monkeypatch.setattr(
-            "apps.payments.services.stripe.PaymentIntent.create",
-            MagicMock(return_value=fake_intent),
+            "apps.payments.services.stripe.PaymentIntent.create", create
         )
-
-        payment = checkout_booking(booking)
-
-        assert payment.stripe_payment_intent_id == "pi_recovered"
-        assert payment.client_secret == "secret_recovered"
-        assert Payment.objects.filter(booking=booking).count() == 1
-
-    @pytest.mark.django_db(transaction=True)
-    def test_concurrent_checkout_without_existing_payment_yields_one_row(
-        self, monkeypatch
-    ):
-        booking = BookingFactory(
-            status=Booking.Status.PENDING, total_amount=Decimal("20.00")
+        booking = BookingFactory(status=Booking.Status.PENDING)
+        Booking.objects.filter(pk=booking.pk).update(
+            created_at=timezone.now() - timedelta(minutes=BOOKING_EXPIRY_MINUTES + 1)
         )
-        fake_intent = MagicMock(id="pi_race", client_secret="secret_race")
-        monkeypatch.setattr(
-            "apps.payments.services.stripe.PaymentIntent.create",
-            MagicMock(return_value=fake_intent),
-        )
+        booking.refresh_from_db()
 
-        results = []
-        errors = []
-        barrier = threading.Barrier(2)
-
-        def attempt():
-            barrier.wait()
-            try:
-                payment = checkout_booking(booking)
-                results.append(payment.id)
-            except Exception as exc:  # noqa: BLE001
-                errors.append(exc)
-            finally:
-                connection.close()
-
-        threads = [threading.Thread(target=attempt) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert errors == []
-        assert Payment.objects.filter(booking=booking).count() == 1
-        assert len(results) == 2
-        assert len(set(results)) == 1
-
-    def test_stripe_error_maps_to_payment_gateway_error(self, monkeypatch):
-        booking = BookingFactory(
-            status=Booking.Status.PENDING, total_amount=Decimal("15.00")
-        )
-
-        def _boom(*args, **kwargs):
-            raise stripe.error.APIConnectionError("could not connect to Stripe")
-
-        monkeypatch.setattr("apps.payments.services.stripe.PaymentIntent.create", _boom)
-
-        with pytest.raises(PaymentGatewayError):
+        with pytest.raises(BookingExpiredError):
             checkout_booking(booking)
+        create.assert_not_called()
 
-        assert Payment.objects.filter(booking=booking).count() == 0
-
-    def test_creates_payment_with_correct_cents_conversion(self, monkeypatch):
-        booking = BookingFactory(
-            status=Booking.Status.PENDING, total_amount=Decimal("49.99")
-        )
-        fake_intent = MagicMock(id="pi_test_123", client_secret="pi_test_123_secret")
-        mock_create = MagicMock(return_value=fake_intent)
+    def test_refuses_when_the_event_is_no_longer_on_sale(self, monkeypatch):
+        create = MagicMock()
         monkeypatch.setattr(
-            "apps.payments.services.stripe.PaymentIntent.create", mock_create
+            "apps.payments.services.stripe.PaymentIntent.create", create
         )
+        booking = unpaid_booking(event=EventFactory(status=Event.Status.CANCELLED))
 
-        payment = checkout_booking(booking)
-
-        assert payment.amount == 4999
-        assert payment.currency == "usd"
-        assert payment.stripe_payment_intent_id == "pi_test_123"
-        mock_create.assert_called_once()
-        _, kwargs = mock_create.call_args
-        assert kwargs["idempotency_key"] == booking.idempotency_key
-
-    def test_retried_checkout_does_not_call_stripe_twice(self, monkeypatch):
-        booking = BookingFactory(
-            status=Booking.Status.PENDING, total_amount=Decimal("10.00")
-        )
-        fake_intent = MagicMock(id="pi_test_456", client_secret="pi_test_456_secret")
-        mock_create = MagicMock(return_value=fake_intent)
-        monkeypatch.setattr(
-            "apps.payments.services.stripe.PaymentIntent.create", mock_create
-        )
-
-        first = checkout_booking(booking)
-        second = checkout_booking(booking)
-
-        assert mock_create.call_count == 1
-        assert first.id == second.id
-
-    @pytest.mark.parametrize(
-        "dollars,expected_cents",
-        [
-            (Decimal("9.99"), 999),
-            (Decimal("100.00"), 10000),
-            (Decimal("0.01"), 1),
-            (Decimal("19.995"), 2000),
-        ],
-    )
-    def test_cents_conversion_exact_for_representative_values(
-        self, monkeypatch, dollars, expected_cents
-    ):
-        booking = BookingFactory(status=Booking.Status.PENDING, total_amount=dollars)
-        fake_intent = MagicMock(id="pi_test_x", client_secret="pi_test_x_secret")
-        monkeypatch.setattr(
-            "apps.payments.services.stripe.PaymentIntent.create",
-            MagicMock(return_value=fake_intent),
-        )
-
-        payment = checkout_booking(booking)
-        assert payment.amount == expected_cents
+        with pytest.raises(EventClosedError):
+            checkout_booking(booking)
+        create.assert_not_called()
 
 
 class TestSweepExpiredPendingBookings:
@@ -348,7 +276,7 @@ class TestSweepExpiredPendingBookings:
     ):
         mock_notify = MagicMock()
         monkeypatch.setattr(
-            "apps.bookings.services.notify_internal_broadcast", mock_notify
+            "apps.seating.services.notify_internal_broadcast", mock_notify
         )
 
         user = UserFactory()
@@ -365,7 +293,7 @@ class TestSweepExpiredPendingBookings:
         seat.refresh_from_db()
         assert booking.status == Booking.Status.CANCELLED
         assert seat.status == EventSeat.Status.AVAILABLE
-        assert seat.held_booking_id is None
+        assert not booking.held_seats().filter(id=seat.id).exists()
         mock_notify.assert_called_once()
         _, kwargs = mock_notify.call_args
         assert kwargs["seat_ids"] == [seat.id]
@@ -374,7 +302,7 @@ class TestSweepExpiredPendingBookings:
     def test_booking_still_within_window_is_left_alone(self, monkeypatch):
         mock_notify = MagicMock()
         monkeypatch.setattr(
-            "apps.bookings.services.notify_internal_broadcast", mock_notify
+            "apps.seating.services.notify_internal_broadcast", mock_notify
         )
 
         user = UserFactory()
@@ -392,7 +320,7 @@ class TestSweepExpiredPendingBookings:
     def test_already_confirmed_booking_is_untouched_even_if_stale(self, monkeypatch):
         mock_notify = MagicMock()
         monkeypatch.setattr(
-            "apps.bookings.services.notify_internal_broadcast", mock_notify
+            "apps.seating.services.notify_internal_broadcast", mock_notify
         )
 
         user = UserFactory()
@@ -414,7 +342,7 @@ class TestSweepExpiredPendingBookings:
     ):
         mock_notify = MagicMock()
         monkeypatch.setattr(
-            "apps.bookings.services.notify_internal_broadcast", mock_notify
+            "apps.seating.services.notify_internal_broadcast", mock_notify
         )
 
         user = UserFactory()
@@ -479,3 +407,10 @@ class TestReleasePendingBookingsForEvent:
         seat.refresh_from_db()
         assert booking.status == Booking.Status.PENDING
         assert seat.status == EventSeat.Status.HELD
+
+
+def test_a_booking_knows_its_event_from_its_seats():
+    event = EventFactory()
+    booking = paid_booking(event, (TicketTierFactory(event=event), "10.00"))
+    assert booking.event == event
+    assert BookingFactory().event is None

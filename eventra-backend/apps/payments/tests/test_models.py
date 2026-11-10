@@ -16,8 +16,3 @@ def test_booking_payment_relationship_is_unique():
 def test_default_status_is_pending():
     payment = PaymentFactory()
     assert payment.status == Payment.Status.PENDING
-
-
-def test_default_currency_is_usd():
-    payment = PaymentFactory()
-    assert payment.currency == "usd"

@@ -6,6 +6,8 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from apps.common.constants import Roles
 from apps.common.permissions import IsAdmin
+from apps.tickets.models import Ticket
+from apps.tickets.services import forget_ticket_pdfs
 
 from .models import User
 from .serializers import (
@@ -92,6 +94,12 @@ class MeView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         return self.request.user
+
+    def perform_update(self, serializer):
+        name_before = self.request.user.full_name
+        user = serializer.save()
+        if user.full_name != name_before:
+            forget_ticket_pdfs(Ticket.objects.filter(booking__user=user))
 
 
 class AccountDeletionView(generics.GenericAPIView):

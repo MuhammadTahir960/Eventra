@@ -10,43 +10,48 @@ from apps.events.services import get_visible_event_by_slug_or_404
 from apps.users.models import User
 from apps.users.services import validate_and_consume_ws_ticket
 
+from .constants import (
+    CLOSE_EVENT_NOT_VISIBLE,
+    CLOSE_INVALID_TICKET,
+    CLOSE_RATE_LIMITED,
+    CLOSE_UNEXPECTED_MESSAGE,
+)
 from .models import EventSeat
 from .serializers import serialize_seats_for_ws
 
-CLOSE_INVALID_TICKET = 4401  # missing / invalid / expired / already-used ticket
-CLOSE_EVENT_NOT_VISIBLE = 4404  # event doesn't exist, or isn't visible to this user
-CLOSE_UNEXPECTED_MESSAGE = 4400  # client sent something on this read-only socket
-CLOSE_RATE_LIMITED = 4429  # too many connection attempts (mirrors HTTP 429)
-
 
 class SeatConsumer(AsyncJsonWebsocketConsumer):
+    async def _refuse(self, code):
+        await self.accept()
+        await self.close(code=code)
+
     async def connect(self):
         self.group_name = None
 
         client_ip = self._get_client_ip()
         if await sync_to_async(self._ip_rate_limited)(client_ip):
-            await self.close(code=CLOSE_RATE_LIMITED)
+            await self._refuse(CLOSE_RATE_LIMITED)
             return
 
         ticket = self._ticket_from_query_string()
         user_id = await sync_to_async(validate_and_consume_ws_ticket)(ticket)
         if user_id is None:
-            await self.close(code=CLOSE_INVALID_TICKET)
+            await self._refuse(CLOSE_INVALID_TICKET)
             return
 
         if await sync_to_async(self._user_rate_limited)(user_id):
-            await self.close(code=CLOSE_RATE_LIMITED)
+            await self._refuse(CLOSE_RATE_LIMITED)
             return
 
         user = await sync_to_async(self._get_active_user)(user_id)
         if user is None:
-            await self.close(code=CLOSE_INVALID_TICKET)
+            await self._refuse(CLOSE_INVALID_TICKET)
             return
 
         event_slug = self.scope["url_route"]["kwargs"]["event_slug"]
         event = await sync_to_async(self._get_visible_event)(user, event_slug)
         if event is None:
-            await self.close(code=CLOSE_EVENT_NOT_VISIBLE)
+            await self._refuse(CLOSE_EVENT_NOT_VISIBLE)
             return
 
         self.group_name = f"seats_{event.slug}"

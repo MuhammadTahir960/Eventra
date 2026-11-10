@@ -4,9 +4,9 @@ import { EmptyState } from '@/components/EmptyState'
 import { Notice } from '@/components/Notice'
 import { PageHeader } from '@/components/PageHeader'
 import { Pagination } from '@/components/Pagination'
-import { ApiError } from '@/lib/api-client'
+import { errorMessage } from '@/lib/api-client'
 import { MatchRow } from '../components/MatchRow'
-import { DEFAULT_FILTERS } from '../filters'
+import { DEFAULT_FILTERS } from '../constants'
 import { useEvents } from '../hooks'
 import { bySoonest, useEventLookups } from '../lookups'
 import type { EventItem } from '../types'
@@ -51,9 +51,7 @@ export function SportsPage() {
 
       {matches.isError ? (
         <Notice tone="error">
-          {matches.error instanceof ApiError
-            ? matches.error.message
-            : 'Matches could not be loaded.'}{' '}
+          {errorMessage(matches.error, 'Matches could not be loaded.')}{' '}
           <button
             type="button"
             className="font-medium underline"

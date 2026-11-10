@@ -3,12 +3,8 @@ import { ArrowDown01Icon, Search01Icon } from '@hugeicons/core-free-icons'
 import type { FormEvent, ReactNode } from 'react'
 import type { Category } from '@/features/catalog/types'
 import { cn } from '@/lib/utils'
-import {
-  DEFAULT_FILTERS,
-  type EventDates,
-  type EventFilters,
-  type EventWhen,
-} from '../filters'
+import { type EventDates, type EventFilters, type EventWhen } from '../filters'
+import { DEFAULT_FILTERS } from '../constants'
 
 interface EventFiltersBarProps {
   filters: EventFilters

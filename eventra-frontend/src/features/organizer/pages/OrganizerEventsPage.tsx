@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { HoldToConfirmButton } from '@/components/HoldToConfirmButton'
@@ -14,11 +13,19 @@ import { Input } from '@/components/ui/input'
 import { useEventLookups } from '@/features/events/lookups'
 import { EVENT_STATUS } from '@/features/events/status'
 import type { EventItem } from '@/features/events/types'
-import { ApiError } from '@/lib/api-client'
-import { formatDateTime, toLocalInput } from '@/lib/format'
-import { useCancelEvent, useOrganizerEvents, useRunningLate } from '../api'
-import { canRunLate } from '../running-late'
+import { errorMessage, firstFieldErrors } from '@/lib/api-client'
+import { toLocalInput } from '@/lib/format'
+import {
+  useCancelEvent,
+  useOrganizerEvents,
+  usePostponeEvent,
+  useRunningLate,
+} from '../api'
+import { canPostpone, canRunLate } from '../running-late'
 import { usePageTitle } from '@/lib/use-page-title'
+import { EventTitleCell } from '@/features/events/components/EventTitleCell'
+import { TableFrame } from '@/components/TableFrame'
+import { LoadingBlock } from '@/components/LoadingBlock'
 
 const TERMINAL: EventItem['status'][] = ['cancelled', 'completed']
 
@@ -29,9 +36,7 @@ export function RunningLateButton({ event }: { event: EventItem }) {
   const runLate = useRunningLate(event.id)
   const fieldError = missing
     ? 'Pick a new end time.'
-    : runLate.error instanceof ApiError
-      ? runLate.error.fieldErrors.end_datetime?.[0]
-      : undefined
+    : firstFieldErrors(runLate.error).end_datetime
 
   return (
     <ConfirmDialog
@@ -89,9 +94,110 @@ export function RunningLateButton({ event }: { event: EventItem }) {
       </FormField>
       {runLate.isError && !fieldError && (
         <Notice tone="error" className="mt-3">
-          {runLate.error instanceof ApiError
-            ? runLate.error.message
-            : 'The end time could not be changed.'}
+          {errorMessage(runLate.error, 'The end time could not be changed.')}
+        </Notice>
+      )}
+    </ConfirmDialog>
+  )
+}
+
+export function PostponeButton({ event }: { event: EventItem }) {
+  const [open, setOpen] = useState(false)
+  const [start, setStart] = useState('')
+  const [end, setEnd] = useState('')
+  const [missing, setMissing] = useState(false)
+  const postpone = usePostponeEvent(event.id)
+  const fields = firstFieldErrors(postpone.error)
+  const startError =
+    missing && !start ? 'Pick the new start.' : fields.start_datetime
+  const endError = missing && !end ? 'Pick the new end.' : fields.end_datetime
+
+  return (
+    <ConfirmDialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (next) {
+          setStart(toLocalInput(event.start_datetime))
+          setEnd(toLocalInput(event.end_datetime))
+        } else postpone.reset()
+        setMissing(false)
+      }}
+      trigger={
+        <Button variant="outline" size="sm">
+          Postpone
+        </Button>
+      }
+      title="Postpone this event?"
+      description={
+        <>
+          Move{' '}
+          <strong className="font-medium text-foreground">{event.title}</strong>{' '}
+          to a later date. Tickets stay valid. Buyers are emailed and can get a
+          full refund until a day before the new date.
+        </>
+      }
+      confirmLabel="Postpone event"
+      pending={postpone.isPending}
+      onConfirm={() => {
+        if (!start || !end) return setMissing(true)
+        postpone.mutate(
+          {
+            start_datetime: new Date(start).toISOString(),
+            end_datetime: new Date(end).toISOString(),
+          },
+          {
+            onSuccess: () => {
+              setOpen(false)
+              toast.success('Event postponed', {
+                description: 'Buyers are being emailed the new date.',
+              })
+            },
+          },
+        )
+      }}
+    >
+      <div className="flex flex-col gap-4">
+        <FormField
+          id={`postpone-start-${event.id}`}
+          label="New start"
+          error={startError}
+        >
+          {(control) => (
+            <Input
+              {...control}
+              type="datetime-local"
+              value={start}
+              min={toLocalInput(event.start_datetime)}
+              onChange={(e) => {
+                setStart(e.target.value)
+                setMissing(false)
+              }}
+            />
+          )}
+        </FormField>
+        <FormField
+          id={`postpone-end-${event.id}`}
+          label="New end"
+          error={endError}
+        >
+          {(control) => (
+            <Input
+              {...control}
+              type="datetime-local"
+              value={end}
+              min={start}
+              onChange={(e) => {
+                setEnd(e.target.value)
+                setMissing(false)
+              }}
+            />
+          )}
+        </FormField>
+      </div>
+      {postpone.isError && !startError && !endError && (
+        <Notice tone="error" className="mt-3">
+          {errorMessage(postpone.error, 'The event could not be postponed.')}
         </Notice>
       )}
     </ConfirmDialog>
@@ -125,11 +231,7 @@ export function CancelEventButton({
         })
       },
       onError: (caught) => {
-        setError(
-          caught instanceof ApiError
-            ? caught.message
-            : 'The event could not be cancelled.',
-        )
+        setError(errorMessage(caught, 'The event could not be cancelled.'))
         setAttempt((n) => n + 1)
       },
     })
@@ -219,11 +321,7 @@ export function OrganizerEventsPage() {
       {events.isError ? (
         <Notice tone="error">{events.error.message}</Notice>
       ) : events.isPending ? (
-        <div
-          aria-busy="true"
-          aria-label="Loading events"
-          className="h-64 animate-pulse rounded-lg bg-muted"
-        />
+        <LoadingBlock label="Loading events" className="h-64" />
       ) : list.length === 0 ? (
         <EmptyState
           title="No events yet"
@@ -235,87 +333,71 @@ export function OrganizerEventsPage() {
           }
         />
       ) : (
-        <div className="relative overflow-x-auto rounded-lg border border-border bg-card">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th scope="col">Event</th>
-                <th scope="col">Venue</th>
-                <th scope="col">Status</th>
-                <th scope="col">
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.map((event) => {
-                const status = EVENT_STATUS[event.status]
-                const { venue } = resolve(event)
-                const terminal = TERMINAL.includes(event.status)
-                return (
-                  <tr key={event.id}>
-                    <td className="min-w-64">
-                      <Link
-                        to={`/events/${event.id}`}
-                        className="font-medium underline-offset-4 hover:underline"
+        <TableFrame>
+          <thead>
+            <tr>
+              <th scope="col">Event</th>
+              <th scope="col">Venue</th>
+              <th scope="col">Status</th>
+              <th scope="col">
+                <span className="sr-only">Actions</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((event) => {
+              const status = EVENT_STATUS[event.status]
+              const { venue } = resolve(event)
+              const terminal = TERMINAL.includes(event.status)
+              return (
+                <tr key={event.id}>
+                  <EventTitleCell event={event} />
+                  <td className="text-muted-foreground">
+                    {venue ? `${venue.name}, ${venue.city}` : ''}
+                  </td>
+                  <td>
+                    <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                    {event.status === 'rejected' && event.rejection_reason && (
+                      <span
+                        title={event.rejection_reason}
+                        className="mt-1 line-clamp-2 max-w-64 text-[13px] text-danger"
                       >
-                        {event.title}
-                      </Link>
-                      <span className="tabular block text-[13px] text-muted-foreground">
-                        {formatDateTime(event.start_datetime)}
+                        {event.rejection_reason}
                       </span>
-                    </td>
-                    <td className="text-muted-foreground">
-                      {venue ? `${venue.name}, ${venue.city}` : ''}
-                    </td>
-                    <td>
-                      <StatusBadge tone={status.tone}>
-                        {status.label}
-                      </StatusBadge>
-                      {event.status === 'rejected' &&
-                        event.rejection_reason && (
-                          <span
-                            title={event.rejection_reason}
-                            className="mt-1 line-clamp-2 max-w-64 text-[13px] text-danger"
-                          >
-                            {event.rejection_reason}
-                          </span>
-                        )}
-                    </td>
-                    <td>
-                      <div className="flex justify-end gap-2">
-                        {event.status !== 'pending_approval' &&
-                          event.status !== 'rejected' && (
-                            <ButtonLink
-                              variant="ghost"
-                              size="sm"
-                              to={`/organizer/events/${event.id}/sales`}
-                            >
-                              Sales
-                            </ButtonLink>
-                          )}
-                        {/* Matches are curated by admins; organizers can't edit them */}
-                        {!terminal && event.event_type !== 'sports_match' && (
+                    )}
+                  </td>
+                  <td>
+                    <div className="flex justify-end gap-2">
+                      {event.status !== 'pending_approval' &&
+                        event.status !== 'rejected' && (
                           <ButtonLink
-                            variant="outline"
+                            variant="ghost"
                             size="sm"
-                            to={`/organizer/events/${event.id}`}
+                            to={`/organizer/events/${event.id}/sales`}
                           >
-                            Edit
+                            Sales
                           </ButtonLink>
                         )}
-                        {canRunLate(event) && (
-                          <RunningLateButton event={event} />
-                        )}
-                        {!terminal && <CancelEventButton event={event} />}
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+                      {/* Matches are curated by admins; organizers can't edit them */}
+                      {!terminal && event.event_type !== 'sports_match' && (
+                        <ButtonLink
+                          variant="outline"
+                          size="sm"
+                          to={`/organizer/events/${event.id}`}
+                        >
+                          Edit
+                        </ButtonLink>
+                      )}
+                      {canPostpone(event) && <PostponeButton event={event} />}
+                      {canRunLate(event) && <RunningLateButton event={event} />}
+                      {!terminal && <CancelEventButton event={event} />}
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </TableFrame>
       )}
     </div>
   )

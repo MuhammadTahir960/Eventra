@@ -1,17 +1,29 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
+import { toast } from 'sonner'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { EmptyState } from '@/components/EmptyState'
 import { Notice } from '@/components/Notice'
 import { PageHeader } from '@/components/PageHeader'
 import { StatusBadge } from '@/components/StatusBadge'
 import { TicketStub } from '@/components/TicketStub'
+import { Button } from '@/components/ui/button'
 import { ButtonLink } from '@/components/ui/button-link'
+import { PostponedFrom } from '@/features/events/components/PostponedFrom'
 import { useEventLookups } from '@/features/events/lookups'
 import { compareNatural } from '@/features/seating/layout/layout'
 import type { EventItem } from '@/features/events/types'
+import { errorMessage } from '@/lib/api-client'
 import { formatDateTimeLong } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { TICKET_STATUS, useEventsById, useMyTickets, type Ticket } from '../api'
+import {
+  TICKET_STATUS,
+  useEventsById,
+  useMyTickets,
+  canRefundPostponed,
+  useRefundBooking,
+  type Ticket,
+} from '../api'
 import { usePageTitle } from '@/lib/use-page-title'
 
 type Tab = 'upcoming' | 'past'
@@ -52,13 +64,65 @@ function groupByOrder(
   return [...orders.values()]
 }
 
+// Every ticket cancelled: the order was refunded (event cancelled, or the
+// buyer took a refund for a postponed event)
+function isRefunded(order: Order): boolean {
+  return order.tickets.every((ticket) => ticket.status === 'cancelled')
+}
+
 function isPast(order: Order): boolean {
   // The event couldn't be loaded (removed after a cancellation), so it is
   // over for the buyer: list it under Past, not in Upcoming forever
   if (!order.event) return true
   return (
+    isRefunded(order) ||
     order.event.status === 'completed' ||
     new Date(order.event.end_datetime).getTime() < Date.now()
+  )
+}
+
+function RequestRefundButton({ order }: { order: Order }) {
+  const [open, setOpen] = useState(false)
+  const request = useRefundBooking()
+  const which =
+    order.tickets.length === 1
+      ? 'Your ticket'
+      : `All ${order.tickets.length} tickets`
+
+  return (
+    <ConfirmDialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) request.reset()
+      }}
+      trigger={
+        <Button variant="outline" size="sm" className="mt-3 w-fit">
+          Request a refund
+        </Button>
+      }
+      title="Refund these tickets?"
+      description={`${which} for "${order.title}" will be cancelled and everything you paid goes back on your card. This can't be undone.`}
+      confirmLabel="Refund my tickets"
+      destructive
+      pending={request.isPending}
+      onConfirm={() =>
+        request.mutate(order.booking, {
+          onSuccess: () => {
+            setOpen(false)
+            toast.success('Refund on its way', {
+              description: 'It goes back to the card you paid with.',
+            })
+          },
+        })
+      }
+    >
+      {request.isError && (
+        <Notice tone="error">
+          {errorMessage(request.error, 'The refund could not be requested.')}
+        </Notice>
+      )}
+    </ConfirmDialog>
   )
 }
 
@@ -202,12 +266,15 @@ export function MyTicketsPage() {
                 >
                   <div className="flex flex-col gap-1">
                     {order.event && (
-                      <time
-                        dateTime={order.event.start_datetime}
-                        className="tabular text-[13px] font-medium text-ember-deep"
-                      >
-                        {formatDateTimeLong(order.event.start_datetime)}
-                      </time>
+                      <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <time
+                          dateTime={order.event.start_datetime}
+                          className="tabular text-[13px] font-medium text-ember-deep"
+                        >
+                          {formatDateTimeLong(order.event.start_datetime)}
+                        </time>
+                        <PostponedFrom event={order.event} />
+                      </span>
                     )}
                     <h2 className="font-display text-[30px] leading-tight wrap-anywhere">
                       <Link
@@ -222,12 +289,24 @@ export function MyTicketsPage() {
                         {venue.name}, {venue.address}, {venue.city}
                       </p>
                     )}
-                    {order.event?.status === 'cancelled' && (
+                    {order.event?.status === 'cancelled' ? (
                       <Notice tone="warning" className="mt-3">
                         This event was cancelled. Your payment is refunded to
                         the card you used.
                       </Notice>
+                    ) : (
+                      isRefunded(order) && (
+                        <Notice className="mt-3">
+                          You were refunded for these tickets, to the card you
+                          used.
+                        </Notice>
+                      )
                     )}
+                    {order.event &&
+                      canRefundPostponed(order.event) &&
+                      order.tickets.some((t) => t.status === 'valid') && (
+                        <RequestRefundButton order={order} />
+                      )}
                   </div>
                 </TicketStub>
               </li>

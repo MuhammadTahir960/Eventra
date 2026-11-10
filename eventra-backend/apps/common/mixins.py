@@ -7,6 +7,9 @@ from rest_framework.decorators import action
 from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
 
+from apps.common.constants import Roles
+from apps.common.permissions import has_role
+
 
 def _save_fields(instance, *fields):
     fields = list(fields)
@@ -67,6 +70,12 @@ class SoftDeleteDestroyMixin:
 
 
 class SoftDeleteRestoreMixin:
+    def include_inactive(self) -> bool:
+        wanted = str(self.request.query_params.get("include_inactive", "")).lower()
+        return wanted in ("1", "true", "yes") and has_role(
+            self.request.user, Roles.ADMIN
+        )
+
     def perform_restore_guard(self, instance):
         return None
 

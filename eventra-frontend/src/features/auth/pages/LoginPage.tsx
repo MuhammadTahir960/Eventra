@@ -4,7 +4,7 @@ import { FormField } from '@/components/FormField'
 import { Notice } from '@/components/Notice'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ApiError } from '@/lib/api-client'
+import { ApiError, errorMessage } from '@/lib/api-client'
 import { AuthLayout } from '../components/AuthLayout'
 import { PasswordField } from '../components/PasswordField'
 import { useAuth } from '../auth-store'
@@ -43,9 +43,7 @@ export function LoginPage() {
         // library's wording ("No active account found...") explains neither
         caught instanceof ApiError && caught.status === 401
           ? "That email and password don't match an active account. If you just signed up, open the verification link we emailed you first."
-          : caught instanceof ApiError
-            ? caught.message
-            : 'Something went wrong. Please try again.',
+          : errorMessage(caught, 'Something went wrong. Please try again.'),
       )
       setPending(false)
     }

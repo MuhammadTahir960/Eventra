@@ -1,0 +1,21 @@
+from .models import Event
+
+PUBLIC_STATUSES = [Event.Status.APPROVED, Event.Status.COMPLETED]
+
+DELETABLE_STATUSES = {Event.Status.CANCELLED, Event.Status.COMPLETED}
+
+SENSITIVE_EVENT_FIELDS = frozenset(
+    {"venue", "category", "start_datetime", "end_datetime"}
+)
+
+COMPLETE_PAST_EVENTS_BUFFER_HOURS = 2
+
+MAX_EVENT_LENGTH_DAYS = 14
+
+MAX_EVENT_LEAD_DAYS = 730
+
+ORGANIZER_MIN_NOTICE_HOURS = 24
+
+RUNNING_LATE_OPENS_HOURS = 24
+
+MAX_REJECTION_REASON_LENGTH = 2000

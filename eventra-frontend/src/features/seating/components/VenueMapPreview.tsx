@@ -1,9 +1,6 @@
 import { useMemo, type KeyboardEvent } from 'react'
-import {
-  computeLayout,
-  SEAT_RADIUS,
-  type LayoutSeatInput,
-} from '../layout/layout'
+import { computeLayout, type LayoutSeatInput } from '../layout/layout'
+import { SEAT_RADIUS } from '../layout/constants'
 import { isVenueShape, type VenueShape } from '../layout/shapes'
 import { summarizeSections } from '../layout/summary'
 

@@ -33,16 +33,10 @@ def test_validate_name_blank_guard_is_defensive_but_unreachable_via_is_valid():
         serializer.validate_name("   ")
 
 
-def test_duplicate_sport_name_rejected():
+@pytest.mark.parametrize("name", ["Football", "FOOTBALL"])
+def test_duplicate_sport_name_rejected(name):
     SportFactory(name="Football")
-    serializer = SportSerializer(data={"name": "Football"})
-    assert serializer.is_valid() is False
-    assert "name" in serializer.errors
-
-
-def test_duplicate_sport_name_case_insensitive_rejected():
-    SportFactory(name="Football")
-    serializer = SportSerializer(data={"name": "FOOTBALL"})
+    serializer = SportSerializer(data={"name": name})
     assert serializer.is_valid() is False
     assert "name" in serializer.errors
 

@@ -17,8 +17,12 @@ from apps.bookings.models import Booking
 from apps.common.constants import Roles
 from apps.common.redis import get_redis_client
 from apps.events.models import Event
+from apps.payments.constants import UNFINISHED_REFUND_STATUSES
+from apps.payments.models import Refund
 from apps.payouts.models import OrganizerPayout
 from apps.seating.models import SeatHold
+from apps.tickets.models import Ticket
+from apps.tickets.services import forget_ticket_pdfs
 
 from .models import User
 from .tokens import (
@@ -229,13 +233,15 @@ def account_deletion_blockers(user: User) -> list[str]:
             "You have a checkout in progress. Finish it, or wait a few minutes "
             "for it to expire."
         )
-    if bookings.filter(
-        models.Q(status=Booking.Status.REFUND_FAILED)
-        | models.Q(
+    if (
+        Refund.objects.filter(
+            booking__user=user, status__in=UNFINISHED_REFUND_STATUSES
+        ).exists()
+        or bookings.filter(
             status=Booking.Status.CONFIRMED,
             tickets__event_seat__event__status=Event.Status.CANCELLED,
-        )
-    ).exists():
+        ).exists()
+    ):
         reasons.append("A refund to you is still being processed.")
 
     events = Event.all_objects.filter(organizer=user)
@@ -257,10 +263,16 @@ def account_deletion_blockers(user: User) -> list[str]:
         .exists()
     ):
         reasons.append("You have completed events that haven't been paid out yet.")
-    if Booking.objects.filter(
-        tickets__event_seat__event__in=events.filter(status=Event.Status.CANCELLED),
-        status__in=(Booking.Status.CONFIRMED, Booking.Status.REFUND_FAILED),
-    ).exists():
+    cancelled = events.filter(status=Event.Status.CANCELLED)
+    if (
+        Booking.objects.filter(
+            tickets__event_seat__event__in=cancelled, status=Booking.Status.CONFIRMED
+        ).exists()
+        or Refund.objects.filter(
+            items__ticket__event_seat__event__in=cancelled,
+            status__in=UNFINISHED_REFUND_STATUSES,
+        ).exists()
+    ):
         reasons.append("Refunds for a cancelled event of yours are still in progress.")
 
     if (
@@ -293,6 +305,8 @@ def delete_account(user: User, password: str) -> None:
         original_email, first_name = user.email, user.first_name
         user.email = f"deleted-{user.id}@deleted.eventra.invalid"
         user.first_name, user.last_name, user.gender = "Deleted", "user", ""
+        tickets = Ticket.objects.filter(booking__user=user)
+        transaction.on_commit(lambda: forget_ticket_pdfs(tickets), robust=True)
         user.set_unusable_password()
         user.is_active = False
         user.is_email_verified = False

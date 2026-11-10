@@ -1,4 +1,3 @@
-import { type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { EmptyState } from '@/components/EmptyState'
 import { Notice } from '@/components/Notice'
@@ -6,14 +5,14 @@ import { PageHeader } from '@/components/PageHeader'
 import { Pagination } from '@/components/Pagination'
 import { StatusBadge } from '@/components/StatusBadge'
 import { UserAvatar } from '@/components/UserAvatar'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
-import { formatDateTime } from '@/lib/format'
 import { pageParam } from '@/lib/ids'
-import { cn } from '@/lib/utils'
 import { useAdminUsers, type AdminUserFilters } from '../api'
 import { usePageTitle } from '@/lib/use-page-title'
+import { LoadingBlock } from '@/components/LoadingBlock'
+import { SearchForm } from '@/components/SearchForm'
+import { TableFrame } from '@/components/TableFrame'
+import { formatDateTime } from '@/lib/format'
 
 const ROLE_LABEL = {
   attendee: 'Attendee',
@@ -43,16 +42,6 @@ export function UsersPage() {
   const users = useAdminUsers(filters)
   const list = users.data?.results ?? []
 
-  function onSearch(submit: FormEvent<HTMLFormElement>) {
-    submit.preventDefault()
-    const value = new FormData(submit.currentTarget).get('q')
-    setFilters({
-      ...filters,
-      search: typeof value === 'string' ? value : '',
-      page: 1,
-    })
-  }
-
   return (
     <div className="flex flex-col gap-8">
       <PageHeader
@@ -62,28 +51,13 @@ export function UsersPage() {
       />
 
       <div className="flex flex-col gap-3 sm:flex-row">
-        {/* key remounts the box when the URL search changes (back button) */}
-        <form
-          key={filters.search}
-          role="search"
-          onSubmit={onSearch}
-          className="flex flex-1 gap-2"
-        >
-          <label htmlFor="user-search" className="sr-only">
-            Search by email
-          </label>
-          <Input
-            id="user-search"
-            name="q"
-            type="search"
-            maxLength={100}
-            placeholder="Search by email…"
-            defaultValue={filters.search}
-          />
-          <Button type="submit" variant="outline">
-            Search
-          </Button>
-        </form>
+        <SearchForm
+          id="user-search"
+          label="Search by email"
+          placeholder="Search by email…"
+          value={filters.search}
+          onSearch={(search) => setFilters({ ...filters, search, page: 1 })}
+        />
         <label htmlFor="user-role" className="sr-only">
           Role
         </label>
@@ -109,62 +83,49 @@ export function UsersPage() {
       {users.isError ? (
         <Notice tone="error">{users.error.message}</Notice>
       ) : users.isPending ? (
-        <div
-          aria-busy="true"
-          aria-label="Loading users"
-          className="h-64 animate-pulse rounded-lg bg-muted"
-        />
+        <LoadingBlock label="Loading users" className="h-64" />
       ) : list.length === 0 ? (
         <EmptyState title="No users match" body="Try another email or role." />
       ) : (
         <>
-          <div
-            className={cn(
-              'relative overflow-x-auto rounded-lg border border-border bg-card',
-              users.isPlaceholderData && 'opacity-60',
-            )}
-          >
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th scope="col">User</th>
-                  <th scope="col">Role</th>
-                  <th scope="col">Account</th>
-                  <th scope="col">Joined</th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.map((user) => (
-                  <tr key={user.id}>
-                    <td className="min-w-64">
-                      <span className="flex items-center gap-3">
-                        <UserAvatar user={user} size={32} />
-                        <span className="min-w-0">
-                          <span className="block font-medium">
-                            {user.first_name} {user.last_name}
-                          </span>
-                          <span className="block truncate text-[13px] text-muted-foreground">
-                            {user.email}
-                          </span>
+          <TableFrame dimmed={users.isPlaceholderData}>
+            <thead>
+              <tr>
+                <th scope="col">User</th>
+                <th scope="col">Role</th>
+                <th scope="col">Account</th>
+                <th scope="col">Joined</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((user) => (
+                <tr key={user.id}>
+                  <td className="min-w-64">
+                    <span className="flex items-center gap-3">
+                      <UserAvatar user={user} size={32} />
+                      <span className="min-w-0">
+                        <span className="block font-medium">
+                          {user.first_name} {user.last_name}
+                        </span>
+                        <span className="block truncate text-[13px] text-muted-foreground">
+                          {user.email}
                         </span>
                       </span>
-                    </td>
-                    <td>{ROLE_LABEL[user.role]}</td>
-                    <td>
-                      <StatusBadge
-                        tone={user.is_active ? 'success' : 'neutral'}
-                      >
-                        {user.is_active ? 'Active' : 'Inactive'}
-                      </StatusBadge>
-                    </td>
-                    <td className="tabular text-muted-foreground">
-                      {formatDateTime(user.created_at)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </span>
+                  </td>
+                  <td>{ROLE_LABEL[user.role]}</td>
+                  <td>
+                    <StatusBadge tone={user.is_active ? 'success' : 'neutral'}>
+                      {user.is_active ? 'Active' : 'Inactive'}
+                    </StatusBadge>
+                  </td>
+                  <td className="tabular text-muted-foreground">
+                    {formatDateTime(user.created_at)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </TableFrame>
           <Pagination
             page={filters.page}
             count={users.data.count}

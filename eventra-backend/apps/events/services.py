@@ -7,7 +7,19 @@ from rest_framework.generics import get_object_or_404
 
 from apps.bookings.models import Booking
 from apps.common.constants import Roles
+from apps.payments.services import refund_price_drops
+from apps.tickets.models import Ticket
+from apps.tickets.services import forget_ticket_pdfs
 
+from .constants import (
+    COMPLETE_PAST_EVENTS_BUFFER_HOURS,
+    DELETABLE_STATUSES,
+    MAX_EVENT_LENGTH_DAYS,
+    MAX_REJECTION_REASON_LENGTH,
+    PUBLIC_STATUSES,
+    RUNNING_LATE_OPENS_HOURS,
+    SENSITIVE_EVENT_FIELDS,
+)
 from .models import Event, TicketTier
 
 
@@ -47,20 +59,12 @@ class EventEndNotExtendableError(Exception):
     """Raised when "running late" targets an event that isn't on sale or in review."""
 
 
+class EventNotPostponableError(Exception):
+    """Raised when postponing an event that isn't on sale or has already started."""
+
+
 class InvalidEventEndError(Exception):
     """Raised when a "running late" end time is earlier, in the past or too far out."""
-
-
-PUBLIC_STATUSES = [Event.Status.APPROVED, Event.Status.COMPLETED]
-DELETABLE_STATUSES = {Event.Status.CANCELLED, Event.Status.COMPLETED}
-SENSITIVE_EVENT_FIELDS = frozenset(
-    {"venue", "category", "start_datetime", "end_datetime"}
-)
-COMPLETE_PAST_EVENTS_BUFFER_HOURS = 2
-MAX_EVENT_LENGTH_DAYS = 14
-MAX_EVENT_LEAD_DAYS = 730
-ORGANIZER_MIN_NOTICE_HOURS = 24
-RUNNING_LATE_OPENS_HOURS = 24
 
 
 def ensure_event_deletable(event: Event) -> None:
@@ -127,9 +131,6 @@ def should_retrigger_approval_for_tier(tier: TicketTier) -> bool:
     return tier.event.organizer.role != Roles.ADMIN
 
 
-MAX_REJECTION_REASON_LENGTH = 2000
-
-
 def paid_bookings(event) -> QuerySet:
     return Booking.objects.filter(
         tickets__event_seat__event=event, status=Booking.Status.CONFIRMED
@@ -156,6 +157,7 @@ def _approve_locked(event: Event) -> Event:
     event.rejection_reason = ""
     event.save(update_fields=["status", "rejection_reason", "updated_at"])
     _email_buyers_on_commit("send_event_updated_email", event, _paid_buyer_ids(event))
+    refund_price_drops(event)
     return event
 
 
@@ -354,4 +356,38 @@ def extend_event_end(event: Event, new_end) -> Event:
             _email_buyers_on_commit(
                 "send_event_running_late_email", event, _paid_buyer_ids(event)
             )
+    return event
+
+
+def postpone_event(event: Event, start, end) -> Event:
+    with transaction.atomic():
+        lock_event(event)
+        if event.status not in (Event.Status.APPROVED, Event.Status.PENDING_APPROVAL):
+            raise EventNotPostponableError(
+                "Only an event on sale or in review can be postponed."
+            )
+        if event.start_datetime <= timezone.now():
+            raise EventNotPostponableError(
+                "An event that has started can't be postponed."
+            )
+        if start <= event.start_datetime:
+            raise EventNotPostponableError(
+                "The event has just been moved. Reload and try again."
+            )
+
+        if event.postponed_from is None:
+            event.postponed_from = event.start_datetime
+        event.start_datetime, event.end_datetime = start, end
+        event.save(
+            update_fields=[
+                "start_datetime",
+                "end_datetime",
+                "postponed_from",
+                "updated_at",
+            ]
+        )
+        forget_ticket_pdfs(Ticket.objects.filter(event_seat__event=event))
+        _email_buyers_on_commit(
+            "send_event_postponed_email", event, _paid_buyer_ids(event)
+        )
     return event

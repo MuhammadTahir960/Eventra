@@ -1,7 +1,6 @@
 from rest_framework import status, viewsets
 from rest_framework.response import Response
 
-from apps.common.constants import Roles
 from apps.common.mixins import SoftDeleteDestroyMixin, SoftDeleteRestoreMixin
 from apps.common.permissions import IsAdminForWrite
 from apps.events.services import find_blocking_upcoming_event
@@ -19,16 +18,7 @@ class CategoryViewSet(
     http_method_names = ["get", "post", "patch", "delete"]
 
     def get_queryset(self):
-        user = self.request.user
-        include_inactive = str(
-            self.request.query_params.get("include_inactive", "")
-        ).lower() in ("1", "true", "yes")
-        if (
-            include_inactive
-            and user
-            and user.is_authenticated
-            and user.role == Roles.ADMIN
-        ):
+        if self.include_inactive():
             return Category.all_objects.all()
         return Category.objects.all()
 

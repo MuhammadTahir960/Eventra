@@ -169,3 +169,20 @@ export async function apiDownload(
   }
   return response.blob()
 }
+
+// What to show the user: the server's message, or `fallback` when the request
+// never got a usable answer (a bug or a network failure)
+export function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof ApiError ? error.message : fallback
+}
+
+// Each field's first message, ready to show under its input
+export function firstFieldErrors(error: unknown): Record<string, string> {
+  if (!(error instanceof ApiError)) return {}
+  return Object.fromEntries(
+    Object.entries(error.fieldErrors).map(([field, messages]) => [
+      field,
+      messages[0],
+    ]),
+  )
+}

@@ -7,7 +7,7 @@ pytestmark = pytest.mark.django_db
 
 
 def _payload(**overrides):
-    payload = {"name": "New Category", "icon": "star", "sort_order": 0}
+    payload = {"name": "New Category", "icon": "music", "sort_order": 0}
     payload.update(overrides)
     return payload
 
@@ -39,16 +39,10 @@ def test_id_and_slug_are_read_only():
 # ==================================================
 
 
-def test_duplicate_active_name_rejected():
+@pytest.mark.parametrize("name", ["Music", "MUSIC"])
+def test_duplicate_active_name_rejected(name):
     CategoryFactory(name="Music")
-    serializer = CategorySerializer(data=_payload(name="Music"))
-    assert serializer.is_valid() is False
-    assert "name" in serializer.errors
-
-
-def test_duplicate_check_is_case_insensitive():
-    CategoryFactory(name="Music")
-    serializer = CategorySerializer(data=_payload(name="MUSIC"))
+    serializer = CategorySerializer(data=_payload(name=name))
     assert serializer.is_valid() is False
     assert "name" in serializer.errors
 
@@ -98,7 +92,7 @@ def test_update_excludes_self_from_duplicate_check():
 
 def test_partial_update_without_name_still_validates_against_existing_name():
     category = CategoryFactory(name="Music")
-    serializer = CategorySerializer(category, data={"icon": "guitar"}, partial=True)
+    serializer = CategorySerializer(category, data={"icon": "tools"}, partial=True)
     assert serializer.is_valid(), serializer.errors
 
 
@@ -116,7 +110,7 @@ def test_update_into_a_conflicting_name_rejected():
 
 
 def test_missing_name_rejected():
-    serializer = CategorySerializer(data={"icon": "star"})
+    serializer = CategorySerializer(data={"icon": "music"})
     assert serializer.is_valid() is False
     assert "name" in serializer.errors
 
@@ -137,3 +131,10 @@ def test_name_over_max_length_rejected():
     serializer = CategorySerializer(data=_payload(name="A" * 101))
     assert serializer.is_valid() is False
     assert "name" in serializer.errors
+
+
+@pytest.mark.parametrize("icon", ["star", "<svg>", "", "x" * 30])
+def test_icon_must_be_one_of_the_known_keys(icon):
+    serializer = CategorySerializer(data=_payload(name="Jazz Nights", icon=icon))
+    assert not serializer.is_valid()
+    assert "icon" in serializer.errors

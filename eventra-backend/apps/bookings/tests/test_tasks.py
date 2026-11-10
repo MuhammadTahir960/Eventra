@@ -42,7 +42,7 @@ class TestReleaseExpiredBookingsTask:
         self, monkeypatch, django_capture_on_commit_callbacks
     ):
         monkeypatch.setattr(
-            "apps.bookings.services.notify_internal_broadcast", MagicMock()
+            "apps.seating.services.notify_internal_broadcast", MagicMock()
         )
         user = UserFactory()
         booking, seat = _stale_pending_booking(user)
@@ -54,4 +54,4 @@ class TestReleaseExpiredBookingsTask:
         seat.refresh_from_db()
         assert booking.status == Booking.Status.CANCELLED
         assert seat.status == EventSeat.Status.AVAILABLE
-        assert seat.held_booking_id is None
+        assert not booking.held_seats().filter(id=seat.id).exists()

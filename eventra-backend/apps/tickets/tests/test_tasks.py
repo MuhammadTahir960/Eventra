@@ -6,6 +6,7 @@ from django.core.cache import cache
 from apps.bookings.factories import BookingFactory
 from apps.events.factories import EventFactory
 from apps.seating.factories import EventSeatFactory
+from apps.tickets.factories import TicketFactory
 
 from ..models import Ticket
 from ..tasks import generate_ticket_pdf
@@ -29,7 +30,7 @@ class TestGenerateTicketPdfTask:
         event = EventFactory(status="approved")
         booking = BookingFactory()
         tickets = [
-            Ticket.objects.create(
+            TicketFactory(
                 booking=booking,
                 event_seat=EventSeatFactory(event=event),
                 status=Ticket.Status.VALID,
@@ -48,12 +49,12 @@ class TestGenerateTicketPdfTask:
     ):
         booking = BookingFactory()
         event = EventFactory(status="approved")
-        good_ticket = Ticket.objects.create(
+        good_ticket = TicketFactory(
             booking=booking,
             event_seat=EventSeatFactory(event=event),
             status=Ticket.Status.VALID,
         )
-        bad_ticket = Ticket.objects.create(
+        bad_ticket = TicketFactory(
             booking=booking,
             event_seat=EventSeatFactory(event=event),
             status=Ticket.Status.VALID,

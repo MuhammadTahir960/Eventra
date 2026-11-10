@@ -1,8 +1,8 @@
 from datetime import timedelta
-from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
+import stripe
 from django.utils import timezone
 
 from apps.bookings.factories import BookingFactory
@@ -10,22 +10,30 @@ from apps.bookings.models import Booking
 from apps.events.factories import EventFactory
 from apps.seating.factories import EventSeatFactory
 from apps.seating.models import EventSeat
+from apps.tickets.factories import TicketFactory
 from apps.tickets.models import Ticket
 
+from ..constants import REFUND_MAX_ATTEMPTS
 from ..factories import PaymentFactory
-from ..models import Payment
-from ..services import refund_orphaned_payments
-from ..tasks import refund_event_bookings_task, sweep_unrefunded_cancelled_events
+from ..models import Payment, Refund
+from ..tasks import (
+    refund_event_bookings_task,
+    retry_event_refunds_task,
+    sweep_unrefunded_cancelled_events,
+)
 
 pytestmark = pytest.mark.django_db
 
 
-def _confirmed_booking_for_event(event):
-    booking = BookingFactory(status=Booking.Status.CONFIRMED)
-    seat = EventSeatFactory(
-        event=event, status=EventSeat.Status.BOOKED, price_override=Decimal("25.00")
+def _booking_for_event(event, status=Booking.Status.CONFIRMED):
+    booking = BookingFactory(status=status)
+    seat = EventSeatFactory(event=event, status=EventSeat.Status.BOOKED)
+    ticket_status = (
+        Ticket.Status.VALID
+        if status == Booking.Status.CONFIRMED
+        else Ticket.Status.CANCELLED
     )
-    Ticket.objects.create(booking=booking, event_seat=seat, status=Ticket.Status.VALID)
+    TicketFactory(booking=booking, event_seat=seat, price="25.00", status=ticket_status)
     payment = PaymentFactory(
         booking=booking,
         stripe_payment_intent_id=f"pi_{booking.id}",
@@ -34,123 +42,79 @@ def _confirmed_booking_for_event(event):
     return booking, payment
 
 
-class TestRefundEventBookingsTask:
-    def test_task_delegates_to_the_refund_service_for_every_confirmed_booking(
-        self, monkeypatch
-    ):
-        monkeypatch.setattr("apps.payments.services.stripe.Refund.create", MagicMock())
-        monkeypatch.setattr(
-            "apps.notifications.tasks.send_refund_email.delay", MagicMock()
-        )
-        event = EventFactory(status="cancelled")
-        booking, payment = _confirmed_booking_for_event(event)
+@pytest.fixture
+def stripe_refund(monkeypatch):
+    create = MagicMock(return_value=MagicMock(id="re_test"))
+    monkeypatch.setattr("apps.payments.services.stripe.Refund.create", create)
+    monkeypatch.setattr("apps.notifications.tasks.send_refund_email.delay", MagicMock())
+    return create
 
-        refund_event_bookings_task(str(event.id))
+
+@pytest.fixture
+def sweep(django_capture_on_commit_callbacks):
+    def run():
+        with django_capture_on_commit_callbacks(execute=True):
+            sweep_unrefunded_cancelled_events()
+
+    return run
+
+
+class TestRefundEventBookingsTask:
+    def test_refunds_every_paid_booking_through_the_ledger(
+        self, stripe_refund, django_capture_on_commit_callbacks
+    ):
+        event = EventFactory(status="cancelled")
+        booking, _ = _booking_for_event(event)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            refund_event_bookings_task(str(event.id))
 
         booking.refresh_from_db()
-        payment.refresh_from_db()
+        refund = Refund.objects.get(booking=booking)
         assert booking.status == Booking.Status.REFUNDED
-        assert payment.status == Payment.Status.REFUNDED
-
-    def test_retry_failed_flag_is_actually_wired_through(self, monkeypatch):
-        monkeypatch.setattr("apps.payments.services.stripe.Refund.create", MagicMock())
-        monkeypatch.setattr(
-            "apps.notifications.tasks.send_refund_email.delay", MagicMock()
-        )
-        event = EventFactory(status="cancelled")
-        stuck_booking, stuck_payment = _confirmed_booking_for_event(event)
-        Booking.objects.filter(id=stuck_booking.id).update(
-            status=Booking.Status.REFUND_FAILED
-        )
-        untouched_booking, untouched_payment = _confirmed_booking_for_event(event)
-
-        refund_event_bookings_task(str(event.id), True)
-
-        stuck_booking.refresh_from_db()
-        stuck_payment.refresh_from_db()
-        untouched_booking.refresh_from_db()
-        untouched_payment.refresh_from_db()
-        assert stuck_booking.status == Booking.Status.REFUNDED
-        assert stuck_payment.status == Payment.Status.REFUNDED
-        assert untouched_booking.status == Booking.Status.REFUNDED
-        assert untouched_payment.status == Payment.Status.REFUNDED
-
-    def test_normal_run_leaves_refund_failed_bookings_alone(self, monkeypatch):
-        monkeypatch.setattr("apps.payments.services.stripe.Refund.create", MagicMock())
-        monkeypatch.setattr(
-            "apps.notifications.tasks.send_refund_email.delay", MagicMock()
-        )
-        event = EventFactory(status="cancelled")
-        stuck_booking, _ = _confirmed_booking_for_event(event)
-        Booking.objects.filter(id=stuck_booking.id).update(
-            status=Booking.Status.REFUND_FAILED
-        )
-
-        refund_event_bookings_task(str(event.id))
-
-        stuck_booking.refresh_from_db()
-        assert stuck_booking.status == Booking.Status.REFUND_FAILED
+        assert refund.reason == Refund.Reason.CANCELLED_EVENT
+        assert refund.status == Refund.Status.SUCCEEDED
+        assert stripe_refund.call_args.kwargs["amount"] == 2500
 
 
 class TestSweepUnrefundedCancelledEvents:
-    @pytest.fixture(autouse=True)
-    def _mocks(self, monkeypatch):
-        self.refund = MagicMock()
-        monkeypatch.setattr("apps.payments.services.stripe.Refund.create", self.refund)
-        self.email = MagicMock()
-        monkeypatch.setattr(
-            "apps.notifications.tasks.send_refund_email.delay", self.email
-        )
-
-    def test_recovers_confirmed_bookings_a_crashed_batch_never_reached(self):
+    def test_recovers_confirmed_bookings_a_crashed_batch_never_reached(
+        self, stripe_refund, sweep
+    ):
         event = EventFactory(status="cancelled")
-        booking, payment = _confirmed_booking_for_event(event)
+        booking, _ = _booking_for_event(event)
 
-        sweep_unrefunded_cancelled_events()
+        sweep()
 
         booking.refresh_from_db()
-        payment.refresh_from_db()
         assert booking.status == Booking.Status.REFUNDED
-        assert payment.status == Payment.Status.REFUNDED
+        assert Refund.objects.get().status == Refund.Status.SUCCEEDED
 
-    def test_leaves_refund_failed_bookings_for_the_admin_retry(self):
-        event = EventFactory(status="cancelled")
-        booking, _ = _confirmed_booking_for_event(event)
-        Booking.objects.filter(id=booking.id).update(
-            status=Booking.Status.REFUND_FAILED
-        )
-
-        sweep_unrefunded_cancelled_events()
-
-        booking.refresh_from_db()
-        assert booking.status == Booking.Status.REFUND_FAILED
-        self.refund.assert_not_called()
-
-    def test_ignores_confirmed_bookings_on_events_that_are_not_cancelled(self):
+    def test_ignores_confirmed_bookings_on_events_that_are_not_cancelled(
+        self, stripe_refund, sweep
+    ):
         event = EventFactory(status="approved")
-        booking, _ = _confirmed_booking_for_event(event)
+        booking, _ = _booking_for_event(event)
 
-        sweep_unrefunded_cancelled_events()
+        sweep()
 
         booking.refresh_from_db()
         assert booking.status == Booking.Status.CONFIRMED
-        self.refund.assert_not_called()
+        stripe_refund.assert_not_called()
 
-    def test_second_sweep_is_a_no_op_once_everything_is_refunded(self):
-        event = EventFactory(status="cancelled")
-        _confirmed_booking_for_event(event)
+    def test_second_sweep_is_a_no_op_once_everything_is_refunded(
+        self, stripe_refund, sweep
+    ):
+        _booking_for_event(EventFactory(status="cancelled"))
 
-        sweep_unrefunded_cancelled_events()
-        sweep_unrefunded_cancelled_events()
+        sweep()
+        sweep()
 
-        assert self.refund.call_count == 1
+        assert stripe_refund.call_count == 1
 
     def _orphan(self, booking_status, age_minutes):
-        booking = BookingFactory(status=booking_status)
-        payment = PaymentFactory(
-            booking=booking,
-            stripe_payment_intent_id=f"pi_{booking.id}",
-            status=Payment.Status.SUCCEEDED,
+        booking, payment = _booking_for_event(
+            EventFactory(status="approved"), booking_status
         )
         Payment.objects.filter(id=payment.id).update(
             updated_at=timezone.now() - timedelta(minutes=age_minutes)
@@ -160,94 +124,80 @@ class TestSweepUnrefundedCancelledEvents:
     @pytest.mark.parametrize(
         "status", [Booking.Status.PENDING, Booking.Status.CANCELLED]
     )
-    def test_refunds_captured_payment_with_no_real_booking(self, status):
-        booking, payment = self._orphan(status, age_minutes=30)
+    def test_refunds_captured_payment_with_no_real_booking(
+        self, stripe_refund, sweep, status
+    ):
+        booking, _ = self._orphan(status, age_minutes=30)
 
-        sweep_unrefunded_cancelled_events()
-
-        booking.refresh_from_db()
-        payment.refresh_from_db()
-        assert payment.status == Payment.Status.REFUNDED
-        assert booking.status == Booking.Status.REFUNDED
-
-    def test_orphan_refunded_by_another_path_meanwhile_gets_no_second_email(self):
-        booking, payment = self._orphan(Booking.Status.CANCELLED, age_minutes=30)
-
-        def refunded_elsewhere(**kwargs):
-            Payment.objects.filter(id=payment.id).update(status=Payment.Status.REFUNDED)
-
-        self.refund.side_effect = refunded_elsewhere
-
-        assert refund_orphaned_payments() == 0
+        sweep()
 
         booking.refresh_from_db()
+        refund = Refund.objects.get(booking=booking)
         assert booking.status == Booking.Status.REFUNDED
-        self.email.assert_not_called()
+        assert refund.reason == Refund.Reason.UNAVAILABLE
+        assert refund.status == Refund.Status.SUCCEEDED
 
-    def test_recent_orphan_is_left_for_the_in_flight_webhook(self):
-        _, payment = self._orphan(Booking.Status.PENDING, age_minutes=1)
+    def test_recent_orphan_is_left_for_the_in_flight_webhook(
+        self, stripe_refund, sweep
+    ):
+        booking, _ = self._orphan(Booking.Status.PENDING, age_minutes=1)
 
-        sweep_unrefunded_cancelled_events()
+        sweep()
 
-        payment.refresh_from_db()
-        assert payment.status == Payment.Status.SUCCEEDED
-        self.refund.assert_not_called()
+        assert not Refund.objects.exists()
+        stripe_refund.assert_not_called()
 
-    def test_failed_orphan_refund_is_retried_on_the_next_sweep(self):
-        _, payment = self._orphan(Booking.Status.CANCELLED, age_minutes=30)
-        self.refund.side_effect = [RuntimeError("stripe down"), MagicMock()]
-
-        sweep_unrefunded_cancelled_events()
-        payment.refresh_from_db()
-        assert payment.status == Payment.Status.SUCCEEDED
-
-        sweep_unrefunded_cancelled_events()
-        payment.refresh_from_db()
-        assert payment.status == Payment.Status.REFUNDED
-
-    def test_confirmed_booking_payment_is_never_treated_as_orphan(self):
-        event = EventFactory(status="approved")
-        _, payment = _confirmed_booking_for_event(event)
+    def test_confirmed_booking_payment_is_never_treated_as_orphan(
+        self, stripe_refund, sweep
+    ):
+        _, payment = _booking_for_event(EventFactory(status="approved"))
         Payment.objects.filter(id=payment.id).update(
             updated_at=timezone.now() - timedelta(hours=1)
         )
 
-        sweep_unrefunded_cancelled_events()
+        sweep()
 
-        payment.refresh_from_db()
-        assert payment.status == Payment.Status.SUCCEEDED
+        assert not Refund.objects.exists()
 
-    def test_gives_up_after_max_attempts_and_stops_calling_stripe(self):
-        from ..services import ORPHANED_PAYMENT_MAX_ATTEMPTS
+    def test_a_failed_refund_is_retried_until_it_gives_up(self, stripe_refund, sweep):
+        self._orphan(Booking.Status.CANCELLED, age_minutes=30)
+        stripe_refund.side_effect = stripe.error.APIConnectionError("stripe down")
+        stale = timezone.now() - timedelta(hours=1)
 
-        _, payment = self._orphan(Booking.Status.CANCELLED, age_minutes=30)
-        self.refund.side_effect = RuntimeError("stripe down")
+        for _ in range(REFUND_MAX_ATTEMPTS + 3):
+            sweep()
+            Refund.objects.update(updated_at=stale)
 
-        for _ in range(ORPHANED_PAYMENT_MAX_ATTEMPTS + 3):
-            sweep_unrefunded_cancelled_events()
+        refund = Refund.objects.get()
+        assert refund.status == Refund.Status.FAILED
+        assert refund.attempts == REFUND_MAX_ATTEMPTS
+        assert stripe_refund.call_count == REFUND_MAX_ATTEMPTS
 
-        payment.refresh_from_db()
-        assert self.refund.call_count == ORPHANED_PAYMENT_MAX_ATTEMPTS
-        assert payment.refund_attempts == ORPHANED_PAYMENT_MAX_ATTEMPTS
-        assert payment.status == Payment.Status.SUCCEEDED
 
-    def test_admin_retrigger_resets_the_counter_and_sweeper_retries(self):
-        from django.contrib import admin as dj_admin
+class TestRetryEventRefundsTask:
+    def test_gives_failed_refunds_a_fresh_set_of_attempts(
+        self, stripe_refund, sweep, django_capture_on_commit_callbacks
+    ):
+        event = EventFactory(status="cancelled")
+        booking, _ = _booking_for_event(event)
+        stripe_refund.side_effect = stripe.error.APIConnectionError("stripe down")
+        sweep()
+        Refund.objects.update(attempts=REFUND_MAX_ATTEMPTS)
 
-        from ..admin import PaymentAdmin
-        from ..services import ORPHANED_PAYMENT_MAX_ATTEMPTS
+        stripe_refund.side_effect = None
+        with django_capture_on_commit_callbacks(execute=True):
+            retry_event_refunds_task(str(event.id))
 
-        booking, payment = self._orphan(Booking.Status.CANCELLED, age_minutes=30)
-        Payment.objects.filter(id=payment.id).update(
-            refund_attempts=ORPHANED_PAYMENT_MAX_ATTEMPTS
-        )
-        sweep_unrefunded_cancelled_events()
-        self.refund.assert_not_called()
+        refund = Refund.objects.get(booking=booking)
+        assert refund.status == Refund.Status.SUCCEEDED
+        assert refund.attempts == 0
 
-        model_admin = PaymentAdmin(Payment, dj_admin.site)
-        model_admin.message_user = MagicMock()
-        model_admin.retrigger_refund(MagicMock(), Payment.objects.filter(id=payment.id))
+    def test_never_refunds_the_buyers_of_a_live_event(self, stripe_refund):
+        event = EventFactory(status="approved")
+        booking, _ = _booking_for_event(event)
 
-        sweep_unrefunded_cancelled_events()
-        payment.refresh_from_db()
-        assert payment.status == Payment.Status.REFUNDED
+        retry_event_refunds_task(str(event.id))
+
+        booking.refresh_from_db()
+        assert booking.status == Booking.Status.CONFIRMED
+        assert not Refund.objects.exists()

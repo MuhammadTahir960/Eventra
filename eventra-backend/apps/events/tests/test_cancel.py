@@ -4,8 +4,6 @@ from unittest.mock import MagicMock
 import pytest
 from django.core import mail
 from django.db import connection
-from rest_framework.test import APIClient
-from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.bookings.factories import BookingFactory
 from apps.bookings.models import Booking
@@ -13,22 +11,16 @@ from apps.common.constants import Roles
 from apps.payments.factories import PaymentFactory
 from apps.payments.models import Payment
 from apps.seating.factories import EventSeatFactory
-from apps.tickets.models import Ticket
+from apps.tickets.factories import TicketFactory
 from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory
+from tests.helpers import auth_client
 
 from ..factories import EventFactory, TicketTierFactory
 from ..models import Event
 from ..views import EventViewSet
 
 pytestmark = pytest.mark.django_db
-
-
-def auth_client(user):
-    client = APIClient()
-    access = RefreshToken.for_user(user).access_token
-    client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
-    return client
 
 
 def _paid_booking(event, user, booking_status=Booking.Status.CONFIRMED):
@@ -38,7 +30,7 @@ def _paid_booking(event, user, booking_status=Booking.Status.CONFIRMED):
         seat=SeatFactory(venue=event.venue),
     )
     booking = BookingFactory(user=user, status=booking_status)
-    Ticket.objects.create(booking=booking, event_seat=seat)
+    TicketFactory(booking=booking, event_seat=seat)
     PaymentFactory(booking=booking, status=Payment.Status.SUCCEEDED)
     return booking
 
@@ -47,7 +39,10 @@ class TestCancelledEventEmails:
     def test_buyers_get_the_notice_first_then_the_refund_email(
         self, monkeypatch, django_capture_on_commit_callbacks
     ):
-        monkeypatch.setattr("apps.payments.services.stripe.Refund.create", MagicMock())
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.Refund.create",
+            MagicMock(return_value=MagicMock(id="re_test")),
+        )
         organizer = UserFactory(role=Roles.ORGANIZER)
         event = EventFactory(status=Event.Status.APPROVED, organizer=organizer)
         buyer = UserFactory()
@@ -63,8 +58,8 @@ class TestCancelledEventEmails:
         assert booking.status == Booking.Status.REFUNDED
         assert [(m.to, m.subject) for m in mail.outbox] == [
             ([buyer.email], "An event you booked has been cancelled"),
-            ([buyer.email], "Your Eventra booking has been refunded"),
-            ([buyer.email], "Your Eventra booking has been refunded"),
+            ([buyer.email], "Your booking has been refunded"),
+            ([buyer.email], "Your booking has been refunded"),
         ]
 
     def test_cancelling_an_unsold_event_sends_no_email(
@@ -158,44 +153,32 @@ class TestEventCancelAction:
 
 
 class TestEventRetryRefundsAction:
-    def test_admin_can_retry_refunds_on_cancelled_event(self, monkeypatch):
+    def test_admin_can_retry_an_events_refunds(self, monkeypatch):
         mock_delay = MagicMock()
         monkeypatch.setattr(
-            "apps.events.views.refund_event_bookings_task.delay", mock_delay
+            "apps.events.views.retry_event_refunds_task.delay", mock_delay
         )
         admin = UserFactory(role=Roles.ADMIN)
         event = EventFactory(status=Event.Status.CANCELLED)
 
-        client = auth_client(admin)
-        response = client.post(f"/admin/events/{event.id}/retry-refunds/")
+        response = auth_client(admin).post(f"/admin/events/{event.id}/retry-refunds/")
 
         assert response.status_code == 202
-        mock_delay.assert_called_once_with(str(event.id), retry_failed=True)
+        mock_delay.assert_called_once_with(str(event.id))
 
     def test_non_admin_is_rejected(self, monkeypatch):
+        mock_delay = MagicMock()
         monkeypatch.setattr(
-            "apps.events.views.refund_event_bookings_task.delay", MagicMock()
+            "apps.events.views.retry_event_refunds_task.delay", mock_delay
         )
         organizer = UserFactory(role=Roles.ORGANIZER)
         event = EventFactory(status=Event.Status.CANCELLED, organizer=organizer)
 
-        client = auth_client(organizer)
-        response = client.post(f"/admin/events/{event.id}/retry-refunds/")
+        response = auth_client(organizer).post(
+            f"/admin/events/{event.id}/retry-refunds/"
+        )
 
         assert response.status_code == 403
-
-    def test_non_cancelled_event_returns_409(self, monkeypatch):
-        mock_delay = MagicMock()
-        monkeypatch.setattr(
-            "apps.events.views.refund_event_bookings_task.delay", mock_delay
-        )
-        admin = UserFactory(role=Roles.ADMIN)
-        event = EventFactory(status=Event.Status.APPROVED)
-
-        client = auth_client(admin)
-        response = client.post(f"/admin/events/{event.id}/retry-refunds/")
-
-        assert response.status_code == 409
         mock_delay.assert_not_called()
 
 
@@ -208,6 +191,7 @@ class TestEditRacingCancel:
         )
         owner = UserFactory(role=Roles.ORGANIZER)
         event = EventFactory(organizer=owner, status=Event.Status.APPROVED)
+        SeatFactory(venue=event.venue, section="Upper")
         tier = TicketTierFactory(event=event)
         request = {
             "event": ("patch", f"/events/{event.id}/", {"description": "Edited"}),

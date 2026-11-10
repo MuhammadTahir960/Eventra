@@ -9,7 +9,7 @@ from apps.categories.factories import CategoryFactory
 from apps.common.constants import Roles
 from apps.seating.factories import EventSeatFactory
 from apps.users.factories import UserFactory
-from apps.venues.factories import VenueFactory
+from apps.venues.factories import SeatFactory, VenueFactory
 
 from ..factories import EventFactory, TicketTierFactory
 from ..models import Event
@@ -18,7 +18,6 @@ from ..serializers import (
     TicketTierSerializer,
     TierSectionMappingSerializer,
 )
-from ..services import TierPriceImmutableError
 
 pytestmark = pytest.mark.django_db
 
@@ -224,19 +223,10 @@ def test_create_ticket_tier_assigns_event_from_context():
     assert tier.event_id == event.id
 
 
-def test_negative_price_rejected():
-    event = EventFactory()
+@pytest.mark.parametrize("price", ["-5.00", "0.00"])
+def test_price_must_be_positive(price):
     serializer = TicketTierSerializer(
-        data={"name": "VIP", "price": "-5.00"}, context={"event": event}
-    )
-    assert serializer.is_valid() is False
-    assert "price" in serializer.errors
-
-
-def test_zero_price_rejected():
-    event = EventFactory()
-    serializer = TicketTierSerializer(
-        data={"name": "VIP", "price": "0.00"}, context={"event": event}
+        data={"name": "VIP", "price": price}, context={"event": EventFactory()}
     )
     assert serializer.is_valid() is False
     assert "price" in serializer.errors
@@ -264,7 +254,7 @@ def test_price_update_allowed_when_no_seats_instantiated():
     assert str(updated.price) == "20.00"
 
 
-def test_price_update_blocked_once_seats_instantiated():
+def test_price_can_change_after_seats_exist():
     tier = TicketTierFactory(price="10.00")
     EventSeatFactory(event=tier.event, ticket_tier=tier)
 
@@ -272,8 +262,9 @@ def test_price_update_blocked_once_seats_instantiated():
         tier, data={"price": "20.00"}, partial=True, context={"event": tier.event}
     )
     assert serializer.is_valid(), serializer.errors
-    with pytest.raises(TierPriceImmutableError):
-        serializer.save()
+    serializer.save()
+    tier.refresh_from_db()
+    assert str(tier.price) == "20.00"
 
 
 def test_price_update_retriggers_approval_for_organizer_owned_event():
@@ -321,6 +312,7 @@ def test_updating_name_only_does_not_touch_immutability_check():
 
 def test_create_section_mapping_happy_path():
     tier = TicketTierFactory()
+    SeatFactory(venue=tier.event.venue, section="A")
     serializer = TierSectionMappingSerializer(
         data={"section": "A"}, context={"event": tier.event, "ticket_tier": tier}
     )

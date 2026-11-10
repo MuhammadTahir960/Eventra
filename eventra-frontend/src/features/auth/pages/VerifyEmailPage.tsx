@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { Notice } from '@/components/Notice'
 import { ButtonLink } from '@/components/ui/button-link'
-import { ApiError } from '@/lib/api-client'
+import { errorMessage } from '@/lib/api-client'
 import { authApi } from '../api'
 import { AuthLayout } from '../components/AuthLayout'
 import { usePageTitle } from '@/lib/use-page-title'
@@ -31,9 +31,10 @@ export function VerifyEmailPage() {
       {token && result.isPending && <Notice>Verifying your email…</Notice>}
       {result.isError && (
         <Notice tone="error">
-          {result.error instanceof ApiError
-            ? result.error.message
-            : 'We could not verify your email. Please try again.'}
+          {errorMessage(
+            result.error,
+            'We could not verify your email. Please try again.',
+          )}
         </Notice>
       )}
       {result.isSuccess && (

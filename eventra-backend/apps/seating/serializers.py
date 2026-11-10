@@ -29,11 +29,7 @@ class EventSeatSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_price(self, obj: EventSeat):
-        return (
-            obj.price_override
-            if obj.price_override is not None
-            else obj.ticket_tier.price
-        )
+        return obj.price
 
 
 def serialize_seats_for_ws(seats) -> list[dict]:

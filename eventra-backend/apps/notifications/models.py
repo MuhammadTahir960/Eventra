@@ -12,6 +12,7 @@ class Notification(UUIDBaseModel):
         EVENT_REMINDER = "event_reminder", "Event Reminder"
         EVENT_UPDATED = "event_updated", "Event Updated"
         EVENT_CANCELLED = "event_cancelled", "Event Cancelled"
+        PARTIAL_REFUND = "partial_refund", "Partial Refund"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"

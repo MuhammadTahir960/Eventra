@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { Notice } from '@/components/Notice'
 import { Button } from '@/components/ui/button'
 import { ButtonLink } from '@/components/ui/button-link'
-import { ApiError } from '@/lib/api-client'
+import { errorMessage, firstFieldErrors } from '@/lib/api-client'
 import { authApi } from '../api'
 import { AuthLayout } from '../components/AuthLayout'
 import { PasswordField } from '../components/PasswordField'
@@ -46,14 +46,15 @@ export function ResetPasswordPage() {
       authStore.clear()
       setDone(true)
     } catch (caught) {
-      if (caught instanceof ApiError && caught.fieldErrors.new_password) {
+      const strength = firstFieldErrors(caught).new_password
+      if (strength) {
         // Strength rules (too common, all numeric, ...)
-        setPasswordError(caught.fieldErrors.new_password[0])
-      } else if (caught instanceof ApiError) {
-        // Invalid or expired link, or rate limited
-        setFormError(caught.message)
+        setPasswordError(strength)
       } else {
-        setFormError('Something went wrong. Please try again.')
+        // Invalid or expired link, or rate limited
+        setFormError(
+          errorMessage(caught, 'Something went wrong. Please try again.'),
+        )
       }
     } finally {
       setPending(false)

@@ -1,12 +1,13 @@
 import { isUuid } from '@/lib/ids'
 import type { EventType } from './types'
+import { DAY_MS } from '@/lib/constants'
+import { DATE_PRESETS, MAX_TEXT_LENGTH } from './constants'
 
 // "upcoming" = approved events that haven't started; "past" = completed ones
 export type EventWhen = 'upcoming' | 'past'
 
 // Date presets for upcoming events (the API takes date_from / date_to)
 export type EventDates = '' | 'weekend' | 'week' | 'month'
-const DATE_PRESETS: readonly string[] = ['weekend', 'week', 'month']
 
 export interface EventFilters {
   search: string
@@ -17,18 +18,6 @@ export interface EventFilters {
   dates: EventDates
   page: number
 }
-
-export const DEFAULT_FILTERS: EventFilters = {
-  search: '',
-  category: '',
-  city: '',
-  type: '',
-  when: 'upcoming',
-  dates: '',
-  page: 1,
-}
-
-const MAX_TEXT_LENGTH = 100
 
 // The URL is user-editable, so every value is checked against an allow-list
 // before it is used. Anything unrecognised falls back to the default.
@@ -79,8 +68,6 @@ export function toApiQuery(filters: EventFilters, nowIso: string) {
       : { status: 'completed' }),
   }
 }
-
-const DAY_MS = 24 * 60 * 60 * 1000
 
 // Upper bound for a date preset, in the viewer's local time. "weekend" ends
 // at the start of the coming Monday, so on a Saturday or Sunday it covers

@@ -7,8 +7,3 @@ export const API_BASE_URL: string = (
 
 // WebSocket origin derived from the API origin (http -> ws, https -> wss)
 export const WS_BASE_URL: string = API_BASE_URL.replace(/^http/, 'ws')
-
-// Stripe publishable key (test mode only). The backend exposes no endpoint
-// for it, so it has to be provided at build time.
-export const STRIPE_PUBLISHABLE_KEY: string =
-  import.meta.env.STRIPE_PUBLISHABLE_KEY ?? ''

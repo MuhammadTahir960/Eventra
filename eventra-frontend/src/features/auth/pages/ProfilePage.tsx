@@ -7,7 +7,7 @@ import { UserAvatar } from '@/components/UserAvatar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
-import { ApiError, apiFetch } from '@/lib/api-client'
+import { apiFetch, errorMessage, firstFieldErrors } from '@/lib/api-client'
 import { authStore, useAuth, type SessionUser } from '../auth-store'
 import { DeleteAccountSection } from '../components/DeleteAccountSection'
 import { usePageTitle } from '@/lib/use-page-title'
@@ -66,25 +66,16 @@ export function ProfilePage() {
       authStore.setUser(updated)
       setStatus({ tone: 'success', text: 'Profile saved.' })
     } catch (caught) {
-      if (caught instanceof ApiError) {
-        const fieldErrors = caught.fieldErrors
-        setErrors(
-          Object.fromEntries(
-            Object.entries(fieldErrors).map(([key, messages]) => [
-              key,
-              messages[0],
-            ]),
-          ),
-        )
-        if (Object.keys(fieldErrors).length === 0) {
-          setStatus({ tone: 'error', text: caught.message })
-        }
-      } else {
+      const fields = firstFieldErrors(caught)
+      setErrors(fields)
+      if (Object.keys(fields).length === 0)
         setStatus({
           tone: 'error',
-          text: 'Your profile could not be saved. Please try again.',
+          text: errorMessage(
+            caught,
+            'Your profile could not be saved. Please try again.',
+          ),
         })
-      }
     } finally {
       setPending(false)
     }

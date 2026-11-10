@@ -4,7 +4,7 @@ import { FormField } from '@/components/FormField'
 import { Notice } from '@/components/Notice'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ApiError } from '@/lib/api-client'
+import { errorMessage } from '@/lib/api-client'
 import { authApi } from '../api'
 import { AuthLayout } from '../components/AuthLayout'
 import { usePageTitle } from '@/lib/use-page-title'
@@ -27,11 +27,7 @@ export function ForgotPasswordPage() {
       setSent(true)
     } catch (caught) {
       // Mostly the 5-per-hour limit
-      setError(
-        caught instanceof ApiError
-          ? caught.message
-          : 'Something went wrong. Please try again.',
-      )
+      setError(errorMessage(caught, 'Something went wrong. Please try again.'))
     } finally {
       setPending(false)
     }

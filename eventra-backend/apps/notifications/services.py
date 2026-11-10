@@ -4,11 +4,20 @@ from datetime import timedelta
 from django.conf import settings
 from django.core.mail import EmailMessage, send_mail
 from django.db import IntegrityError, transaction
+from django.db.models import Sum
 from django.utils import timezone
 
+from apps.payments.constants import REFUND_REQUEST_CUTOFF_HOURS
+from apps.payments.models import Refund
 from apps.tickets.models import Ticket
 from apps.tickets.services import get_or_render_ticket_pdf
 
+from .constants import (
+    REFUND_REASONS,
+    REMINDER_CLAIM_STALE_MINUTES,
+    REMINDER_MAX_ATTEMPTS,
+    REMINDER_WINDOW_HOURS,
+)
 from .models import Notification
 
 logger = logging.getLogger(__name__)
@@ -17,12 +26,13 @@ logger = logging.getLogger(__name__)
 def send_booking_confirmation_email(booking) -> None:
     tickets = list(
         booking.tickets.select_related(
-            "event_seat", "event_seat__event", "event_seat__seat"
+            "event_seat", "event_seat__event", "event_seat__seat", "booking__user"
         )
     )
 
     notification = Notification(
         user=booking.user,
+        event=booking.event,
         type=Notification.NotificationType.BOOKING_CONFIRMATION,
         status=Notification.Status.FAILED,
     )
@@ -71,9 +81,8 @@ def send_payout_settled_email(payout) -> None:
             subject="Your Eventra payout has been settled",
             body=(
                 f"Hi {organizer.first_name or organizer.email},\n\n"
-                f'Your payout for "{payout.event.title}" (reference '
-                f"{payout.payout_reference}) has been settled: net amount "
-                f"${payout.net_amount}."
+                f'Your payout for "{payout.event.title}" has been settled: '
+                f"net amount ${payout.net_amount}."
             ),
             from_email=settings.DEFAULT_FROM_EMAIL,
             to=[organizer.email],
@@ -82,48 +91,10 @@ def send_payout_settled_email(payout) -> None:
 
         notification.status = Notification.Status.SENT
         notification.sent_at = timezone.now()
-        notification.message = f"Payout settled: {payout.payout_reference}"
+        notification.message = f"Payout settled: {payout.event.title}"
     except Exception:
         logger.exception("Failed to send payout-settled email for payout %s", payout.id)
         notification.message = "Failed to send payout-settled email"
-        notification.save()
-        raise
-    else:
-        notification.save()
-
-
-def send_refund_confirmation_email(booking, *, event_cancelled: bool = True) -> None:
-    notification = Notification(
-        user=booking.user,
-        type=Notification.NotificationType.EVENT_CANCELLED_REFUND,
-        status=Notification.Status.FAILED,
-    )
-    try:
-        message = EmailMessage(
-            subject="Your Eventra booking has been refunded",
-            body=(
-                f"Hi {booking.user.first_name or booking.user.email},\n\n"
-                + (
-                    "The event you booked has been cancelled by the organizer. "
-                    if event_cancelled
-                    else "We couldn't complete your booking (the reservation "
-                    "expired or the event is no longer available). "
-                )
-                + f"Your payment of ${booking.total_amount} has been refunded."
-            ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            to=[booking.user.email],
-        )
-        message.send(fail_silently=False)
-
-        notification.status = Notification.Status.SENT
-        notification.sent_at = timezone.now()
-        notification.message = "Event cancellation refund confirmation"
-    except Exception:
-        logger.exception(
-            "Failed to send refund confirmation email for booking %s", booking.id
-        )
-        notification.message = "Failed to send refund confirmation email"
         notification.save()
         raise
     else:
@@ -187,6 +158,49 @@ def send_event_running_late_notice(event, user) -> None:
     )
 
 
+def send_event_postponed_notice(event, user) -> None:
+    _email_buyer(
+        event,
+        user,
+        Notification.NotificationType.EVENT_UPDATED,
+        "An event you booked has been postponed",
+        f'"{event.title}" has been postponed. It now starts on '
+        f"{event.start_datetime:%Y-%m-%d %H:%M} UTC at {event.venue.name}.\n\n"
+        "Your tickets are valid for the new date; download them again to see it. "
+        "If you can't make it, you can ask for a full refund from your tickets page "
+        f"until {REFUND_REQUEST_CUTOFF_HOURS} hours before the new start: "
+        f"{settings.FRONTEND_URL}/bookings",
+    )
+
+
+def send_refund_notice(refund) -> None:
+    item = refund.items.select_related("ticket__event_seat__event__venue").first()
+    event = item.ticket.event_seat.event
+    amount = refund.items.aggregate(total=Sum("amount"))["total"]
+    full = refund.reason in Refund.FULL_REASONS
+    _email_buyer(
+        event,
+        refund.booking.user,
+        (
+            Notification.NotificationType.EVENT_CANCELLED_REFUND
+            if full
+            else Notification.NotificationType.PARTIAL_REFUND
+        ),
+        (
+            "Your booking has been refunded"
+            if full
+            else "Part of your booking has been refunded"
+        ),
+        f'We\'ve refunded ${amount} of your booking for "{event.title}" to your card '
+        f"because {REFUND_REASONS[refund.reason]}. "
+        + (
+            "Your tickets have been cancelled."
+            if full
+            else "Your tickets are still valid."
+        ),
+    )
+
+
 def send_event_cancelled_notice(event, user) -> None:
     _email_buyer(
         event,
@@ -197,11 +211,6 @@ def send_event_cancelled_notice(event, user) -> None:
         "cancelled. You'll get a full refund to your original payment method, and "
         "we'll email you again once it's done. You don't need to do anything.",
     )
-
-
-REMINDER_WINDOW_HOURS = 24
-REMINDER_CLAIM_STALE_MINUTES = 15
-REMINDER_MAX_ATTEMPTS = 3
 
 
 def _claim_reminder(user, event):

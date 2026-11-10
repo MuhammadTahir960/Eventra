@@ -11,15 +11,15 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from apps.bookings.factories import BookingFactory
 from apps.bookings.models import Booking
 from apps.common.constants import Roles
 from apps.events.factories import EventFactory
 from apps.events.models import Event
 from apps.seating.factories import EventSeatFactory
 from apps.seating.models import EventSeat
-from apps.tickets.models import Ticket
+from apps.tickets.factories import TicketFactory
 from apps.users.factories import UserFactory
+from tests.helpers import auth_client, confirmed_booking_with_ticket
 
 from ..factories import OrganizerPayoutFactory
 from ..models import OrganizerPayout
@@ -31,21 +31,6 @@ from ..views import (
 )
 
 pytestmark = pytest.mark.django_db
-
-
-def _authed_client(user):
-    client = APIClient()
-    client.force_authenticate(user=user)
-    return client
-
-
-def _confirmed_booking_with_ticket(event, total_amount):
-    booking = BookingFactory(status=Booking.Status.CONFIRMED, total_amount=total_amount)
-    seat = EventSeatFactory(
-        event=event, status=EventSeat.Status.BOOKED, price_override=total_amount
-    )
-    Ticket.objects.create(booking=booking, event_seat=seat, status=Ticket.Status.VALID)
-    return booking
 
 
 class TestUrlsResolveToDedicatedViews:
@@ -70,9 +55,9 @@ class TestOrganizerEventSalesView:
     def test_owning_organizer_sees_sales(self):
         organizer = UserFactory(role=Roles.ORGANIZER)
         event = EventFactory(organizer=organizer, status=Event.Status.COMPLETED)
-        _confirmed_booking_with_ticket(event, Decimal("40.00"))
+        confirmed_booking_with_ticket(event, Decimal("40.00"))
 
-        response = _authed_client(organizer).get(f"/organizer/events/{event.id}/sales/")
+        response = auth_client(organizer).get(f"/organizer/events/{event.id}/sales/")
 
         assert response.status_code == status.HTTP_200_OK
         assert response.data["tickets_sold"] == 1
@@ -83,11 +68,11 @@ class TestOrganizerEventSalesView:
     def test_refunded_ticket_is_reflected_over_http(self):
         organizer = UserFactory(role=Roles.ORGANIZER)
         event = EventFactory(organizer=organizer, status=Event.Status.COMPLETED)
-        booking = _confirmed_booking_with_ticket(event, Decimal("60.00"))
+        booking = confirmed_booking_with_ticket(event, Decimal("60.00"))
         booking.status = Booking.Status.REFUNDED
         booking.save(update_fields=["status"])
 
-        response = _authed_client(organizer).get(f"/organizer/events/{event.id}/sales/")
+        response = auth_client(organizer).get(f"/organizer/events/{event.id}/sales/")
 
         assert response.status_code == status.HTTP_200_OK
         assert response.data["tickets_sold"] == 1
@@ -99,7 +84,7 @@ class TestOrganizerEventSalesView:
         organizer = UserFactory(role=Roles.ORGANIZER)
         event = EventFactory(organizer=organizer, status=Event.Status.COMPLETED)
 
-        response = _authed_client(organizer).get(f"/organizer/events/{event.id}/sales/")
+        response = auth_client(organizer).get(f"/organizer/events/{event.id}/sales/")
 
         assert response.status_code == status.HTTP_200_OK
         assert response.data["tickets_sold"] == 0
@@ -111,9 +96,9 @@ class TestOrganizerEventSalesView:
         event = EventFactory(
             organizer=organizer, status=Event.Status.COMPLETED, is_active=False
         )
-        _confirmed_booking_with_ticket(event, Decimal("20.00"))
+        confirmed_booking_with_ticket(event, Decimal("20.00"))
 
-        response = _authed_client(organizer).get(f"/organizer/events/{event.id}/sales/")
+        response = auth_client(organizer).get(f"/organizer/events/{event.id}/sales/")
 
         assert response.status_code == status.HTTP_200_OK
         assert Decimal(response.data["gross_revenue"]) == Decimal("20.00")
@@ -122,16 +107,14 @@ class TestOrganizerEventSalesView:
         organizer = UserFactory(role=Roles.ORGANIZER)
         missing_id = "11111111-1111-1111-1111-111111111111"
 
-        response = _authed_client(organizer).get(
-            f"/organizer/events/{missing_id}/sales/"
-        )
+        response = auth_client(organizer).get(f"/organizer/events/{missing_id}/sales/")
 
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_malformed_event_id_returns_404_not_500(self):
         organizer = UserFactory(role=Roles.ORGANIZER)
 
-        response = _authed_client(organizer).get(
+        response = auth_client(organizer).get(
             "/organizer/events/not-a-real-uuid/sales/"
         )
 
@@ -141,7 +124,7 @@ class TestOrganizerEventSalesView:
         event = EventFactory()
         other_organizer = UserFactory(role=Roles.ORGANIZER)
 
-        response = _authed_client(other_organizer).get(
+        response = auth_client(other_organizer).get(
             f"/organizer/events/{event.id}/sales/"
         )
 
@@ -151,7 +134,7 @@ class TestOrganizerEventSalesView:
         event = EventFactory()
         admin = UserFactory(role=Roles.ADMIN)
 
-        response = _authed_client(admin).get(f"/organizer/events/{event.id}/sales/")
+        response = auth_client(admin).get(f"/organizer/events/{event.id}/sales/")
 
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
@@ -170,14 +153,14 @@ class TestOrganizerPayoutListView:
         own_payout = OrganizerPayoutFactory(event=own_event)
         OrganizerPayoutFactory()
 
-        response = _authed_client(organizer).get("/organizer/payouts/")
+        response = auth_client(organizer).get("/organizer/payouts/")
 
         assert response.status_code == status.HTTP_200_OK
         returned_ids = {row["id"] for row in response.data["results"]}
         assert returned_ids == {str(own_payout.id)}
 
     def test_attendee_is_rejected(self):
-        response = _authed_client(UserFactory(role=Roles.ATTENDEE)).get(
+        response = auth_client(UserFactory(role=Roles.ATTENDEE)).get(
             "/organizer/payouts/"
         )
 
@@ -190,7 +173,7 @@ class TestAdminPayoutListView:
         OrganizerPayoutFactory()
         admin = UserFactory(role=Roles.ADMIN)
 
-        response = _authed_client(admin).get("/admin/payouts/")
+        response = auth_client(admin).get("/admin/payouts/")
 
         assert response.status_code == status.HTTP_200_OK
         assert response.data["count"] == 2
@@ -200,7 +183,7 @@ class TestAdminPayoutListView:
         settled = OrganizerPayoutFactory(status=OrganizerPayout.Status.SETTLED)
         admin = UserFactory(role=Roles.ADMIN)
 
-        response = _authed_client(admin).get("/admin/payouts/?status=settled")
+        response = auth_client(admin).get("/admin/payouts/?status=settled")
 
         assert response.status_code == status.HTTP_200_OK
         returned_ids = {row["id"] for row in response.data["results"]}
@@ -209,7 +192,7 @@ class TestAdminPayoutListView:
     def test_non_admin_is_rejected(self):
         organizer = UserFactory(role=Roles.ORGANIZER)
 
-        response = _authed_client(organizer).get("/admin/payouts/")
+        response = auth_client(organizer).get("/admin/payouts/")
 
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
@@ -223,7 +206,7 @@ class TestAdminPayoutSettleView:
         admin = UserFactory(role=Roles.ADMIN)
 
         with django_capture_on_commit_callbacks(execute=True):
-            response = _authed_client(admin).post(f"/admin/payouts/{payout.id}/settle/")
+            response = auth_client(admin).post(f"/admin/payouts/{payout.id}/settle/")
 
         assert response.status_code == status.HTTP_202_ACCEPTED
         assert response.data["status"] == OrganizerPayout.Status.PROCESSING
@@ -234,7 +217,7 @@ class TestAdminPayoutSettleView:
         payout = OrganizerPayoutFactory(status=OrganizerPayout.Status.SETTLED)
         admin = UserFactory(role=Roles.ADMIN)
 
-        response = _authed_client(admin).post(f"/admin/payouts/{payout.id}/settle/")
+        response = auth_client(admin).post(f"/admin/payouts/{payout.id}/settle/")
 
         assert response.status_code == status.HTTP_409_CONFLICT
 
@@ -242,7 +225,7 @@ class TestAdminPayoutSettleView:
         payout = OrganizerPayoutFactory()
         organizer = UserFactory(role=Roles.ORGANIZER)
 
-        response = _authed_client(organizer).post(f"/admin/payouts/{payout.id}/settle/")
+        response = auth_client(organizer).post(f"/admin/payouts/{payout.id}/settle/")
 
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
@@ -254,7 +237,7 @@ def _completed_with_sale(organizer=None, hours_ago=25):
         completed_at=timezone.now() - timedelta(hours=hours_ago),
         **kwargs,
     )
-    _confirmed_booking_with_ticket(event, Decimal("50.00"))
+    confirmed_booking_with_ticket(event, Decimal("50.00"))
     return event
 
 
@@ -274,7 +257,7 @@ class TestAdminPayOut:
 
     def test_organizer_is_forbidden(self, organizer_user):
         event = _completed_with_sale(organizer=organizer_user)
-        response = _authed_client(organizer_user).post(
+        response = auth_client(organizer_user).post(
             f"/admin/events/{event.id}/payouts/"
         )
         assert response.status_code == status.HTTP_403_FORBIDDEN
@@ -298,13 +281,13 @@ class TestAwaitingPayoutLists:
     def test_organizer_upcoming_list_is_scoped_to_own_events(self, organizer_user):
         own = _completed_with_sale(organizer=organizer_user, hours_ago=2)
         _completed_with_sale()
-        response = _authed_client(organizer_user).get("/organizer/payouts/upcoming/")
+        response = auth_client(organizer_user).get("/organizer/payouts/upcoming/")
         assert response.status_code == status.HTTP_200_OK
         assert [row["event_id"] for row in response.data["results"]] == [str(own.id)]
         assert response.data["results"][0]["payout_available_at"]
 
     def test_attendee_cannot_see_the_upcoming_list(self, attendee_user):
-        response = _authed_client(attendee_user).get("/organizer/payouts/upcoming/")
+        response = auth_client(attendee_user).get("/organizer/payouts/upcoming/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_ready_list_query_count_does_not_grow_with_rows(
@@ -319,12 +302,10 @@ class TestAwaitingPayoutLists:
             response = admin_client.get("/admin/payouts/ready/")
         assert len(response.data["results"]) == 6
 
-    def test_a_booking_with_two_tickets_counts_once(self, admin_client):
+    def test_a_booking_with_two_tickets_counts_each_ticket_once(self, admin_client):
         event = _completed_with_sale()
         booking = Booking.objects.get(tickets__event_seat__event=event)
         seat = EventSeatFactory(event=event, status=EventSeat.Status.BOOKED)
-        Ticket.objects.create(
-            booking=booking, event_seat=seat, status=Ticket.Status.VALID
-        )
+        TicketFactory(booking=booking, event_seat=seat, price=Decimal("20.00"))
         row = admin_client.get("/admin/payouts/ready/").data["results"][0]
-        assert row["gross_revenue"] == "50.00"
+        assert row["gross_revenue"] == "70.00"

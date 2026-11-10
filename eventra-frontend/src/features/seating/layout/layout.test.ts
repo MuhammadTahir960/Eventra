@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { computeLayout, SEAT_RADIUS, type LayoutSeatInput } from './layout'
+import { computeLayout, type LayoutSeatInput } from './layout'
+import { SEAT_RADIUS } from './constants'
 import { VENUE_SHAPES, type VenueShape } from './shapes'
 
 interface SectionSpec {
@@ -9,6 +10,18 @@ interface SectionSpec {
 }
 
 // Builds seats the way the backend labels them: section, row letter, number
+// How far a seat sits from the middle of the drawing
+function distanceFromCentre(
+  layout: ReturnType<typeof computeLayout>,
+  id: string,
+) {
+  const seat = layout.seats.find((s) => s.id === id)!
+  return Math.hypot(
+    seat.x - (layout.viewBox.x + layout.viewBox.width / 2),
+    seat.y - (layout.viewBox.y + layout.viewBox.height / 2),
+  )
+}
+
 function makeSeats(sections: SectionSpec[]): LayoutSeatInput[] {
   const seats: LayoutSeatInput[] = []
   for (const section of sections) {
@@ -118,14 +131,7 @@ describe('computeLayout', () => {
     ].map((name) => ({ name, rows: 4, seatsPerRow: 10 }))
     const layout = computeLayout(makeSeats(sections), 'circle')
 
-    const centre = {
-      x: layout.viewBox.x + layout.viewBox.width / 2,
-      y: layout.viewBox.y + layout.viewBox.height / 2,
-    }
-    const distance = (id: string) => {
-      const seat = layout.seats.find((s) => s.id === id)!
-      return Math.hypot(seat.x - centre.x, seat.y - centre.y)
-    }
+    const distance = (id: string) => distanceFromCentre(layout, id)
     expect(layout.sections.filter((s) => s.level === 0)).toHaveLength(4)
     expect(layout.sections.filter((s) => s.level === 1)).toHaveLength(4)
     // Every seat of the 200s ring is farther out than every seat in the 100s
@@ -147,14 +153,7 @@ describe('computeLayout', () => {
     )
     expect(layout.sections.map((s) => s.name)).toEqual(['S2', 'S10'])
 
-    const centre = {
-      x: layout.viewBox.x + layout.viewBox.width / 2,
-      y: layout.viewBox.y + layout.viewBox.height / 2,
-    }
-    const distance = (id: string) => {
-      const seat = layout.seats.find((s) => s.id === id)!
-      return Math.hypot(seat.x - centre.x, seat.y - centre.y)
-    }
+    const distance = (id: string) => distanceFromCentre(layout, id)
     expect(distance('S2-0-3')).toBeLessThan(distance('S2-1-3'))
   })
 

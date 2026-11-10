@@ -20,26 +20,25 @@ def test_create_user_hashes_password():
     assert user.check_password("s3cure-pass!") is True
 
 
-def test_create_user_normalizes_email_to_fully_lowercase():
-    user = User.objects.create_user(email="Alice@EXAMPLE.COM", password="s3cure-pass!")
-    assert user.email == "alice@example.com"
+@pytest.mark.parametrize(
+    "raw, stored",
+    [
+        ("Alice@EXAMPLE.COM", "alice@example.com"),
+        ("  bob@example.com  ", "bob@example.com"),
+    ],
+)
+def test_create_user_lowercases_and_trims_the_email(raw, stored):
+    user = User.objects.create_user(email=raw, password="s3cure-pass!")
+    assert user.email == stored
 
 
-def test_create_user_strips_surrounding_whitespace():
-    user = User.objects.create_user(
-        email="  bob@example.com  ", password="s3cure-pass!"
-    )
-    assert user.email == "bob@example.com"
-
-
-def test_create_user_without_email_raises():
-    with pytest.raises(ValueError, match="Users must have an email address"):
-        User.objects.create_user(email="", password="s3cure-pass!")
-
-
-def test_create_user_rejects_malformed_email():
-    with pytest.raises(ValueError, match="valid email address"):
-        User.objects.create_user(email="not-an-email", password="s3cure-pass!")
+@pytest.mark.parametrize(
+    "email, message",
+    [("", "Users must have an email address"), ("not-an-email", "valid email address")],
+)
+def test_create_user_needs_a_valid_email(email, message):
+    with pytest.raises(ValueError, match=message):
+        User.objects.create_user(email=email, password="s3cure-pass!")
 
 
 def test_create_user_defaults():
@@ -51,16 +50,17 @@ def test_create_user_defaults():
     assert user.is_superuser is False
 
 
-def test_email_uniqueness_enforced_at_db_level():
-    User.objects.create_user(email="dupe@example.com", password="s3cure-pass!")
+@pytest.mark.parametrize(
+    "first, second",
+    [
+        ("dupe@example.com", "dupe@example.com"),
+        ("Alice@Example.com", "alice@example.com"),
+    ],
+)
+def test_email_uniqueness_enforced_at_db_level_in_any_case(first, second):
+    User.objects.create_user(email=first, password="s3cure-pass!")
     with pytest.raises(IntegrityError):
-        User.objects.create_user(email="dupe@example.com", password="another-pass!")
-
-
-def test_email_uniqueness_enforced_across_local_part_case_variants():
-    User.objects.create_user(email="Alice@Example.com", password="s3cure-pass!")
-    with pytest.raises(IntegrityError):
-        User.objects.create_user(email="alice@example.com", password="another-pass!")
+        User.objects.create_user(email=second, password="another-pass!")
 
 
 # ==================================================

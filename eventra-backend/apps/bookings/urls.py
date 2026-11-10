@@ -4,6 +4,7 @@ from .views import (
     BookingCheckoutView,
     BookingDetailView,
     BookingListCreateView,
+    BookingRefundsView,
 )
 
 urlpatterns = [
@@ -13,5 +14,10 @@ urlpatterns = [
         "bookings/<uuid:id>/checkout/",
         BookingCheckoutView.as_view(),
         name="booking-checkout",
+    ),
+    path(
+        "bookings/<uuid:id>/refunds/",
+        BookingRefundsView.as_view(),
+        name="booking-refunds",
     ),
 ]

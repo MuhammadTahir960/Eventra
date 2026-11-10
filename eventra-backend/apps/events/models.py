@@ -9,6 +9,7 @@ from django.db.models import F, Q
 from django.utils.text import slugify
 
 from apps.common.models import SoftDeleteModel, UUIDBaseModel
+from apps.common.validators import validate_display_name
 
 EVENT_SEARCH_CONFIG = "english"
 
@@ -60,7 +61,7 @@ class Event(SoftDeleteModel):
         related_name="away_events",
     )
 
-    title = models.CharField(max_length=100)
+    title = models.CharField(max_length=100, validators=[validate_display_name])
     slug = models.SlugField(max_length=220, blank=True, db_index=True)
     description = models.TextField()
     event_type = models.CharField(max_length=20, choices=EventType.choices)
@@ -73,6 +74,7 @@ class Event(SoftDeleteModel):
     end_datetime = models.DateTimeField()
     completed_at = models.DateTimeField(null=True, blank=True)
     completed_in_review = models.BooleanField(default=False)
+    postponed_from = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

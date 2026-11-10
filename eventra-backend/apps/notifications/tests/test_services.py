@@ -8,12 +8,15 @@ from django.utils import timezone
 from apps.bookings.factories import BookingFactory
 from apps.events.factories import EventFactory, TicketTierFactory
 from apps.events.models import Event
+from apps.payments.models import Refund
 from apps.payouts.factories import OrganizerPayoutFactory
 from apps.seating.factories import EventSeatFactory
 from apps.seating.models import EventSeat
+from apps.tickets.factories import TicketFactory
 from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory
+from tests.helpers import paid_booking
 
 from ..models import Notification
 from ..services import (
@@ -22,7 +25,7 @@ from ..services import (
     send_event_reminders_batch,
     send_event_updated_notice,
     send_payout_settled_email,
-    send_refund_confirmation_email,
+    send_refund_notice,
 )
 
 pytestmark = pytest.mark.django_db
@@ -33,9 +36,7 @@ def _booking_with_tickets(n_tickets=2):
     event = EventFactory(status="approved")
     for _ in range(n_tickets):
         seat = EventSeatFactory(event=event, status=EventSeat.Status.BOOKED)
-        Ticket.objects.create(
-            booking=booking, event_seat=seat, status=Ticket.Status.VALID
-        )
+        TicketFactory(booking=booking, event_seat=seat, status=Ticket.Status.VALID)
     return booking
 
 
@@ -133,42 +134,56 @@ class TestSendBookingConfirmationEmail:
         assert len(mail.outbox) == 0
 
 
-class TestSendRefundConfirmationEmail:
-    def test_happy_path_sends_email_and_mentions_the_refund_amount(self):
-        booking = BookingFactory()
+def _refund(reason, amount="30.00"):
+    event = EventFactory(status="approved", title="Jazz Night")
+    booking = paid_booking(event, (TicketTierFactory(event=event), "80.00"))
+    refund = Refund.objects.create(
+        booking=booking, reason=reason, key=f"{reason}-email"
+    )
+    refund.items.create(ticket=booking.tickets.get(), amount=amount)
+    return refund
 
-        send_refund_confirmation_email(booking)
 
-        assert len(mail.outbox) == 1
-        sent = mail.outbox[0]
-        assert sent.to == [booking.user.email]
-        assert "refunded" in sent.subject.lower()
-        assert str(booking.total_amount) in sent.body
+class TestSendRefundNotice:
+    def test_full_refund_says_the_tickets_are_cancelled(self):
+        refund = _refund(Refund.Reason.CANCELLED_EVENT, "80.00")
 
-    def test_happy_path_records_a_sent_notification(self):
-        booking = BookingFactory()
+        send_refund_notice(refund)
 
-        send_refund_confirmation_email(booking)
-
-        notification = Notification.objects.get(user=booking.user)
+        [sent] = mail.outbox
+        assert sent.to == [refund.booking.user.email]
+        assert sent.subject == "Your booking has been refunded"
+        assert "$80.00" in sent.body and "Jazz Night" in sent.body
+        assert "cancelled" in sent.body
+        notification = Notification.objects.get(user=refund.booking.user)
         assert notification.type == Notification.NotificationType.EVENT_CANCELLED_REFUND
         assert notification.status == Notification.Status.SENT
-        assert notification.sent_at is not None
+        assert notification.event == refund.booking.event
+
+    def test_partial_refund_says_the_tickets_still_count(self):
+        refund = _refund(Refund.Reason.PRICE_DROP)
+
+        send_refund_notice(refund)
+
+        [sent] = mail.outbox
+        assert sent.subject == "Part of your booking has been refunded"
+        assert "$30.00" in sent.body and "still valid" in sent.body
+        notification = Notification.objects.get(user=refund.booking.user)
+        assert notification.type == Notification.NotificationType.PARTIAL_REFUND
 
     def test_send_failure_records_a_failed_notification_and_reraises(self, monkeypatch):
-        booking = BookingFactory()
+        refund = _refund(Refund.Reason.UNAVAILABLE, "80.00")
         monkeypatch.setattr(
-            "apps.notifications.services.EmailMessage.send",
+            "apps.notifications.services.send_mail",
             MagicMock(side_effect=RuntimeError("SMTP is down")),
         )
 
         with pytest.raises(RuntimeError):
-            send_refund_confirmation_email(booking)
+            send_refund_notice(refund)
 
-        notification = Notification.objects.get(user=booking.user)
+        notification = Notification.objects.get(user=refund.booking.user)
         assert notification.status == Notification.Status.FAILED
         assert notification.sent_at is None
-        assert len(mail.outbox) == 0
 
 
 class TestSendPayoutSettledEmail:
@@ -206,7 +221,7 @@ def _ticket_for(event, booking=None, status=Ticket.Status.VALID):
         ticket_tier=TicketTierFactory(event=event),
         seat=SeatFactory(venue=event.venue),
     )
-    return Ticket.objects.create(booking=booking, event_seat=seat, status=status)
+    return TicketFactory(booking=booking, event_seat=seat, status=status)
 
 
 def _event_starting_in(hours, **kwargs):
@@ -326,7 +341,7 @@ def test_database_rejects_a_second_active_reminder_for_the_same_pair():
 
 
 def test_reminder_gives_up_after_max_failed_attempts(monkeypatch):
-    from apps.notifications.services import REMINDER_MAX_ATTEMPTS
+    from apps.notifications.constants import REMINDER_MAX_ATTEMPTS
 
     _ticket_for(_event_starting_in(10))
     calls = []
@@ -347,3 +362,12 @@ def test_reminder_gives_up_after_max_failed_attempts(monkeypatch):
         ).count()
         == REMINDER_MAX_ATTEMPTS
     )
+
+
+def test_booking_confirmation_records_the_event():
+    event = EventFactory(status="approved")
+    booking = paid_booking(event, (TicketTierFactory(event=event), "20.00"))
+
+    send_booking_confirmation_email(booking)
+
+    assert Notification.objects.get().event == event

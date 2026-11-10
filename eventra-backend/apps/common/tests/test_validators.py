@@ -13,12 +13,12 @@ from apps.sports.factories import LeagueFactory, TeamFactory
 from apps.users.factories import UserFactory
 from apps.venues.factories import VenueFactory
 
+from ..constants import MAX_IMAGE_UPLOAD_SIZE_MB
 from ..validators import (
-    MAX_IMAGE_UPLOAD_SIZE_MB,
     has_allowed_text,
-    validate_event_title,
+    validate_display_name,
     validate_image_upload_size,
-    validate_person_name,
+    validate_proper_name,
 )
 
 pytestmark = pytest.mark.django_db
@@ -180,13 +180,13 @@ def test_multiline_text_allows_only_line_breaks_and_tabs_on_top():
     ["Syed Muhammad", "O'Brien", "Anne-Marie", "J.R.", "طاہر حیدر", "मुहम्मद", "José"],
 )
 def test_real_names_pass(name):
-    validate_person_name(name)
+    validate_proper_name(name)
 
 
 @pytest.mark.parametrize("name", ["<b>x</b>", "a1", "\u202eevil", "a\nb", "---", "😀"])
 def test_names_outside_the_allow_list_fail(name):
     with pytest.raises(ValidationError):
-        validate_person_name(name)
+        validate_proper_name(name)
 
 
 def _image(fmt):
@@ -214,7 +214,7 @@ def test_a_gif_renamed_png_is_refused_by_its_real_format():
     ],
 )
 def test_professional_titles_pass(title):
-    validate_event_title(title)
+    validate_display_name(title)
 
 
 @pytest.mark.parametrize(
@@ -223,4 +223,4 @@ def test_professional_titles_pass(title):
 )
 def test_unprofessional_titles_fail(title):
     with pytest.raises(ValidationError):
-        validate_event_title(title)
+        validate_display_name(title)

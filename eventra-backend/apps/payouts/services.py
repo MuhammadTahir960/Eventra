@@ -3,10 +3,14 @@ from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import IntegrityError, models, transaction
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from apps.bookings.models import Booking
 from apps.events.models import Event
+from apps.payments.constants import UNFINISHED_REFUND_STATUSES
+from apps.payments.models import Refund, RefundItem
+from apps.payments.services import refunded_so_far
 from apps.tickets.models import Ticket
 
 from .models import OrganizerPayout
@@ -29,15 +33,19 @@ class OrganizerInactiveError(Exception):
     """Raised inside settle_payout() when the event's organizer account is no longer active."""
 
 
-def _sum_confirmed_booking_totals(event: Event) -> Decimal:
-    total = (
-        Booking.objects.filter(
-            tickets__event_seat__event=event, status=Booking.Status.CONFIRMED
-        )
-        .distinct()
-        .aggregate(total=models.Sum("total_amount"))["total"]
+def _partial_refunds(event) -> models.QuerySet:
+    return RefundItem.objects.filter(
+        ticket__event_seat__event=event,
+        refund__booking__status=Booking.Status.CONFIRMED,
     )
-    return total or Decimal("0.00")
+
+
+def _sum_confirmed_booking_totals(event: Event) -> Decimal:
+    total = Ticket.objects.filter(
+        event_seat__event=event, booking__status=Booking.Status.CONFIRMED
+    ).aggregate(total=models.Sum("price"))["total"]
+    refunded = _partial_refunds(event).aggregate(total=models.Sum("amount"))["total"]
+    return (total or Decimal("0.00")) - (refunded or Decimal("0.00"))
 
 
 def compute_payout_amounts(event: Event) -> tuple[Decimal, Decimal, Decimal]:
@@ -52,35 +60,20 @@ def split_gross_revenue(gross_revenue: Decimal) -> tuple[Decimal, Decimal, Decim
     return gross_revenue, platform_fee, net_amount
 
 
-_SOLD_BOOKING_STATUSES = (
-    Booking.Status.CONFIRMED,
-    Booking.Status.REFUNDED,
-    Booking.Status.REFUND_FAILED,
-)
-
-
-def _ticket_sale_amount(ticket: Ticket) -> Decimal:
-    seat = ticket.event_seat
-    return (
-        seat.price_override
-        if seat.price_override is not None
-        else seat.ticket_tier.price
-    )
-
-
 def get_event_sales(event: Event) -> dict:
     tickets = (
         Ticket.objects.filter(
-            event_seat__event=event, booking__status__in=_SOLD_BOOKING_STATUSES
+            event_seat__event=event, booking__status__in=Booking.PAID_STATUSES
         )
-        .select_related("booking", "event_seat", "event_seat__ticket_tier")
+        .select_related("booking")
+        .annotate(refunded=refunded_so_far())
         .order_by("-created_at")
     )
 
     entries = []
     gross_revenue = Decimal("0.00")
     for ticket in tickets:
-        amount = _ticket_sale_amount(ticket)
+        amount = ticket.price - ticket.refunded
         is_refunded = ticket.booking.status == Booking.Status.REFUNDED
         if not is_refunded:
             gross_revenue += amount
@@ -89,6 +82,7 @@ def get_event_sales(event: Event) -> dict:
                 "ticket_id": ticket.id,
                 "ticket_code": ticket.ticket_code,
                 "amount": amount,
+                "refunded": ticket.refunded,
                 "status": "refunded" if is_refunded else "confirmed",
             }
         )
@@ -105,7 +99,7 @@ def create_payout(event: Event) -> tuple[OrganizerPayout, bool]:
     if existing is not None:
         return existing, False
 
-    gross_revenue, platform_fee, net_amount = compute_payout_amounts(event)
+    gross_revenue, platform_fee, _ = compute_payout_amounts(event)
 
     try:
         with transaction.atomic():
@@ -113,11 +107,7 @@ def create_payout(event: Event) -> tuple[OrganizerPayout, bool]:
                 event=event,
                 gross_revenue=gross_revenue,
                 platform_fee=platform_fee,
-                net_amount=net_amount,
                 status=OrganizerPayout.Status.PENDING,
-                payout_reference=f"PAYOUT-{event.id}",
-                period_start=event.start_datetime,
-                period_end=event.end_datetime,
             )
         created = True
     except IntegrityError:
@@ -137,22 +127,32 @@ def awaiting_payout(events) -> models.QuerySet:
         status=Booking.Status.CONFIRMED,
     )
     gross = (
-        Booking.objects.filter(
-            status=Booking.Status.CONFIRMED,
-            pk__in=Ticket.objects.filter(
-                event_seat__event=models.OuterRef(models.OuterRef("pk"))
-            ).values("booking"),
+        Ticket.objects.filter(
+            event_seat__event=models.OuterRef("pk"),
+            booking__status=Booking.Status.CONFIRMED,
         )
         .order_by()
         .annotate(group=models.Value(1))
         .values("group")
-        .annotate(total=models.Sum("total_amount"))
+        .annotate(total=models.Sum("price"))
         .values("total")
     )
+    refunded = (
+        _partial_refunds(models.OuterRef("pk"))
+        .order_by()
+        .annotate(group=models.Value(1))
+        .values("group")
+        .annotate(total=models.Sum("amount"))
+        .values("total")
+    )
+    zero = models.Value(Decimal("0.00"))
     return (
         events.filter(status=Event.Status.COMPLETED, payout__isnull=True)
         .filter(models.Exists(sold))
-        .annotate(gross_revenue=models.Subquery(gross))
+        .annotate(
+            gross_revenue=Coalesce(models.Subquery(gross), zero)
+            - Coalesce(models.Subquery(refunded), zero)
+        )
         .select_related("organizer", "venue")
         .order_by("completed_at", "id")
     )
@@ -168,6 +168,13 @@ def pay_out_event(event: Event) -> OrganizerPayout:
         if not awaiting_payout(Event.all_objects.filter(pk=event.pk)).exists():
             raise PayoutNotAvailableError(
                 "No tickets were sold, so there is nothing to pay out."
+            )
+        if Refund.objects.filter(
+            items__ticket__event_seat__event=event,
+            status__in=UNFINISHED_REFUND_STATUSES,
+        ).exists():
+            raise PayoutNotAvailableError(
+                "Refunds for this event are still being processed."
             )
         available_at = payout_available_at(event)
         if timezone.now() < available_at:

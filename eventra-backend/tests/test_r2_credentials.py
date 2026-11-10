@@ -145,17 +145,14 @@ def test_prod_rejects_r2_public_domain_that_is_not_a_bare_hostname(bad_domain):
     assert "R2_PUBLIC_DOMAIN" in result.stderr
 
 
-def test_prod_refuses_to_boot_without_cors_allowed_origins():
-    result = _run_settings_boot(
-        "config.settings.prod", {**_PROD_ENV, "CORS_ALLOWED_ORIGINS": ""}
-    )
+@pytest.mark.parametrize(
+    "override, message",
+    [
+        ({"CORS_ALLOWED_ORIGINS": ""}, "CORS_ALLOWED_ORIGINS"),
+        ({"ALLOWED_HOSTS": ".example.com"}, "exact hostname"),
+    ],
+)
+def test_prod_refuses_to_boot_with_unsafe_hosts_or_origins(override, message):
+    result = _run_settings_boot("config.settings.prod", {**_PROD_ENV, **override})
     assert result.returncode != 0
-    assert "CORS_ALLOWED_ORIGINS" in result.stderr
-
-
-def test_prod_refuses_to_boot_with_only_wildcard_allowed_hosts():
-    result = _run_settings_boot(
-        "config.settings.prod", {**_PROD_ENV, "ALLOWED_HOSTS": ".example.com"}
-    )
-    assert result.returncode != 0
-    assert "exact hostname" in result.stderr
+    assert message in result.stderr

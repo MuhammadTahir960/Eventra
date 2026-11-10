@@ -81,7 +81,7 @@ export function AppShell() {
           <Link to="/" aria-label="Eventra home" className="mr-1 shrink-0">
             <Logo
               size={26}
-              className="max-[359px]:[&>span:last-child]:hidden"
+              className="max-[389px]:[&>span:last-child]:hidden"
             />
           </Link>
 
@@ -120,7 +120,12 @@ export function AppShell() {
                 >
                   Sign in
                 </ButtonLink>
-                <ButtonLink variant="ink" to="/login" className="sm:hidden">
+                <ButtonLink
+                  variant="ink"
+                  size="sm"
+                  to="/login"
+                  className="sm:hidden"
+                >
                   Sign in
                 </ButtonLink>
                 <ButtonLink

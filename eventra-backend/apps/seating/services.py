@@ -193,7 +193,7 @@ def hold_seats(
                 .exclude(event_seat_id__in=found_ids)
                 .count()
                 + EventSeat.objects.filter(
-                    held_booking__user=user, held_booking__status="pending"
+                    tickets__booking__user=user, tickets__status="pending"
                 )
                 .exclude(id__in=found_ids)
                 .count()
@@ -266,6 +266,19 @@ def notify_internal_broadcast(
         )
 
 
+def notify_seats_available(seats) -> None:
+    seat_ids_by_event_slug: dict[str, list] = {}
+    for seat in seats:
+        seat_ids_by_event_slug.setdefault(seat.event.slug, []).append(seat.id)
+    for event_slug, seat_ids in seat_ids_by_event_slug.items():
+        transaction.on_commit(
+            lambda event_slug=event_slug, seat_ids=seat_ids: notify_internal_broadcast(
+                event_slug=event_slug, seat_ids=seat_ids, status_label="available"
+            ),
+            robust=True,
+        )
+
+
 def release_expired_holds() -> None:
     now = timezone.now()
     candidate_seat_ids = list(
@@ -297,16 +310,5 @@ def release_expired_holds() -> None:
             seat.status = EventSeat.Status.AVAILABLE
         EventSeat.objects.bulk_update(released, ["status"])
 
-        seat_ids_by_event_slug: dict[str, list] = {}
-        for seat in released:
-            seat_ids_by_event_slug.setdefault(seat.event.slug, []).append(seat.id)
-
         SeatHold.objects.filter(id__in=[hold.id for hold in expired_holds]).delete()
-
-        for event_slug, seat_ids in seat_ids_by_event_slug.items():
-            transaction.on_commit(
-                lambda event_slug=event_slug, seat_ids=seat_ids: notify_internal_broadcast(
-                    event_slug=event_slug, seat_ids=seat_ids, status_label="available"
-                ),
-                robust=True,
-            )
+        notify_seats_available(released)

@@ -1,6 +1,8 @@
 import uuid
 from unittest.mock import patch
 
+import pytest
+
 from apps.users import tokens as tokens_module
 from apps.users.tokens import (
     generate_password_reset_token,
@@ -118,11 +120,7 @@ def test_password_reset_token_never_contains_the_password_hash():
     assert "pbkdf2" not in token
 
 
-def test_password_reset_token_missing_colon_separator_rejected():
-    forged = tokens_module._password_reset_signer.sign("not-a-valid-payload")
-    assert verify_password_reset_token(forged) is None
-
-
-def test_password_reset_token_non_uuid_user_id_rejected():
-    forged = tokens_module._password_reset_signer.sign("not-a-uuid:somehash")
+@pytest.mark.parametrize("payload", ["not-a-valid-payload", "not-a-uuid:somehash"])
+def test_password_reset_token_with_a_malformed_payload_is_rejected(payload):
+    forged = tokens_module._password_reset_signer.sign(payload)
     assert verify_password_reset_token(forged) is None

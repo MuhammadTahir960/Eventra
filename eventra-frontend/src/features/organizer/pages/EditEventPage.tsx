@@ -13,11 +13,12 @@ import { useCategories } from '@/features/catalog/hooks'
 import { useEvent } from '@/features/events/hooks'
 import { EVENT_STATUS } from '@/features/events/status'
 import type { EventItem } from '@/features/events/types'
-import { ApiError } from '@/lib/api-client'
+import { errorMessage, firstFieldErrors } from '@/lib/api-client'
 import { toLocalInput } from '@/lib/format'
 import { isUuid } from '@/lib/ids'
 import { useUpdateEvent, type EventPatch } from '../api'
 import { usePageTitle } from '@/lib/use-page-title'
+import { LoadingBlock } from '@/components/LoadingBlock'
 
 interface Values {
   title: string
@@ -104,19 +105,13 @@ function EditForm({ event }: { event: EventItem }) {
         })
       },
       onError: (caught) => {
-        if (caught instanceof ApiError) {
-          const fields = Object.fromEntries(
-            Object.entries(caught.fieldErrors).map(([key, messages]) => [
-              key,
-              messages[0],
-            ]),
-          )
-          setErrors(fields)
-          if (Object.keys(fields).length === 0)
-            setNotice({ tone: 'error', text: caught.message })
-        } else {
-          setNotice({ tone: 'error', text: 'Your changes could not be saved.' })
-        }
+        const fields = firstFieldErrors(caught)
+        setErrors(fields)
+        if (Object.keys(fields).length === 0)
+          setNotice({
+            tone: 'error',
+            text: errorMessage(caught, 'Your changes could not be saved.'),
+          })
       },
     })
   }
@@ -235,20 +230,12 @@ export function EditEventPage() {
   if (!isUuid(id) || event.isError) {
     return (
       <Notice tone="error">
-        {event.error instanceof ApiError
-          ? event.error.message
-          : 'This event could not be found.'}
+        {errorMessage(event.error, 'This event could not be found.')}
       </Notice>
     )
   }
   if (event.isPending) {
-    return (
-      <div
-        aria-busy="true"
-        aria-label="Loading event"
-        className="h-96 animate-pulse rounded-lg bg-muted"
-      />
-    )
+    return <LoadingBlock label="Loading event" className="h-96" />
   }
 
   const item = event.data

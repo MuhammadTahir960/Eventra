@@ -14,7 +14,7 @@ from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 from apps.bookings.factories import BookingFactory
 from apps.bookings.models import Booking
 from apps.common.constants import Roles
-from tests.helpers import results
+from tests.helpers import auth_client, failed_refund, results
 
 from ..factories import UserFactory
 from ..models import User
@@ -33,13 +33,6 @@ def use_locmem_email_backend(settings):
 @pytest.fixture
 def api_client():
     return APIClient()
-
-
-def auth_client(user):
-    client = APIClient()
-    access = RefreshToken.for_user(user).access_token
-    client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
-    return client
 
 
 # ==================================================
@@ -240,16 +233,9 @@ class TestVerifyEmail:
         assert user.is_active is True
         assert user.is_email_verified is True
 
-    def test_missing_token_returns_400(self, api_client):
-        response = api_client.get(self.url)
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-
-    def test_empty_token_string_returns_400(self, api_client):
-        response = api_client.get(self.url, {"token": ""})
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-
-    def test_invalid_token_returns_400(self, api_client):
-        response = api_client.get(self.url, {"token": "garbage"})
+    @pytest.mark.parametrize("params", [{}, {"token": ""}, {"token": "garbage"}])
+    def test_missing_or_invalid_token_returns_400(self, api_client, params):
+        response = api_client.get(self.url, params)
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_already_verified_replay_still_returns_200(self, api_client):
@@ -309,23 +295,16 @@ class TestLogin:
         assert response.data["role"] == role
         assert AccessToken(response.data["access"])["role"] == role
 
-    def test_inactive_user_rejected(self, api_client):
-        UserFactory(email="unverified@example.com", is_active=False)
+    @pytest.mark.parametrize(
+        "is_active, password",
+        [(False, "testpass123"), (True, "wrong-password"), (None, "whatever123")],
+        ids=["inactive", "wrong-password", "no-such-user"],
+    )
+    def test_bad_login_is_a_401(self, api_client, is_active, password):
+        if is_active is not None:
+            UserFactory(email="someone@example.com", is_active=is_active)
         response = api_client.post(
-            self.url, {"email": "unverified@example.com", "password": "testpass123"}
-        )
-        assert response.status_code == status.HTTP_401_UNAUTHORIZED
-
-    def test_wrong_password_rejected(self, api_client):
-        UserFactory(email="active@example.com", is_active=True)
-        response = api_client.post(
-            self.url, {"email": "active@example.com", "password": "wrong-password"}
-        )
-        assert response.status_code == status.HTTP_401_UNAUTHORIZED
-
-    def test_nonexistent_user_rejected(self, api_client):
-        response = api_client.post(
-            self.url, {"email": "nobody@example.com", "password": "whatever123"}
+            self.url, {"email": "someone@example.com", "password": password}
         )
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
@@ -553,12 +532,9 @@ class TestPasswordResetRequest:
         unknown = api_client.post(self.url, {"email": "nobody@example.com"})
         assert known.data == unknown.data
 
-    def test_invalid_email_format_returns_400(self, api_client):
-        response = api_client.post(self.url, {"email": "not-an-email"})
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-
-    def test_missing_email_returns_400(self, api_client):
-        response = api_client.post(self.url, {})
+    @pytest.mark.parametrize("data", [{"email": "not-an-email"}, {}])
+    def test_missing_or_malformed_email_returns_400(self, api_client, data):
+        response = api_client.post(self.url, data)
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_throttled_after_rate_exceeded(self, api_client):
@@ -695,12 +671,6 @@ class TestWsTicket:
         assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
 
 
-def _client(user):
-    client = APIClient(raise_request_exception=False)
-    client.force_authenticate(user)
-    return client
-
-
 class TestRefreshForDeletedUser:
     def test_refresh_token_of_a_deleted_user_is_a_401_not_a_500(self):
         user = UserFactory()
@@ -743,7 +713,7 @@ class TestRefreshForDeactivatedUser:
 class TestProfile:
     def test_gender_cannot_be_blanked_through_patch(self):
         user = UserFactory(gender="male")
-        response = _client(user).patch("/auth/me/", {"gender": ""}, format="json")
+        response = auth_client(user).patch("/auth/me/", {"gender": ""}, format="json")
         assert response.status_code == 400
 
 
@@ -854,20 +824,15 @@ class TestDeleteAccount:
     url = "/auth/me/deletion/"
     password = "testpass123"
 
-    def _client(self, user):
-        client = APIClient()
-        client.force_authenticate(user=user)
-        return client
-
     def test_deletes_with_204(self):
         user = UserFactory()
-        response = self._client(user).post(
+        response = auth_client(user).post(
             self.url, {"password": self.password}, format="json"
         )
         assert response.status_code == status.HTTP_204_NO_CONTENT
 
     def test_wrong_password_is_a_field_error(self):
-        response = self._client(UserFactory()).post(
+        response = auth_client(UserFactory()).post(
             self.url, {"password": "nope"}, format="json"
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
@@ -876,8 +841,8 @@ class TestDeleteAccount:
     def test_blocked_lists_every_reason(self):
         user = UserFactory()
         BookingFactory(user=user, status=Booking.Status.PENDING)
-        BookingFactory(user=user, status=Booking.Status.REFUND_FAILED)
-        response = self._client(user).post(
+        failed_refund(BookingFactory(user=user, status=Booking.Status.REFUNDED))
+        response = auth_client(user).post(
             self.url, {"password": self.password}, format="json"
         )
         assert response.status_code == status.HTTP_409_CONFLICT
@@ -891,7 +856,7 @@ class TestDeleteAccount:
 
     def test_only_the_logged_in_user_is_deleted(self):
         user, other = UserFactory(), UserFactory()
-        response = self._client(user).post(
+        response = auth_client(user).post(
             self.url,
             {"password": self.password, "id": str(other.id), "email": other.email},
             format="json",
@@ -902,7 +867,7 @@ class TestDeleteAccount:
 
     def test_guessing_the_password_is_stopped_after_five_tries(self):
         user = UserFactory()
-        client = self._client(user)
+        client = auth_client(user)
         codes = [
             client.post(self.url, {"password": "guess"}, format="json").status_code
             for _ in range(6)
@@ -916,10 +881,10 @@ class TestDeleteAccount:
 
     def test_the_limit_is_per_user(self):
         for _ in range(5):
-            self._client(UserFactory()).post(
+            auth_client(UserFactory()).post(
                 self.url, {"password": "guess"}, format="json"
             )
-        response = self._client(UserFactory()).post(
+        response = auth_client(UserFactory()).post(
             self.url, {"password": "guess"}, format="json"
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
@@ -927,7 +892,7 @@ class TestDeleteAccount:
     def test_email_can_register_again_after_deletion(self):
         user = UserFactory()
         email = user.email
-        self._client(user).post(self.url, {"password": self.password}, format="json")
+        auth_client(user).post(self.url, {"password": self.password}, format="json")
         response = APIClient().post(
             "/auth/register/",
             {
@@ -944,7 +909,7 @@ class TestDeleteAccount:
     def test_deleted_user_access_token_stops_working(self):
         user = UserFactory()
         access = str(RefreshToken.for_user(user).access_token)
-        self._client(user).post(self.url, {"password": self.password}, format="json")
+        auth_client(user).post(self.url, {"password": self.password}, format="json")
         client = APIClient()
         client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
         assert client.get("/auth/me/").status_code == status.HTTP_401_UNAUTHORIZED

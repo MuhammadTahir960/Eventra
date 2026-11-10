@@ -5,17 +5,16 @@ import {
   type Outline,
   type VenueShape,
 } from './shapes'
-
-// ---------- tuning (SVG units; the map is scaled to fit the screen) ----------
-export const SEAT_RADIUS = 5
-const SEAT_PITCH = 14 // distance between seat centres along a row
-const ROW_PITCH = 16 // distance between rows
-const AISLE = SEAT_PITCH * 2 // gap between neighbouring sections
-const LEVEL_GAP = 34 // gap between rings (100s, 200s, 300s levels)
-const MIN_OUTLINE_LENGTH = 420
-const FIELD_INSET = 14 // pitch/stage edge sits this far inside the first row
-const BLOCK_PADDING = 2 // section background sticks out this far past its rows
-const VIEW_PADDING = 28
+import {
+  AISLE,
+  BLOCK_PADDING,
+  FIELD_INSET,
+  LEVEL_GAP,
+  MIN_OUTLINE_LENGTH,
+  ROW_PITCH,
+  SEAT_PITCH,
+  VIEW_PADDING,
+} from './constants'
 
 // The minimum of what the layout needs from a seat
 export interface LayoutSeatInput {

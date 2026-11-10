@@ -36,42 +36,25 @@ def test_same_name_and_city_allowed_when_original_is_soft_deleted():
 # ==================================================
 
 
-def test_name_shorter_than_two_chars_fails_full_clean():
+@pytest.mark.parametrize(
+    "name, capacity, valid",
+    [
+        ("A", 10, False),
+        ("Ab", 10, True),
+        ("Valid Name", 0, False),
+        ("Valid Name", -5, False),
+        ("Valid Name", 1, True),
+    ],
+)
+def test_name_needs_two_characters_and_capacity_at_least_one(name, capacity, valid):
     venue = Venue(
-        name="A", address="1 St", city="Nairobi", country="Kenya", capacity=10
+        name=name, address="1 St", city="Nairobi", country="Kenya", capacity=capacity
     )
-    with pytest.raises(ValidationError):
+    if valid:
         venue.full_clean()
-
-
-def test_name_of_exactly_two_chars_passes_full_clean():
-    venue = Venue(
-        name="Ab", address="1 St", city="Nairobi", country="Kenya", capacity=10
-    )
-    venue.full_clean()
-
-
-def test_capacity_of_zero_fails_full_clean():
-    venue = Venue(
-        name="Valid Name", address="1 St", city="Nairobi", country="Kenya", capacity=0
-    )
-    with pytest.raises(ValidationError):
-        venue.full_clean()
-
-
-def test_negative_capacity_fails_full_clean():
-    venue = Venue(
-        name="Valid Name", address="1 St", city="Nairobi", country="Kenya", capacity=-5
-    )
-    with pytest.raises(ValidationError):
-        venue.full_clean()
-
-
-def test_capacity_of_one_passes_full_clean():
-    venue = Venue(
-        name="Valid Name", address="1 St", city="Nairobi", country="Kenya", capacity=1
-    )
-    venue.full_clean()
+    else:
+        with pytest.raises(ValidationError):
+            venue.full_clean()
 
 
 # ==================================================

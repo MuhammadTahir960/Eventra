@@ -9,12 +9,11 @@ from rest_framework_simplejwt.serializers import (
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.common.constants import Roles
-from apps.common.serializers import PersonNameMixin
 
 from .models import User
 
 
-class RegisterSerializer(PersonNameMixin, serializers.ModelSerializer):
+class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, max_length=128)
     gender = serializers.ChoiceField(
         choices=User.Gender.choices,
@@ -154,7 +153,7 @@ _AVATAR_ASSET_KEYS = {
 }
 
 
-class UserSerializer(PersonNameMixin, serializers.ModelSerializer):
+class UserSerializer(serializers.ModelSerializer):
     avatar = serializers.SerializerMethodField()
 
     class Meta:

@@ -11,10 +11,14 @@ from apps.bookings.factories import BookingFactory
 from apps.bookings.models import Booking
 from apps.events.factories import EventFactory, TicketTierFactory
 from apps.events.models import Event
+from apps.payments.models import Refund
+from apps.payments.services import refund_part_of_event
 from apps.seating.factories import EventSeatFactory
 from apps.seating.models import EventSeat
+from apps.tickets.factories import TicketFactory
 from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
+from tests.helpers import confirmed_booking_with_ticket, paid_booking
 
 from ..factories import OrganizerPayoutFactory
 from ..models import OrganizerPayout
@@ -24,7 +28,6 @@ from ..services import (
     PayoutNotAvailableError,
     PayoutNotSettleableError,
     _sum_confirmed_booking_totals,
-    _ticket_sale_amount,
     awaiting_payout,
     compute_payout_amounts,
     create_payout,
@@ -37,26 +40,15 @@ from ..services import (
 pytestmark = pytest.mark.django_db
 
 
-def _confirmed_booking_with_ticket(event, total_amount):
-    booking = BookingFactory(status=Booking.Status.CONFIRMED, total_amount=total_amount)
-    seat = EventSeatFactory(
-        event=event, status=EventSeat.Status.BOOKED, price_override=total_amount
-    )
-    Ticket.objects.create(booking=booking, event_seat=seat, status=Ticket.Status.VALID)
-    return booking
-
-
 class TestSumConfirmedBookingTotals:
     def test_sums_only_confirmed_bookings(self):
         event = EventFactory(status=Event.Status.COMPLETED)
-        _confirmed_booking_with_ticket(event, Decimal("50.00"))
-        _confirmed_booking_with_ticket(event, Decimal("30.00"))
+        confirmed_booking_with_ticket(event, Decimal("50.00"))
+        confirmed_booking_with_ticket(event, Decimal("30.00"))
 
-        cancelled = BookingFactory(
-            status=Booking.Status.CANCELLED, total_amount=Decimal("99.00")
-        )
+        cancelled = BookingFactory(status=Booking.Status.CANCELLED)
         seat = EventSeatFactory(event=event, status=EventSeat.Status.AVAILABLE)
-        Ticket.objects.create(
+        TicketFactory(
             booking=cancelled, event_seat=seat, status=Ticket.Status.CANCELLED
         )
 
@@ -70,7 +62,7 @@ class TestSumConfirmedBookingTotals:
 class TestComputePayoutAmounts:
     def test_platform_fee_is_ten_percent(self):
         event = EventFactory(status=Event.Status.COMPLETED)
-        _confirmed_booking_with_ticket(event, Decimal("100.00"))
+        confirmed_booking_with_ticket(event, Decimal("100.00"))
 
         gross, fee, net = compute_payout_amounts(event)
 
@@ -88,44 +80,18 @@ class TestComputePayoutAmounts:
     )
     def test_rounding_boundary_uses_round_half_up(self, gross, expected_fee):
         event = EventFactory(status=Event.Status.COMPLETED)
-        _confirmed_booking_with_ticket(event, gross)
+        confirmed_booking_with_ticket(event, gross)
 
         _, fee, _ = compute_payout_amounts(event)
 
         assert fee == expected_fee
 
 
-class TestTicketSaleAmount:
-    def test_uses_price_override_when_set(self):
-        event = EventFactory(status=Event.Status.COMPLETED)
-        seat = EventSeatFactory(
-            event=event, status=EventSeat.Status.BOOKED, price_override=Decimal("15.00")
-        )
-        booking = BookingFactory(status=Booking.Status.CONFIRMED)
-        ticket = Ticket.objects.create(booking=booking, event_seat=seat)
-
-        assert _ticket_sale_amount(ticket) == Decimal("15.00")
-
-    def test_falls_back_to_ticket_tier_price_when_no_override(self):
-        event = EventFactory(status=Event.Status.COMPLETED)
-        tier = TicketTierFactory(event=event, price=Decimal("25.00"))
-        seat = EventSeatFactory(
-            event=event,
-            ticket_tier=tier,
-            status=EventSeat.Status.BOOKED,
-            price_override=None,
-        )
-        booking = BookingFactory(status=Booking.Status.CONFIRMED)
-        ticket = Ticket.objects.create(booking=booking, event_seat=seat)
-
-        assert _ticket_sale_amount(ticket) == Decimal("25.00")
-
-
 class TestGetEventSales:
     def test_counts_only_confirmed_tickets_and_matches_gross_revenue(self):
         event = EventFactory(status=Event.Status.COMPLETED)
-        _confirmed_booking_with_ticket(event, Decimal("40.00"))
-        _confirmed_booking_with_ticket(event, Decimal("60.00"))
+        confirmed_booking_with_ticket(event, Decimal("40.00"))
+        confirmed_booking_with_ticket(event, Decimal("60.00"))
 
         sales = get_event_sales(event)
 
@@ -146,14 +112,12 @@ class TestGetEventSales:
 
     def test_pending_and_cancelled_bookings_never_appear(self):
         event = EventFactory(status=Event.Status.COMPLETED)
-        _confirmed_booking_with_ticket(event, Decimal("50.00"))
+        confirmed_booking_with_ticket(event, Decimal("50.00"))
 
         for excluded_status in (Booking.Status.PENDING, Booking.Status.CANCELLED):
-            excluded_booking = BookingFactory(
-                status=excluded_status, total_amount=Decimal("999.00")
-            )
+            excluded_booking = BookingFactory(status=excluded_status)
             seat = EventSeatFactory(event=event, status=EventSeat.Status.AVAILABLE)
-            Ticket.objects.create(booking=excluded_booking, event_seat=seat)
+            TicketFactory(booking=excluded_booking, event_seat=seat)
 
         sales = get_event_sales(event)
 
@@ -163,8 +127,8 @@ class TestGetEventSales:
     def test_only_includes_tickets_for_the_requested_event(self):
         event = EventFactory(status=Event.Status.COMPLETED)
         other_event = EventFactory(status=Event.Status.COMPLETED)
-        _confirmed_booking_with_ticket(event, Decimal("50.00"))
-        _confirmed_booking_with_ticket(other_event, Decimal("500.00"))
+        confirmed_booking_with_ticket(event, Decimal("50.00"))
+        confirmed_booking_with_ticket(other_event, Decimal("500.00"))
 
         sales = get_event_sales(event)
 
@@ -175,17 +139,15 @@ class TestGetEventSales:
         self,
     ):
         event = EventFactory(status=Event.Status.COMPLETED)
-        booking = BookingFactory(
-            status=Booking.Status.CONFIRMED, total_amount=Decimal("90.00")
-        )
+        booking = BookingFactory(status=Booking.Status.CONFIRMED)
         seat_a = EventSeatFactory(
             event=event, status=EventSeat.Status.BOOKED, price_override=Decimal("40.00")
         )
         seat_b = EventSeatFactory(
             event=event, status=EventSeat.Status.BOOKED, price_override=Decimal("50.00")
         )
-        ticket_a = Ticket.objects.create(booking=booking, event_seat=seat_a)
-        ticket_b = Ticket.objects.create(booking=booking, event_seat=seat_b)
+        ticket_a = TicketFactory(booking=booking, event_seat=seat_a)
+        ticket_b = TicketFactory(booking=booking, event_seat=seat_b)
 
         sales = get_event_sales(event)
         assert sales["tickets_sold"] == 2
@@ -204,8 +166,8 @@ class TestGetEventSales:
 
     def test_refunded_ticket_stays_in_history_but_is_deducted_and_tagged(self):
         event = EventFactory(status=Event.Status.COMPLETED)
-        kept = _confirmed_booking_with_ticket(event, Decimal("40.00"))
-        refunded = _confirmed_booking_with_ticket(event, Decimal("60.00"))
+        kept = confirmed_booking_with_ticket(event, Decimal("40.00"))
+        refunded = confirmed_booking_with_ticket(event, Decimal("60.00"))
 
         refunded.status = Booking.Status.REFUNDED
         refunded.save(update_fields=["status"])
@@ -229,35 +191,9 @@ class TestGetEventSales:
             == refunded.tickets.get().ticket_code
         )
 
-    def test_refund_failed_booking_still_counts_toward_revenue(self):
-        event = EventFactory(status=Event.Status.COMPLETED)
-        booking = _confirmed_booking_with_ticket(event, Decimal("75.00"))
-        booking.status = Booking.Status.REFUND_FAILED
-        booking.save(update_fields=["status"])
-
-        sales = get_event_sales(event)
-
-        assert sales["gross_revenue"] == Decimal("75.00")
-        assert sales["tickets_sold"] == 1
-        assert sales["tickets"][0]["status"] == "confirmed"
-
-    def test_refund_failed_booking_recovers_to_confirmed_tag_after_retry_succeeds(self):
-        event = EventFactory(status=Event.Status.COMPLETED)
-        booking = _confirmed_booking_with_ticket(event, Decimal("30.00"))
-        booking.status = Booking.Status.REFUND_FAILED
-        booking.save(update_fields=["status"])
-        assert get_event_sales(event)["tickets"][0]["status"] == "confirmed"
-
-        booking.status = Booking.Status.REFUNDED
-        booking.save(update_fields=["status"])
-
-        sales = get_event_sales(event)
-        assert sales["tickets"][0]["status"] == "refunded"
-        assert sales["gross_revenue"] == Decimal("0.00")
-
     def test_independent_of_any_existing_payout_snapshot(self):
         event = EventFactory(status=Event.Status.COMPLETED)
-        booking = _confirmed_booking_with_ticket(event, Decimal("100.00"))
+        booking = confirmed_booking_with_ticket(event, Decimal("100.00"))
         payout, _ = create_payout(event)
 
         assert payout.gross_revenue == Decimal("100.00")
@@ -277,16 +213,13 @@ class TestGetEventSales:
 class TestCreatePayout:
     def test_creates_with_expected_fields(self):
         event = EventFactory(status=Event.Status.COMPLETED)
-        _confirmed_booking_with_ticket(event, Decimal("100.00"))
+        confirmed_booking_with_ticket(event, Decimal("100.00"))
 
         payout, created = create_payout(event)
 
         assert created is True
         assert payout.event_id == event.id
         assert payout.status == OrganizerPayout.Status.PENDING
-        assert payout.payout_reference == f"PAYOUT-{event.id}"
-        assert payout.period_start == event.start_datetime
-        assert payout.period_end == event.end_datetime
         assert payout.gross_revenue == Decimal("100.00")
         assert payout.platform_fee == Decimal("10.00")
         assert payout.net_amount == Decimal("90.00")
@@ -341,7 +274,7 @@ class TestPayOutEvent:
             completed_at=timezone.now() - timedelta(hours=hours_ago),
         )
         if sold:
-            _confirmed_booking_with_ticket(event, Decimal("100.00"))
+            confirmed_booking_with_ticket(event, Decimal("100.00"))
         return event
 
     def test_creates_a_processing_payout_and_settles_it(
@@ -417,13 +350,13 @@ class TestPayOutEvent:
 class TestAwaitingPayout:
     def test_lists_completed_unpaid_events_that_sold_tickets(self):
         waiting = EventFactory(status=Event.Status.COMPLETED)
-        _confirmed_booking_with_ticket(waiting, Decimal("10.00"))
+        confirmed_booking_with_ticket(waiting, Decimal("10.00"))
         EventFactory(status=Event.Status.COMPLETED)
         paid = EventFactory(status=Event.Status.COMPLETED)
-        _confirmed_booking_with_ticket(paid, Decimal("10.00"))
+        confirmed_booking_with_ticket(paid, Decimal("10.00"))
         OrganizerPayoutFactory(event=paid)
         upcoming = EventFactory(status=Event.Status.APPROVED)
-        _confirmed_booking_with_ticket(upcoming, Decimal("10.00"))
+        confirmed_booking_with_ticket(upcoming, Decimal("10.00"))
 
         assert list(awaiting_payout(Event.all_objects.all())) == [waiting]
 
@@ -588,3 +521,38 @@ class TestSettlePayout:
 
         payout.refresh_from_db()
         assert payout.status == OrganizerPayout.Status.SETTLED
+
+
+class TestPartialRefundsAndPayouts:
+    def _refunded(self, monkeypatch):
+        create = MagicMock(return_value=MagicMock(id="re_test"))
+        monkeypatch.setattr("apps.payments.services.stripe.Refund.create", create)
+        event = EventFactory(
+            status=Event.Status.COMPLETED,
+            completed_at=timezone.now() - timedelta(hours=PAYOUT_WAIT_HOURS + 1),
+        )
+        paid_booking(event, (TicketTierFactory(event=event), "100.00"))
+        refund_part_of_event(event, 25)
+        return event
+
+    def test_gross_and_sales_are_net_of_partial_refunds(self, monkeypatch):
+        event = self._refunded(monkeypatch)
+        Refund.objects.update(status=Refund.Status.SUCCEEDED)
+
+        assert _sum_confirmed_booking_totals(event) == Decimal("75.00")
+        assert awaiting_payout(Event.all_objects.all()).get().gross_revenue == Decimal(
+            "75.00"
+        )
+        sale = get_event_sales(event)["tickets"][0]
+        assert (sale["amount"], sale["refunded"]) == (
+            Decimal("75.00"),
+            Decimal("25.00"),
+        )
+        assert pay_out_event(event).net_amount == Decimal("67.50")
+
+    def test_payout_waits_for_refunds_in_flight(self, monkeypatch):
+        event = self._refunded(monkeypatch)
+        Refund.objects.update(status=Refund.Status.PENDING)
+
+        with pytest.raises(PayoutNotAvailableError, match="still being processed"):
+            pay_out_event(event)
