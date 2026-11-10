@@ -10,6 +10,7 @@ export function LoadingBlock({
 }) {
   return (
     <div
+      role="status"
       aria-busy="true"
       aria-label={label}
       className={cn('animate-pulse rounded-lg bg-muted', className)}
