@@ -51,9 +51,7 @@ def test_league_name_free_raises_nothing():
     ensure_unique_league_name(sport, "Premier League")
 
 
-@pytest.mark.parametrize(
-    "name", ["Premier League", "PREMIER LEAGUE"]
-)
+@pytest.mark.parametrize("name", ["Premier League", "PREMIER LEAGUE"])
 def test_league_name_taken_within_sport_raises_duplicate_error(name):
     sport = SportFactory()
     LeagueFactory(sport=sport, name="Premier League")

@@ -57,9 +57,7 @@ class TestValidateTicket:
         with pytest.raises(TicketAlreadyUsedError):
             validate_ticket(ticket=ticket, event_id=event.id)
 
-    @pytest.mark.parametrize(
-        "status", [Ticket.Status.CANCELLED, Ticket.Status.PENDING]
-    )
+    @pytest.mark.parametrize("status", [Ticket.Status.CANCELLED, Ticket.Status.PENDING])
     def test_cancelled_or_unpaid_raises(self, status):
         event = EventFactory(status="approved")
         seat = EventSeatFactory(event=event)

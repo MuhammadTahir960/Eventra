@@ -36,9 +36,7 @@ def test_sports_ordered_by_name():
 # ==================================================
 
 
-@pytest.mark.parametrize(
-    "name", ["Premier League", "PREMIER LEAGUE"]
-)
+@pytest.mark.parametrize("name", ["Premier League", "PREMIER LEAGUE"])
 def test_duplicate_league_name_within_same_sport_rejected(name):
     sport = SportFactory()
     LeagueFactory(sport=sport, name="Premier League")

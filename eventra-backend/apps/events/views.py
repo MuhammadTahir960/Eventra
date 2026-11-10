@@ -287,9 +287,7 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
     def ticket_tier_update(self, request, pk=None, tier_id=None):
         event = self.get_object()
         tier = get_object_or_404(TicketTier, pk=tier_id, event=event)
-        tier.event = (
-            event
-        )
+        tier.event = event
         serializer = TicketTierSerializer(
             tier,
             data=request.data,
@@ -307,9 +305,7 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
     def ticket_tier_add_section(self, request, pk=None, tier_id=None):
         event = self.get_object()
         tier = get_object_or_404(TicketTier, pk=tier_id, event=event)
-        tier.event = (
-            event
-        )
+        tier.event = event
         serializer = TierSectionMappingSerializer(
             data=request.data, context={"event": event, "ticket_tier": tier}
         )
