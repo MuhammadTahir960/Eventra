@@ -1,7 +1,6 @@
 from django.core.exceptions import FieldDoesNotExist
 from django.db import transaction
-from django.db.models import ProtectedError
-from django.http import Http404
+from django.db.models import ProtectedError, RestrictedError
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.generics import get_object_or_404
@@ -22,21 +21,36 @@ def _save_fields(instance, *fields):
     instance.save(update_fields=fields)
 
 
-class SoftDeleteDestroyMixin:
+class TrashLookupMixin:
+    def get_trash_queryset(self):
+        return self.get_queryset().model.all_objects.all()
+
+    def get_trash_object(self, request, pk):
+        instance = get_object_or_404(self.get_trash_queryset(), pk=pk)
+        self.check_object_permissions(request, instance)
+        return instance
+
+
+class SoftDeleteDestroyMixin(TrashLookupMixin):
+    hard_delete_blocked_message = (
+        "Cannot permanently delete: this record is still referenced by other "
+        "records. Soft-delete it instead."
+    )
+
+    def perform_delete_guard(self, instance):
+        return None
+
     def perform_hard_delete_guard(self, instance):
         return None
 
     def destroy(self, request, *args, **kwargs):
         lookup_url_kwarg = self.lookup_url_kwarg or self.lookup_field
         model = self.get_queryset().model
-        try:
-            instance = get_object_or_404(
-                model.all_objects, **{self.lookup_field: self.kwargs[lookup_url_kwarg]}
-            )
-        except Http404:
-            return Response(status=status.HTTP_404_NOT_FOUND)
+        instance = self.get_trash_object(request, self.kwargs[lookup_url_kwarg])
 
-        self.check_object_permissions(request, instance)
+        guard_response = self.perform_delete_guard(instance)
+        if guard_response is not None:
+            return guard_response
 
         hard = str(request.query_params.get("hard", "")).lower() in ("1", "true", "yes")
 
@@ -57,23 +71,22 @@ class SoftDeleteDestroyMixin:
                     pk=instance.pk
                 )
                 locked_instance.delete()
-        except ProtectedError:
+        except (ProtectedError, RestrictedError):
             return Response(
-                {
-                    "detail": "Cannot permanently delete: this record is still "
-                    "referenced by other records. Soft-delete it instead."
-                },
+                {"detail": self.hard_delete_blocked_message},
                 status=status.HTTP_409_CONFLICT,
             )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class SoftDeleteRestoreMixin:
+class SoftDeleteRestoreMixin(TrashLookupMixin):
+    include_inactive_roles = (Roles.ADMIN,)
+
     def include_inactive(self) -> bool:
         wanted = str(self.request.query_params.get("include_inactive", "")).lower()
-        return wanted in ("1", "true", "yes") and has_role(
-            self.request.user, Roles.ADMIN
+        return wanted in ("1", "true", "yes") and any(
+            has_role(self.request.user, role) for role in self.include_inactive_roles
         )
 
     def perform_restore_guard(self, instance):
@@ -81,11 +94,7 @@ class SoftDeleteRestoreMixin:
 
     @action(detail=True, methods=["post"])
     def restore(self, request, pk=None):
-        model = self.get_queryset().model
-        try:
-            instance = get_object_or_404(model.all_objects, pk=pk)
-        except Http404:
-            return Response(status=status.HTTP_404_NOT_FOUND)
+        instance = self.get_trash_object(request, pk)
 
         if instance.is_active:
             return Response(

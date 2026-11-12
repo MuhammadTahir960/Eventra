@@ -8,6 +8,7 @@ from rest_framework.generics import get_object_or_404
 from apps.bookings.models import Booking
 from apps.common.constants import Roles
 from apps.payments.services import refund_price_drops
+from apps.payouts.services import awaiting_payout
 from apps.tickets.models import Ticket
 from apps.tickets.services import forget_ticket_pdfs
 
@@ -73,11 +74,7 @@ def ensure_event_deletable(event: Event) -> None:
             "Event must be cancelled or completed before it can be deleted "
             f"(current status: {event.get_status_display()})."
         )
-    if (
-        event.status == Event.Status.COMPLETED
-        and not _has_payout(event)
-        and paid_bookings(event).exists()
-    ):
+    if awaiting_payout(Event.all_objects.filter(pk=event.pk)).exists():
         raise EventNotDeletableError(
             "A completed event can't be deleted until its organizer has been paid out."
         )
@@ -269,11 +266,22 @@ def visible_events_for_ticket_holder(user) -> QuerySet:
     qs = visible_events_for_user(user)
     if not user or not user.is_authenticated or user.role == Roles.ADMIN:
         return qs
-    held = Booking.objects.filter(user=user, status=Booking.Status.CONFIRMED).values(
-        "tickets__event_seat__event"
+    own = Booking.objects.filter(user=user)
+    confirmed = own.filter(status=Booking.Status.CONFIRMED)
+    paid = own.filter(status__in=Booking.PAID_STATUSES)
+    in_review = Q(status=Event.Status.PENDING_APPROVAL) | Q(completed_in_review=True)
+    ended = Q(status=Event.Status.CANCELLED) | Q(
+        status=Event.Status.COMPLETED, completed_in_review=False
     )
-    hidden = Q(status=Event.Status.PENDING_APPROVAL) | Q(completed_in_review=True)
-    return qs | Event.objects.filter(hidden, pk__in=held)
+    return (
+        qs
+        | Event.objects.filter(
+            in_review, pk__in=confirmed.values("tickets__event_seat__event")
+        )
+        | Event.all_objects.filter(
+            ended, pk__in=paid.values("tickets__event_seat__event")
+        )
+    )
 
 
 def get_visible_event_or_404(user, pk) -> Event:
