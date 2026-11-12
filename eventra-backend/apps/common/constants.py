@@ -1,4 +1,5 @@
 import re
+from decimal import Decimal
 
 from django.core.validators import FileExtensionValidator
 from django.db import models
@@ -11,6 +12,8 @@ class Roles(models.TextChoices):
 
 
 IMAGE_EXTENSION_VALIDATOR = FileExtensionValidator(["jpg", "jpeg", "png", "webp"])
+
+MIN_PAID_TICKET_PRICE = Decimal("0.50")
 
 MAX_IMAGE_UPLOAD_SIZE_MB = 5
 

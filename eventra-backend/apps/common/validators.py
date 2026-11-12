@@ -7,12 +7,20 @@ from .constants import (
     ALLOWED_IMAGE_FORMATS,
     MAX_IMAGE_PIXELS,
     MAX_IMAGE_UPLOAD_SIZE_MB,
+    MIN_PAID_TICKET_PRICE,
     NAME_PUNCTUATION,
     REPEATED_PUNCTUATION,
     TEXT_ERROR,
     TEXT_JOINERS,
     TITLE_PUNCTUATION,
 )
+
+
+def validate_ticket_price(value) -> None:
+    if value != 0 and not value >= MIN_PAID_TICKET_PRICE:
+        raise ValidationError(
+            f"A ticket is free (0.00) or costs at least {MIN_PAID_TICKET_PRICE}."
+        )
 
 
 def validate_image_upload_size(file) -> None:
