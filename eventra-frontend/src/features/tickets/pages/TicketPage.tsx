@@ -75,7 +75,6 @@ export function TicketPage() {
 
   const item = ticket.data
   const status = TICKET_STATUS[item.status]
-  const cancelled = item.status === 'cancelled'
   const venue = event ? resolve(event).venue : undefined
 
   async function download() {
@@ -104,9 +103,12 @@ export function TicketPage() {
         as="article"
         aria-label={`Ticket for ${item.event_title}`}
         stub={
-          cancelled ? (
+          // Only a valid ticket shows its code: a used one can't get in again
+          item.status !== 'valid' ? (
             <p className="py-2 text-center text-sm text-muted-foreground">
-              This ticket was cancelled and can't be used for entry.
+              {item.status === 'used'
+                ? 'This ticket was already used for entry.'
+                : "This ticket was cancelled and can't be used for entry."}
             </p>
           ) : (
             <div className="flex flex-col items-center gap-3 py-2">
