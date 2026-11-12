@@ -28,6 +28,7 @@ from .services import (
     register_user,
     request_password_reset,
     reset_password,
+    verify_turnstile,
     verify_user_email,
 )
 
@@ -36,6 +37,14 @@ class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
     throttle_scope = "auth-register"
+
+    def create(self, request, *args, **kwargs):
+        if not verify_turnstile(request.data.get("captcha_token")):
+            return Response(
+                {"captcha_token": ["Please confirm you're human, then try again."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().create(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         register_user(serializer)

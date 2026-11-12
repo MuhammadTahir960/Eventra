@@ -120,6 +120,20 @@ class TestRegister:
         response = api_client.post(self.url, payload)
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_a_failed_human_check_creates_no_account(self, api_client, monkeypatch):
+        seen = []
+        monkeypatch.setattr(
+            "apps.users.views.verify_turnstile",
+            lambda token: seen.append(token) or False,
+        )
+        response = api_client.post(
+            self.url, {**self._payload(), "captcha_token": "bad"}, format="json"
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "captcha_token" in response.data
+        assert seen == ["bad"]
+        assert not User.objects.filter(email="newuser@example.com").exists()
+
     def _payload(self, **overrides):
         payload = {
             "email": "newuser@example.com",
