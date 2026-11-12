@@ -1,7 +1,7 @@
 import django_filters
 from django.contrib.postgres.search import SearchQuery, SearchVector
 from django.db import transaction
-from django.db.models import Exists, OuterRef, ProtectedError
+from django.db.models import Exists, OuterRef
 from rest_framework import generics, permissions, status, views, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotAuthenticated, PermissionDenied
@@ -9,8 +9,13 @@ from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
 
 from apps.common.constants import Roles
-from apps.common.mixins import SoftDeleteRestoreMixin
-from apps.common.permissions import IsAdmin, IsEventOwnerStrict, IsOrganizer
+from apps.common.mixins import SoftDeleteDestroyMixin, SoftDeleteRestoreMixin
+from apps.common.permissions import (
+    IsAdmin,
+    IsEventOwnerStrict,
+    IsOrganizer,
+    has_role,
+)
 from apps.common.validators import has_allowed_text
 from apps.payments.tasks import refund_event_bookings_task, retry_event_refunds_task
 
@@ -67,6 +72,7 @@ class EventFilterSet(django_filters.FilterSet):
     min_price = django_filters.NumberFilter(method="filter_noop")
     max_price = django_filters.NumberFilter(method="filter_noop")
     search = django_filters.CharFilter(method="filter_search", max_length=100)
+    is_active = django_filters.BooleanFilter()
 
     class Meta:
         model = Event
@@ -80,6 +86,7 @@ class EventFilterSet(django_filters.FilterSet):
             "min_price",
             "max_price",
             "search",
+            "is_active",
         ]
 
     def filter_noop(self, queryset, name, value):
@@ -122,19 +129,34 @@ def _save_locked(event, serializer, success_status, *checks):
     return Response(serializer.data, status=success_status)
 
 
-class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
+class EventViewSet(
+    SoftDeleteDestroyMixin, SoftDeleteRestoreMixin, viewsets.ModelViewSet
+):
     serializer_class = EventSerializer
     filterset_class = EventFilterSet
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ["get", "post", "patch", "delete"]
     throttle_scope = None
+    include_inactive_roles = (Roles.ADMIN, Roles.ORGANIZER)
+    hard_delete_blocked_message = (
+        "This event has bookings, tickets or payouts, so it can't be deleted "
+        "forever. It stays in the trash."
+    )
+
+    def get_trash_queryset(self):
+        events = Event.all_objects.select_related(
+            "venue", "category", "organizer", "league", "home_team", "away_team"
+        )
+        if has_role(self.request.user, Roles.ADMIN):
+            return events
+        return events.filter(organizer_id=self.request.user.id)
 
     def get_queryset(self):
         user = self.request.user
         if self.include_inactive():
-            return Event.all_objects.select_related(
-                "venue", "category", "organizer", "league", "home_team", "away_team"
-            ).order_by("-start_datetime", "id")
+            return (visible_events_for_user(user) | self.get_trash_queryset()).order_by(
+                "-start_datetime", "id"
+            )
         if self.action in ("retrieve", "ticket_tiers") and self.request.method == "GET":
             return visible_events_for_ticket_holder(user).order_by(
                 "-start_datetime", "id"
@@ -148,12 +170,14 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
             return [permissions.IsAuthenticated(), (IsOrganizer | IsAdmin)()]
         if self.action in ("update", "partial_update"):
             return [permissions.IsAuthenticated(), IsEventOwnerStrict()]
-        if self.action == "destroy":
+        if self.action in (
+            "destroy",
+            "restore",
+            "cancel",
+            "extend_end",
+            "postponements",
+        ):
             return [permissions.IsAuthenticated(), IsEventOwnerOrAdmin()]
-        if self.action in ("cancel", "extend_end", "postponements"):
-            return [permissions.IsAuthenticated(), IsEventOwnerOrAdmin()]
-        if self.action == "restore":
-            return [IsAdmin()]
         return [perm() for perm in self.permission_classes]
 
     def update(self, request, *args, **kwargs):
@@ -174,32 +198,12 @@ class EventViewSet(SoftDeleteRestoreMixin, viewsets.ModelViewSet):
             serializer.save()
         return Response(serializer.data)
 
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-
+    def perform_delete_guard(self, instance):
         try:
             ensure_event_deletable(instance)
         except EventNotDeletableError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-
-        hard = str(request.query_params.get("hard", "")).lower() in ("1", "true", "yes")
-        if not hard:
-            instance.is_active = False
-            instance.save(update_fields=["is_active", "updated_at"])
-            return Response(status=status.HTTP_204_NO_CONTENT)
-
-        try:
-            with transaction.atomic():
-                instance.delete()
-        except ProtectedError:
-            return Response(
-                {
-                    "detail": "Cannot permanently delete an event that has "
-                    "bookings, tickets or payouts. Soft-delete it instead."
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return None
 
     def perform_restore_guard(self, instance):
         try:

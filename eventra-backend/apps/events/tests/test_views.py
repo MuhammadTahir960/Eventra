@@ -332,6 +332,30 @@ class TestRetrieveEvent:
         response = auth_client(attendee_user).get(f"/events/{event.pk}/")
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
+    @pytest.mark.parametrize("trashed", [False, True])
+    def test_refunded_buyer_can_retrieve_cancelled_event(self, attendee_user, trashed):
+        event = EventFactory(status=Event.Status.CANCELLED, is_active=not trashed)
+        _sell_ticket(event, Booking.Status.REFUNDED, user=attendee_user)
+
+        response = auth_client(attendee_user).get(f"/events/{event.pk}/")
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["status"] == Event.Status.CANCELLED
+
+    def test_cancelled_event_stays_hidden_from_other_users(self, attendee_user):
+        event = EventFactory(status=Event.Status.CANCELLED)
+        _sell_ticket(event, Booking.Status.REFUNDED)
+        response = auth_client(attendee_user).get(f"/events/{event.pk}/")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_buyer_can_retrieve_completed_event_after_it_is_trashed(
+        self, attendee_user
+    ):
+        event = EventFactory(status=Event.Status.COMPLETED, is_active=False)
+        _sell_ticket(event, user=attendee_user)
+        response = auth_client(attendee_user).get(f"/events/{event.pk}/")
+        assert response.status_code == status.HTTP_200_OK
+
     def test_ticket_holder_pending_event_stays_out_of_list(self, attendee_user):
         event = EventFactory(status=Event.Status.PENDING_APPROVAL)
         _sell_ticket(event, user=attendee_user)
@@ -633,6 +657,18 @@ class TestUpdateEvent:
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
+@pytest.mark.parametrize("limit, ok", [(0, False), (1, True), (50, True), (51, False)])
+def test_owner_sets_the_per_buyer_ticket_limit(organizer_user, limit, ok):
+    event = EventFactory(organizer=organizer_user, status=Event.Status.APPROVED)
+    response = auth_client(organizer_user).patch(
+        f"/events/{event.pk}/", {"max_tickets_per_buyer": limit}, format="json"
+    )
+    assert response.status_code == (200 if ok else 400)
+    event.refresh_from_db()
+    assert event.max_tickets_per_buyer == (limit if ok else 10)
+    assert event.status == Event.Status.APPROVED
+
+
 # ==================================================
 # DELETE /events/{id}/
 # ==================================================
@@ -686,7 +722,9 @@ class TestDeleteEvent:
         event = EventFactory(organizer=other, status=Event.Status.COMPLETED)
         client = auth_client(organizer_user)
         response = client.delete(f"/events/{event.pk}/")
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        event.refresh_from_db()
+        assert event.is_active is True
 
     def test_admin_can_delete_organizers_event(self, admin_user):
         organizer_user = UserFactory(role=Roles.ORGANIZER)
@@ -714,13 +752,99 @@ class TestDeleteEvent:
         event = EventFactory(organizer=other, status=Event.Status.COMPLETED)
         client = auth_client(organizer_user)
         response = client.delete(f"/events/{event.pk}/?hard=true")
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
         assert Event.all_objects.filter(id=event.id).exists()
 
     def test_anonymous_cannot_delete(self, api_client):
         event = EventFactory(status=Event.Status.CANCELLED)
         response = api_client.delete(f"/events/{event.pk}/")
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_owner_can_delete_forever_from_the_trash(self, organizer_user):
+        event = _trashed(EventFactory(organizer=organizer_user))
+        response = auth_client(organizer_user).delete(f"/events/{event.pk}/?hard=true")
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+        assert not Event.all_objects.filter(id=event.id).exists()
+
+    def test_deleting_an_event_already_in_the_trash_is_a_404(self, organizer_user):
+        event = _trashed(EventFactory(organizer=organizer_user))
+        response = auth_client(organizer_user).delete(f"/events/{event.pk}/")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_trashed_event_with_sales_cannot_be_deleted_forever(self, organizer_user):
+        event = _trashed(EventFactory(organizer=organizer_user))
+        _sell_ticket(event, Booking.Status.REFUNDED)
+        response = auth_client(organizer_user).delete(f"/events/{event.pk}/?hard=true")
+        assert response.status_code == status.HTTP_409_CONFLICT
+        assert Event.all_objects.filter(id=event.id).exists()
+
+    def test_attendee_cannot_delete(self, attendee_user):
+        event = EventFactory(status=Event.Status.CANCELLED)
+        response = auth_client(attendee_user).delete(f"/events/{event.pk}/")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        event.refresh_from_db()
+        assert event.is_active is True
+
+
+def _trashed(event, status=Event.Status.CANCELLED):
+    event.status = status
+    event.is_active = False
+    if status == Event.Status.COMPLETED:
+        event.completed_at = timezone.now()
+    event.save(update_fields=["status", "is_active", "completed_at"])
+    return event
+
+
+# ==================================================
+# GET /events/?include_inactive=true&is_active=false (the trash)
+# ==================================================
+
+
+class TestTrash:
+    url = "/events/?include_inactive=true&is_active=false"
+
+    def test_organizer_sees_only_their_own_deleted_events(self, organizer_user):
+        mine = _trashed(EventFactory(organizer=organizer_user))
+        _trashed(EventFactory())
+        EventFactory(organizer=organizer_user, status=Event.Status.CANCELLED)
+
+        response = auth_client(organizer_user).get(self.url)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert [row["id"] for row in results(response)] == [str(mine.pk)]
+
+    def test_admin_sees_every_deleted_event(self, admin_client):
+        trashed = {str(_trashed(EventFactory()).pk) for _ in range(2)}
+        EventFactory(status=Event.Status.CANCELLED)
+        response = admin_client.get(self.url)
+        assert {row["id"] for row in results(response)} == trashed
+
+    @pytest.mark.parametrize("who", ["attendee", "anonymous"])
+    def test_others_never_see_deleted_events(self, attendee_user, api_client, who):
+        _trashed(EventFactory(), Event.Status.COMPLETED)
+        client = auth_client(attendee_user) if who == "attendee" else api_client
+        assert results(client.get(self.url)) == []
+
+    def test_owner_can_open_their_deleted_event(self, organizer_user):
+        event = _trashed(EventFactory(organizer=organizer_user))
+        client = auth_client(organizer_user)
+        assert client.get(f"/events/{event.pk}/").status_code == 404
+        response = client.get(f"/events/{event.pk}/?include_inactive=true")
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_the_flag_never_hides_other_organizers_public_events(self, organizer_user):
+        public = EventFactory(status=Event.Status.APPROVED)
+        response = auth_client(organizer_user).get(
+            f"/events/{public.pk}/?include_inactive=true"
+        )
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_other_organizer_cannot_open_a_deleted_event(self, organizer_user):
+        event = _trashed(EventFactory())
+        response = auth_client(organizer_user).get(
+            f"/events/{event.pk}/?include_inactive=true"
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 # ==================================================
@@ -738,13 +862,26 @@ class TestRestoreEvent:
         event.refresh_from_db()
         assert event.is_active is True
 
-    def test_organizer_cannot_restore(self, organizer_user):
-        event = EventFactory(organizer=organizer_user, status=Event.Status.CANCELLED)
-        event.is_active = False
-        event.save(update_fields=["is_active"])
-        client = auth_client(organizer_user)
-        response = client.post(f"/events/{event.pk}/restore/")
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+    def test_owner_can_restore_their_event(self, organizer_user):
+        event = _trashed(EventFactory(organizer=organizer_user))
+        response = auth_client(organizer_user).post(f"/events/{event.pk}/restore/")
+        assert response.status_code == status.HTTP_200_OK
+        event.refresh_from_db()
+        assert event.is_active is True
+
+    def test_other_organizer_cannot_restore(self, organizer_user):
+        event = _trashed(EventFactory())
+        response = auth_client(organizer_user).post(f"/events/{event.pk}/restore/")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        event.refresh_from_db()
+        assert event.is_active is False
+
+    def test_attendee_cannot_restore(self, attendee_user):
+        event = _trashed(EventFactory())
+        response = auth_client(attendee_user).post(f"/events/{event.pk}/restore/")
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        event.refresh_from_db()
+        assert event.is_active is False
 
     def test_restore_nonexistent_event_returns_404(self, admin_client):
         response = admin_client.post(
@@ -1514,6 +1651,19 @@ class TestHardDelete:
 
         assert response.status_code == 409
         assert Event.objects.filter(id=event.id).exists()
+
+    def test_an_event_with_seats_but_no_tickets_can_be_deleted_forever(
+        self, organizer_user
+    ):
+        event = EventFactory(organizer=organizer_user, status=Event.Status.CANCELLED)
+        EventSeatFactory(
+            event=event,
+            ticket_tier=TicketTierFactory(event=event),
+            seat=SeatFactory(venue=event.venue),
+        )
+        response = auth_client(organizer_user).delete(f"/events/{event.id}/?hard=true")
+        assert response.status_code == 204
+        assert not Event.all_objects.filter(id=event.id).exists()
 
     def test_hard_delete_of_a_clean_cancelled_event_still_works(self, organizer_user):
         event = EventFactory(organizer=organizer_user, status=Event.Status.CANCELLED)

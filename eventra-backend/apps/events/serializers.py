@@ -67,6 +67,7 @@ class EventSerializer(
             "status",
             "rejection_reason",
             "is_seated",
+            "max_tickets_per_buyer",
             "start_datetime",
             "end_datetime",
             "completed_at",

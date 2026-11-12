@@ -3,6 +3,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta
 
+import requests
 from django.conf import settings
 from django.core.mail import send_mail
 from django.db import models, transaction
@@ -24,7 +25,7 @@ from apps.seating.models import SeatHold
 from apps.tickets.models import Ticket
 from apps.tickets.services import forget_ticket_pdfs
 
-from .models import User
+from .models import CanonicalEmail, User
 from .tokens import (
     generate_password_reset_token,
     generate_verification_token,
@@ -342,3 +343,45 @@ def send_account_deleted_email(email: str, first_name: str) -> None:
         recipient_list=[email],
         fail_silently=False,
     )
+
+
+def flush_expired_tokens() -> int:
+    deleted, _ = OutstandingToken.objects.filter(expires_at__lt=timezone.now()).delete()
+    return deleted
+
+
+_GMAIL_DOMAINS = ("gmail.com", "googlemail.com")
+
+
+def canonical_email(email: str) -> str:
+    local, _, domain = email.strip().lower().rpartition("@")
+    local = local.split("+", 1)[0]
+    if domain in _GMAIL_DOMAINS:
+        return f"{local.replace('.', '')}@gmail.com"
+    return f"{local}@{domain}"
+
+
+def email_in_use(email: str) -> bool:
+    return (
+        User.objects.annotate(canonical=CanonicalEmail("email"))
+        .filter(canonical=canonical_email(email))
+        .exists()
+    )
+
+
+_TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+
+
+def verify_turnstile(token) -> bool:
+    if not isinstance(token, str) or not token or len(token) > 2048:
+        return False
+    try:
+        response = requests.post(
+            _TURNSTILE_VERIFY_URL,
+            data={"secret": settings.TURNSTILE_SECRET_KEY, "response": token},
+            timeout=5,
+        )
+        return response.ok and response.json().get("success") is True
+    except (requests.RequestException, ValueError):
+        logger.exception("Turnstile verification failed")
+        return False

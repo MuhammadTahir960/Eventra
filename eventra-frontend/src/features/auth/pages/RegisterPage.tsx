@@ -11,6 +11,7 @@ import { ApiError, errorMessage, firstFieldErrors } from '@/lib/api-client'
 import { authApi, type RegisterPayload } from '../api'
 import { AuthLayout } from '../components/AuthLayout'
 import { PasswordField } from '../components/PasswordField'
+import { Turnstile } from '../components/Turnstile'
 import { useAuth } from '../auth-store'
 import { ROLE_HOME } from '../role-routes'
 import { usePageTitle } from '@/lib/use-page-title'
@@ -73,6 +74,8 @@ export function RegisterPage() {
   const [focusKey, setFocusKey] = useState(0)
   const [pending, setPending] = useState(false)
   const [registeredEmail, setRegisteredEmail] = useState<string | null>(null)
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
+  const [captchaKey, setCaptchaKey] = useState(0)
 
   if (user) return <Navigate to={ROLE_HOME[user.role]} replace />
 
@@ -110,10 +113,17 @@ export function RegisterPage() {
       return
     }
     setErrors({})
+    if (!captchaToken) {
+      setFormError("Please confirm you're human first.")
+      return
+    }
 
     setPending(true)
     try {
-      const created = await authApi.register(values as RegisterPayload)
+      const created = await authApi.register({
+        ...(values as RegisterPayload),
+        captcha_token: captchaToken,
+      })
       setRegisteredEmail(created.email)
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 400) {
@@ -139,6 +149,8 @@ export function RegisterPage() {
       }
     } finally {
       setPending(false)
+      // Each check works once: get a fresh one for the next try
+      setCaptchaKey((key) => key + 1)
     }
   }
 
@@ -284,6 +296,8 @@ export function RegisterPage() {
             </p>
           )}
         </fieldset>
+
+        <Turnstile onToken={setCaptchaToken} resetKey={captchaKey} />
 
         <Button
           type="submit"

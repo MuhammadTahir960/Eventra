@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
@@ -9,6 +10,7 @@ import { isUuid } from '@/lib/ids'
 import type { Page } from '@/lib/pagination'
 import type { StatusTone } from '@/components/StatusBadge'
 import type { EventItem } from '@/features/events/types'
+import type { Ticket } from '@/features/tickets/api'
 
 // ---------- events ----------
 
@@ -25,7 +27,12 @@ export function useOrganizerEvents() {
 export type EventPatch = Partial<
   Pick<
     EventItem,
-    'title' | 'description' | 'category' | 'start_datetime' | 'end_datetime'
+    | 'title'
+    | 'description'
+    | 'category'
+    | 'start_datetime'
+    | 'end_datetime'
+    | 'max_tickets_per_buyer'
   >
 >
 
@@ -42,12 +49,16 @@ export function useUpdateEvent(id: string) {
   })
 }
 
-// Every list and page that shows an event, after its owner or an admin changes it
-function refreshEvent(client: QueryClient, event: EventItem) {
-  client.setQueryData(['events', 'detail', event.id], event)
+// Every list that shows events, after an owner or an admin changes one
+function refreshEventLists(client: QueryClient) {
   void client.invalidateQueries({ queryKey: ['organizer'] })
   void client.invalidateQueries({ queryKey: ['admin'] })
   void client.invalidateQueries({ queryKey: ['events', 'list'] })
+}
+
+function refreshEvent(client: QueryClient, event: EventItem) {
+  client.setQueryData(['events', 'detail', event.id], event)
+  refreshEventLists(client)
 }
 
 // Owner or admin. Cancelling refunds every booking, so callers confirm first.
@@ -85,6 +96,73 @@ export function usePostponeEvent(id: string) {
         body: dates,
       }),
     onSuccess: (event) => refreshEvent(client, event),
+  })
+}
+
+// ---------- door ----------
+
+// Owner or admin. The server decides; refusals come back as 404 or 409.
+export function useCheckIn(eventId: string) {
+  return useMutation({
+    mutationFn: (code: string) =>
+      apiFetch<Ticket>(`/events/${eventId}/check-ins/`, {
+        method: 'POST',
+        body: { code },
+      }),
+  })
+}
+
+// ---------- trash ----------
+
+// The backend scopes it: an organizer's own deleted events, everyone's for an admin
+export function useTrashedEvents(page: number) {
+  return useQuery({
+    queryKey: ['organizer', 'trash', page],
+    queryFn: ({ signal }) =>
+      apiFetch<Page<EventItem>>('/events/', {
+        query: { include_inactive: true, is_active: false, page },
+        signal,
+      }),
+    placeholderData: keepPreviousData,
+  })
+}
+
+// Owner or admin; only cancelled or completed events (the backend says why not)
+export function useMoveToTrash() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<void>(`/events/${id}/`, { method: 'DELETE' }),
+    onSuccess: (_, id) => {
+      // Its public page is gone for everyone but its buyers
+      client.removeQueries({ queryKey: ['events', 'detail', id] })
+      refreshEventLists(client)
+    },
+  })
+}
+
+export function useRestoreEvent() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<EventItem>(`/events/${id}/restore/`, { method: 'POST' }),
+    onSuccess: (event) => refreshEvent(client, event),
+  })
+}
+
+// Refused (409) while bookings, tickets or payouts point at the event
+export function useDeleteForever() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<void>(`/events/${id}/`, {
+        method: 'DELETE',
+        query: { hard: true },
+      }),
+    onSuccess: (_, id) => {
+      client.removeQueries({ queryKey: ['events', 'detail', id] })
+      refreshEventLists(client)
+    },
   })
 }
 

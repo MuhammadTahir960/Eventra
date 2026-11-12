@@ -7,6 +7,7 @@ from apps.events.models import Event
 from apps.payments.services import (
     cancel_payment_intent_if_unpaid,
     create_or_refresh_payment_intent,
+    fulfil_booking,
 )
 from apps.seating.models import EventSeat, SeatHold
 from apps.seating.services import notify_seats_available
@@ -121,7 +122,30 @@ def checkout_booking(booking):
     if seat is not None:
         _ensure_event_sellable(seat.event)
 
+    if booking.total_amount == 0:
+        _confirm_free_booking(booking)
+        return None
     return create_or_refresh_payment_intent(booking)
+
+
+def _confirm_free_booking(booking) -> None:
+    with transaction.atomic():
+        booking = Booking.objects.select_for_update().get(id=booking.id)
+        seats = list(
+            booking.held_seats()
+            .select_for_update(of=("self",))
+            .select_related("event", "seat", "ticket_tier")
+        )
+        if booking.status != Booking.Status.PENDING:
+            raise BookingNotPendingError(
+                f"Booking {booking.id} is '{booking.status}', not 'pending'."
+            )
+        if not seats:
+            raise BookingExpiredError(f"Booking {booking.id} has expired.")
+        _ensure_event_sellable(
+            Event.all_objects.select_for_update().get(pk=seats[0].event_id)
+        )
+        fulfil_booking(booking, seats)
 
 
 def sweep_expired_pending_bookings() -> None:

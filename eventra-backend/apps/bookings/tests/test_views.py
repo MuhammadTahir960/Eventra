@@ -10,6 +10,7 @@ from rest_framework.test import APIClient
 
 from apps.events.factories import EventFactory, TicketTierFactory
 from apps.events.models import Event
+from apps.payments.models import Payment
 from apps.seating.factories import EventSeatFactory, SeatHoldFactory
 from apps.seating.models import EventSeat
 from apps.users.factories import UserFactory
@@ -145,6 +146,42 @@ class TestBookingCheckoutEndpoint:
         assert response.data["client_secret"] == "pi_test_abc_secret"
         assert create.call_args.kwargs["amount"] == 1500
 
+    def test_free_tickets_are_confirmed_at_checkout_without_stripe(self, monkeypatch):
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.PaymentIntent.create",
+            MagicMock(side_effect=AssertionError("Stripe must not be called")),
+        )
+        user = UserFactory()
+        event = EventFactory(status=Event.Status.APPROVED)
+        booking = unpaid_booking("0.00", user=user, event=event)
+        client = auth_client(user)
+
+        response = client.post(f"/bookings/{booking.id}/checkout/")
+
+        assert response.status_code == 200
+        assert response.data["client_secret"] == ""
+        assert response.data["status"] == "confirmed"
+        booking.refresh_from_db()
+        assert booking.status == Booking.Status.CONFIRMED
+        assert set(booking.tickets.values_list("status", flat=True)) == {"valid"}
+        assert booking.held_seats().count() == 0
+        assert EventSeat.objects.filter(
+            tickets__booking=booking, status=EventSeat.Status.BOOKED
+        ).exists()
+        assert not Payment.objects.filter(booking=booking).exists()
+        assert client.post(f"/bookings/{booking.id}/checkout/").status_code == 409
+
+    def test_free_tickets_for_a_closed_event_are_refused(self):
+        user = UserFactory()
+        event = EventFactory(status=Event.Status.CANCELLED)
+        booking = unpaid_booking("0.00", user=user, event=event)
+
+        response = auth_client(user).post(f"/bookings/{booking.id}/checkout/")
+
+        assert response.status_code == 409
+        booking.refresh_from_db()
+        assert booking.status == Booking.Status.PENDING
+
     def test_checkout_against_someone_elses_booking_returns_404(self):
         owner = UserFactory()
         stranger = UserFactory()
@@ -170,7 +207,7 @@ class TestBookingCheckoutEndpoint:
         assert "could not connect to Stripe" not in str(response.data)
 
 
-class TestBookingRefundsEndpoint:
+class TestBookingCancelEndpoint:
     def _booking(self, postponed=True):
         start = timezone.now() + timedelta(days=3)
         event = EventFactory(
@@ -182,7 +219,7 @@ class TestBookingRefundsEndpoint:
         return paid_booking(event, (TicketTierFactory(event=event), "25.00"))
 
     def _post(self, user, booking):
-        return auth_client(user).post(f"/bookings/{booking.id}/refunds/")
+        return auth_client(user).post(f"/bookings/{booking.id}/cancel/")
 
     def test_owner_gets_a_full_refund_for_a_postponed_event(self, monkeypatch):
         monkeypatch.setattr(
@@ -193,8 +230,13 @@ class TestBookingRefundsEndpoint:
 
         response = self._post(booking.user, booking)
 
-        assert response.status_code == 201
+        assert response.status_code == 200
         assert response.data["status"] == Booking.Status.REFUNDED
+
+    def test_the_old_refunds_route_is_gone(self):
+        booking = self._booking()
+        response = auth_client(booking.user).post(f"/bookings/{booking.id}/refunds/")
+        assert response.status_code == 404
 
     def test_someone_elses_booking_is_not_found(self):
         booking = self._booking()

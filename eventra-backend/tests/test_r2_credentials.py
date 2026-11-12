@@ -21,6 +21,7 @@ def _run_settings_boot(settings_module, extra_env):
     env = {
         **os.environ,
         "DJANGO_SETTINGS_MODULE": settings_module,
+        "TURNSTILE_SECRET_KEY": "0x4AAAAAAAreal-looking-secret",
         **extra_env,
     }
     return subprocess.run(
@@ -150,6 +151,11 @@ def test_prod_rejects_r2_public_domain_that_is_not_a_bare_hostname(bad_domain):
     [
         ({"CORS_ALLOWED_ORIGINS": ""}, "CORS_ALLOWED_ORIGINS"),
         ({"ALLOWED_HOSTS": ".example.com"}, "exact hostname"),
+        ({"TURNSTILE_SECRET_KEY": ""}, "TURNSTILE_SECRET_KEY"),
+        (
+            {"TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA"},
+            "TURNSTILE_SECRET_KEY",
+        ),
     ],
 )
 def test_prod_refuses_to_boot_with_unsafe_hosts_or_origins(override, message):

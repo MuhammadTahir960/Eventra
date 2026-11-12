@@ -1,6 +1,6 @@
 -r base.txt
 
-black==26.5.1
+black==26.10.1
 factory_boy==3.3.3
 pytest==9.1.1
 pytest-asyncio==1.4.0

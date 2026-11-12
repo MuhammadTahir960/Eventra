@@ -2,7 +2,7 @@ from datetime import timedelta
 
 import pytest
 from django.db import IntegrityError
-from django.db.models.deletion import ProtectedError
+from django.db.models.deletion import ProtectedError, RestrictedError
 from django.utils import timezone
 
 from apps.events.factories import EventFactory, TicketTierFactory
@@ -42,10 +42,17 @@ def test_event_seat_seat_fk_is_protected():
         event_seat.seat.delete()
 
 
-def test_event_seat_ticket_tier_fk_is_protected():
+def test_a_tier_in_use_by_seats_cannot_be_deleted():
     event_seat = EventSeatFactory()
-    with pytest.raises(ProtectedError):
+    with pytest.raises(RestrictedError):
         event_seat.ticket_tier.delete()
+
+
+def test_an_event_deletes_together_with_its_tiers_and_seats():
+    event_seat = EventSeatFactory()
+    event = event_seat.event
+    event.delete()
+    assert not EventSeat.objects.filter(pk=event_seat.pk).exists()
 
 
 def test_event_seat_ticket_tier_related_name_is_event_seats():

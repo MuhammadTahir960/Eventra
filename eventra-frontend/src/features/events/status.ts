@@ -12,6 +12,9 @@ export const EVENT_STATUS: Record<
   completed: { label: 'Ended', tone: 'neutral' },
 }
 
+// Ended one way or another: can't be edited, can be moved to the trash
+export const TERMINAL: EventStatus[] = ['cancelled', 'completed']
+
 export type BookingBlocker = 'not_seated' | 'not_on_sale' | 'started'
 
 // Why seats can't be picked for this event, or null if they can.

@@ -1,6 +1,7 @@
 from django.db import models
 
 from apps.common.models import UUIDBaseModel
+from apps.common.validators import validate_ticket_price
 
 
 class EventSeat(UUIDBaseModel):
@@ -16,13 +17,17 @@ class EventSeat(UUIDBaseModel):
         "venues.Seat", on_delete=models.PROTECT, related_name="event_seats"
     )
     ticket_tier = models.ForeignKey(
-        "events.TicketTier", on_delete=models.PROTECT, related_name="event_seats"
+        "events.TicketTier", on_delete=models.RESTRICT, related_name="event_seats"
     )
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.AVAILABLE
     )
     price_override = models.DecimalField(
-        max_digits=10, decimal_places=2, null=True, blank=True
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[validate_ticket_price],
     )
 
     class Meta:

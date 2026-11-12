@@ -62,9 +62,7 @@ export function useAdminEvents(filters: AdminEventFilters) {
     queryKey: ['admin', 'events', filters],
     queryFn: ({ signal }) =>
       apiFetch<Page<EventItem>>('/events/', {
-        // Admins also see soft-deleted events with this flag
         query: {
-          include_inactive: true,
           status: filters.status,
           search: filters.search.trim(),
           page: filters.page,

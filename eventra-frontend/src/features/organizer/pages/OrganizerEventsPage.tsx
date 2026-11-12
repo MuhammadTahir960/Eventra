@@ -11,14 +11,16 @@ import { Button } from '@/components/ui/button'
 import { ButtonLink } from '@/components/ui/button-link'
 import { Input } from '@/components/ui/input'
 import { useEventLookups } from '@/features/events/lookups'
-import { EVENT_STATUS } from '@/features/events/status'
+import { EVENT_STATUS, TERMINAL } from '@/features/events/status'
 import type { EventItem } from '@/features/events/types'
 import { errorMessage, firstFieldErrors } from '@/lib/api-client'
 import { toLocalInput } from '@/lib/format'
 import {
   useCancelEvent,
+  useMoveToTrash,
   useOrganizerEvents,
   usePostponeEvent,
+  useRestoreEvent,
   useRunningLate,
 } from '../api'
 import { canPostpone, canRunLate } from '../running-late'
@@ -26,8 +28,6 @@ import { usePageTitle } from '@/lib/use-page-title'
 import { EventTitleCell } from '@/features/events/components/EventTitleCell'
 import { TableFrame } from '@/components/TableFrame'
 import { LoadingBlock } from '@/components/LoadingBlock'
-
-const TERMINAL: EventItem['status'][] = ['cancelled', 'completed']
 
 export function RunningLateButton({ event }: { event: EventItem }) {
   const [open, setOpen] = useState(false)
@@ -299,6 +299,51 @@ export function CancelEventButton({
   )
 }
 
+// Reversible from the trash, so no confirmation: the toast offers Undo instead
+export function MoveToTrashButton({ event }: { event: EventItem }) {
+  const trash = useMoveToTrash()
+  const restore = useRestoreEvent()
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      disabled={trash.isPending}
+      onClick={() =>
+        trash.mutate(event.id, {
+          onSuccess: () =>
+            toast.success('Moved to trash', {
+              description: event.title,
+              action: {
+                label: 'Undo',
+                // The row is gone by now, so report a failure here
+                onClick: () =>
+                  void restore
+                    .mutateAsync(event.id)
+                    .catch((caught: unknown) =>
+                      toast.error(
+                        errorMessage(
+                          caught,
+                          'The event could not be restored.',
+                        ),
+                      ),
+                    ),
+              },
+            }),
+          onError: (caught) =>
+            toast.error(
+              errorMessage(
+                caught,
+                'The event could not be moved to the trash.',
+              ),
+            ),
+        })
+      }
+    >
+      Move to trash
+    </Button>
+  )
+}
+
 export function OrganizerEventsPage() {
   usePageTitle('My events')
   const events = useOrganizerEvents()
@@ -388,9 +433,19 @@ export function OrganizerEventsPage() {
                           Edit
                         </ButtonLink>
                       )}
+                      {event.status === 'approved' && (
+                        <ButtonLink
+                          variant="ghost"
+                          size="sm"
+                          to={`/organizer/events/${event.id}/door`}
+                        >
+                          Door
+                        </ButtonLink>
+                      )}
                       {canPostpone(event) && <PostponeButton event={event} />}
                       {canRunLate(event) && <RunningLateButton event={event} />}
                       {!terminal && <CancelEventButton event={event} />}
+                      {terminal && <MoveToTrashButton event={event} />}
                     </div>
                   </td>
                 </tr>

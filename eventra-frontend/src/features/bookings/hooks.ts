@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { isUuid } from '@/lib/ids'
 import { bookingsApi } from './api'
@@ -27,9 +27,16 @@ export function useBooking(id: string | undefined, paidAt: number | null) {
 // Starts (or refreshes) the PaymentIntent once per booking. Not refetched on
 // focus: each call may touch Stripe, and the client secret stays valid.
 export function useCheckout(id: string | undefined, enabled: boolean) {
+  const client = useQueryClient()
   return useQuery({
     queryKey: ['bookings', 'checkout', id],
-    queryFn: () => bookingsApi.checkout(id ?? ''),
+    queryFn: async () => {
+      const result = await bookingsApi.checkout(id ?? '')
+      // Free tickets are confirmed by this call; show them straight away
+      if (result.status === 'confirmed')
+        await client.invalidateQueries({ queryKey: ['bookings', 'detail', id] })
+      return result
+    },
     enabled: enabled && isUuid(id),
     staleTime: Infinity,
     gcTime: Infinity,

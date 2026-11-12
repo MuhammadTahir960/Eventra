@@ -22,6 +22,8 @@ export interface RegisterPayload {
   gender: 'male' | 'female' | 'other'
   // The backend rejects 'admin'; only these two can be chosen
   role: 'attendee' | 'organizer'
+  // Cloudflare Turnstile token, checked by the backend before anything else
+  captcha_token: string
 }
 
 export const authApi = {

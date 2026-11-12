@@ -1,10 +1,12 @@
 import threading
 import time
 import uuid
+from datetime import timedelta
 from functools import partial
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 from django.core import mail
 from django.core.cache import cache
 from django.db import OperationalError, connection
@@ -12,6 +14,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.token_blacklist.models import (
     BlacklistedToken,
+    OutstandingToken,
 )
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -41,7 +44,9 @@ from ..serializers import RegisterSerializer
 from ..services import (
     AccountDeletionBlockedError,
     IncorrectPasswordError,
+    canonical_email,
     delete_account,
+    flush_expired_tokens,
     issue_ws_ticket,
     register_user,
     request_password_reset,
@@ -49,6 +54,7 @@ from ..services import (
     send_password_reset_email,
     send_verification_email,
     validate_and_consume_ws_ticket,
+    verify_turnstile,
     verify_user_email,
 )
 from ..tokens import generate_password_reset_token, generate_verification_token
@@ -672,3 +678,71 @@ def test_tickets_show_the_buyers_name_until_the_account_is_deleted(
     ticket = Ticket.objects.select_related("booking__user").get(pk=ticket.pk)
     assert ticket.attendee_name == ""
     assert cache.get(_ticket_pdf_cache_key(ticket.id)) is None
+
+
+@pytest.mark.django_db
+def test_flush_expired_tokens_keeps_live_ones():
+    user = UserFactory()
+    live = RefreshToken.for_user(user)
+    expired = RefreshToken.for_user(user)
+    expired.blacklist()
+    OutstandingToken.objects.filter(jti=expired["jti"]).update(
+        expires_at=timezone.now() - timedelta(seconds=1)
+    )
+
+    assert flush_expired_tokens() == 2
+
+    assert list(OutstandingToken.objects.values_list("jti", flat=True)) == [live["jti"]]
+    assert not BlacklistedToken.objects.exists()
+
+
+@pytest.mark.parametrize(
+    "email, canonical",
+    [
+        ("Ana.Ruiz+events@Gmail.com", "anaruiz@gmail.com"),
+        ("ana.ruiz@googlemail.com", "anaruiz@gmail.com"),
+        ("ana.ruiz+x+y@example.com", "ana.ruiz@example.com"),
+        ("  ANA@Example.COM ", "ana@example.com"),
+    ],
+)
+def test_canonical_email(email, canonical):
+    assert canonical_email(email) == canonical
+
+
+class TestVerifyTurnstile:
+    @pytest.fixture
+    def cloudflare(self, monkeypatch):
+        post = MagicMock()
+        monkeypatch.setattr("apps.users.services.requests.post", post)
+        return post
+
+    def test_a_passed_check_is_accepted(self, cloudflare, settings):
+        settings.TURNSTILE_SECRET_KEY = "secret-x"
+        cloudflare.return_value = MagicMock(ok=True, json=lambda: {"success": True})
+        assert verify_turnstile("token-1") is True
+        assert cloudflare.call_args.kwargs["data"] == {
+            "secret": "secret-x",
+            "response": "token-1",
+        }
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            {"success": False, "error-codes": ["invalid-input-response"]},
+            {},
+            {"success": "true"},
+        ],
+    )
+    def test_anything_but_success_is_refused(self, cloudflare, reply):
+        cloudflare.return_value = MagicMock(ok=True, json=lambda: reply)
+        assert verify_turnstile("token-1") is False
+
+    @pytest.mark.parametrize("token", [None, "", 123, ["x"], "x" * 2049])
+    def test_missing_or_odd_tokens_never_reach_cloudflare(self, cloudflare, token):
+        assert verify_turnstile(token) is False
+        cloudflare.assert_not_called()
+
+    def test_cloudflare_being_down_fails_closed(self, cloudflare):
+
+        cloudflare.side_effect = requests.ConnectionError("down")
+        assert verify_turnstile("token-1") is False

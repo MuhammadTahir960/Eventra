@@ -1,6 +1,25 @@
+import re
+
 from rest_framework import serializers
 
-from .models import Ticket
+from .models import TICKET_CODE_ALPHABET, Ticket, format_ticket_code
+
+_NOT_A_CODE = "That isn't a ticket code."
+
+
+class TicketCodeSerializer(serializers.Serializer):
+    code = serializers.CharField(
+        max_length=32,
+        error_messages=dict.fromkeys(
+            ("blank", "null", "invalid", "max_length"), _NOT_A_CODE
+        ),
+    )
+
+    def validate_code(self, value):
+        raw = re.sub(r"[\s-]", "", value).upper()
+        if len(raw) != 12 or any(char not in TICKET_CODE_ALPHABET for char in raw):
+            raise serializers.ValidationError(_NOT_A_CODE)
+        return format_ticket_code(raw)
 
 
 class TicketSerializer(serializers.ModelSerializer):
@@ -25,6 +44,7 @@ class TicketSerializer(serializers.ModelSerializer):
             "row_label",
             "seat_number",
             "ticket_code",
+            "price",
             "attendee_name",
             "status",
             "created_at",

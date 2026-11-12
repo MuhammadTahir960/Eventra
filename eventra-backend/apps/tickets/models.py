@@ -4,9 +4,17 @@ from django.db import models
 
 from apps.common.models import UUIDBaseModel
 
+TICKET_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
+
+
+def format_ticket_code(raw: str) -> str:
+    return f"{raw[:4]}-{raw[4:8]}-{raw[8:]}"
+
 
 def _generate_ticket_code() -> str:
-    return secrets.token_urlsafe(8)
+    return format_ticket_code(
+        "".join(secrets.choice(TICKET_CODE_ALPHABET) for _ in range(12))
+    )
 
 
 class Ticket(UUIDBaseModel):

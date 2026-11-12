@@ -1,7 +1,8 @@
 import { apiFetch } from '@/lib/api-client'
 import type { Booking, EventSeat } from '@/features/seating/types'
 
-// POST /bookings/{id}/checkout/ (creates or refreshes the PaymentIntent)
+// POST /bookings/{id}/checkout/: creates or refreshes the PaymentIntent, or
+// confirms free tickets on the spot (status "confirmed", no client secret)
 export interface CheckoutResponse {
   client_secret: string
   publishable_key: string

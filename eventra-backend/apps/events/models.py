@@ -1,15 +1,14 @@
 import uuid
-from decimal import Decimal
 
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVector
-from django.core.validators import MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import F, Q
 from django.utils.text import slugify
 
 from apps.common.models import SoftDeleteModel, UUIDBaseModel
-from apps.common.validators import validate_display_name
+from apps.common.validators import validate_display_name, validate_ticket_price
 
 EVENT_SEARCH_CONFIG = "english"
 
@@ -69,6 +68,9 @@ class Event(SoftDeleteModel):
         max_length=20, choices=Status.choices, default=Status.PENDING_APPROVAL
     )
     is_seated = models.BooleanField(default=True)
+    max_tickets_per_buyer = models.PositiveSmallIntegerField(
+        default=10, validators=[MinValueValidator(1), MaxValueValidator(50)]
+    )
     rejection_reason = models.TextField(blank=True, default="")
     start_datetime = models.DateTimeField()
     end_datetime = models.DateTimeField()
@@ -136,9 +138,9 @@ class TicketTier(UUIDBaseModel):
     event = models.ForeignKey(
         Event, on_delete=models.CASCADE, related_name="ticket_tiers"
     )
-    name = models.CharField(max_length=100)
+    name = models.CharField(max_length=100, validators=[validate_display_name])
     price = models.DecimalField(
-        max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))]
+        max_digits=10, decimal_places=2, validators=[validate_ticket_price]
     )
     created_at = models.DateTimeField(auto_now_add=True)
 

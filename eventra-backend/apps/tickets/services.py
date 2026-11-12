@@ -12,10 +12,6 @@ from .models import Ticket
 TICKET_PDF_CACHE_TTL_SECONDS = 600
 
 
-class TicketWrongEventError(Exception):
-    """Raised when a ticket is scanned at a door for an event it doesn't belong to."""
-
-
 class TicketAlreadyUsedError(Exception):
     """Raised when a valid-status check finds the ticket already used."""
 
@@ -50,7 +46,8 @@ def render_ticket_pdf(ticket: Ticket) -> bytes:
           .ticket {{ border: 2px solid #333; border-radius: 8px; padding: 24px; max-width: 480px; }}
           h1 {{ font-size: 20px; margin: 0 0 4px 0; }}
           .meta {{ color: #555; margin: 2px 0; }}
-          .code {{ font-family: monospace; font-size: 14px; margin-top: 16px; }}
+          .code {{ font-family: monospace; font-size: 15px; letter-spacing: 1px; margin: 4px 0 0; }}
+          .code-label {{ color: #555; font-size: 11px; margin: 12px 0 0; }}
           img {{ margin-top: 16px; }}
         </style>
       </head>
@@ -62,6 +59,7 @@ def render_ticket_pdf(ticket: Ticket) -> bytes:
           {f'<p class="meta">Attendee: {attendee_name}</p>' if attendee_name else ""}
           <p class="meta">Status: {status_label}</p>
           <img src="{qr_data_uri}" width="160" height="160" alt="QR code" />
+          <p class="code-label">Ticket code</p>
           <p class="code">{ticket_code}</p>
         </div>
       </body>
@@ -90,14 +88,11 @@ def get_or_render_ticket_pdf(ticket: Ticket) -> bytes:
     return pdf_bytes
 
 
-def validate_ticket(*, ticket: Ticket, event_id) -> Ticket:
-    if ticket.event_seat.event_id != event_id:
-        raise TicketWrongEventError("Ticket is for a different event")
-
+def validate_ticket(*, ticket: Ticket) -> Ticket:
     with transaction.atomic():
         locked_ticket = (
             Ticket.objects.select_for_update(of=("self",))
-            .select_related("event_seat", "event_seat__event", "event_seat__seat")
+            .select_related("event_seat__event", "event_seat__seat", "booking__user")
             .get(pk=ticket.pk)
         )
 

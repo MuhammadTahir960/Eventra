@@ -204,6 +204,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.notifications.tasks.send_event_reminders",
         "schedule": crontab(minute=15),
     },
+    "flush-expired-tokens": {
+        "task": "apps.users.tasks.flush_expired_tokens_task",
+        "schedule": crontab(hour=3, minute=30),
+    },
 }
 
 CACHES = {
@@ -240,16 +244,17 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_THROTTLE_RATES": {
         "auth-login": "10/min",
-        "auth-register": "20/hour",
+        "auth-register": "5/hour",
         "auth-verify-email": "20/hour",
         "auth-password-reset": "5/hour",
         "auth-ws-ticket": "20/min",
         "auth-delete-account": "5/hour",
         "ticket-download": "30/min",
+        "ticket-check-in": "120/min",
         "venue-request": "10/hour",
         "seat-hold": "60/min",
         "checkout": "20/min",
-        "booking-refund": "10/hour",
+        "booking-cancel": "10/hour",
         "event-postpone": "10/hour",
         "anon": "100/min",
         "user": "300/min",
@@ -268,6 +273,11 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,  # old refresh token can't be reused after rotating
     "SIGNING_KEY": env("JWT_SIGNING_KEY", default=SECRET_KEY),
 }
+
+
+TURNSTILE_SECRET_KEY = env(
+    "TURNSTILE_SECRET_KEY", default="1x0000000000000000000000000000000AA"
+)
 
 
 STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY")

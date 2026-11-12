@@ -2,6 +2,7 @@ from celery import shared_task
 
 from .models import User
 from .services import (
+    flush_expired_tokens,
     send_account_deleted_email,
     send_password_reset_email,
     send_verification_email,
@@ -25,3 +26,8 @@ def send_password_reset_email_task(user_id: str) -> None:
 @shared_task(autoretry_for=(Exception,), retry_backoff=True, max_retries=3)
 def send_account_deleted_email_task(email: str, first_name: str) -> None:
     send_account_deleted_email(email, first_name)
+
+
+@shared_task
+def flush_expired_tokens_task() -> int:
+    return flush_expired_tokens()

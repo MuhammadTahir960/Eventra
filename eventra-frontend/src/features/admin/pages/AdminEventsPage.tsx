@@ -7,10 +7,11 @@ import { StatusBadge } from '@/components/StatusBadge'
 import { Button } from '@/components/ui/button'
 import { ButtonLink } from '@/components/ui/button-link'
 import { useEventLookups } from '@/features/events/lookups'
-import { EVENT_STATUS } from '@/features/events/status'
+import { EVENT_STATUS, TERMINAL } from '@/features/events/status'
 import type { EventItem, EventStatus } from '@/features/events/types'
 import {
   CancelEventButton,
+  MoveToTrashButton,
   PostponeButton,
   RunningLateButton,
 } from '@/features/organizer/pages/OrganizerEventsPage'
@@ -78,7 +79,7 @@ export function AdminEventsPage() {
       <PageHeader
         size="md"
         title="Events"
-        description="Every event on the platform, including removed ones."
+        description="Every event on the platform. Deleted events are in the trash."
         actions={
           <ButtonLink variant="ink" to="/organizer/events/new">
             Create event or match
@@ -151,19 +152,23 @@ export function AdminEventsPage() {
                       {venue ? `${venue.name}, ${venue.city}` : ''}
                     </td>
                     <td>
-                      <span className="flex flex-wrap gap-1.5">
-                        <StatusBadge tone={status.tone}>
-                          {status.label}
-                        </StatusBadge>
-                        {!event.is_active && (
-                          <StatusBadge tone="neutral">Removed</StatusBadge>
-                        )}
-                      </span>
+                      <StatusBadge tone={status.tone}>
+                        {status.label}
+                      </StatusBadge>
                     </td>
                     <td>
                       <div className="flex justify-end gap-2">
                         {event.status === 'cancelled' && (
                           <RetryRefundsButton event={event} />
+                        )}
+                        {event.status === 'approved' && (
+                          <ButtonLink
+                            variant="ghost"
+                            size="sm"
+                            to={`/admin/events/${event.id}/door`}
+                          >
+                            Door
+                          </ButtonLink>
                         )}
                         {canPostpone(event) && <PostponeButton event={event} />}
                         {canRunLate(event) && (
@@ -174,6 +179,9 @@ export function AdminEventsPage() {
                           event.status !== 'completed' && (
                             <CancelEventButton event={event} />
                           )}
+                        {TERMINAL.includes(event.status) && (
+                          <MoveToTrashButton event={event} />
+                        )}
                       </div>
                     </td>
                   </tr>

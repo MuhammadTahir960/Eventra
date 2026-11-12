@@ -7,3 +7,8 @@ export const API_BASE_URL: string = (
 
 // WebSocket origin derived from the API origin (http -> ws, https -> wss)
 export const WS_BASE_URL: string = API_BASE_URL.replace(/^http/, 'ws')
+
+// Cloudflare Turnstile site key (public). Unset locally, Cloudflare's test key
+// is used, which always passes; the backend refuses its test secret in production.
+export const TURNSTILE_SITE_KEY: string =
+  import.meta.env.VITE_TURNSTILE_SITE_KEY || '1x00000000000000000000AA'

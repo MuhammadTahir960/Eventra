@@ -4,14 +4,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.bookings.models import Booking
+from apps.common.permissions import IsOwnerOrAdmin
+from apps.events.models import Event
 
 from .models import Ticket
-from .permissions import IsTicketEventOwnerOrAdmin
-from .serializers import TicketSerializer
+from .serializers import TicketCodeSerializer, TicketSerializer
 from .services import (
     TicketAlreadyUsedError,
     TicketNotValidError,
-    TicketWrongEventError,
     render_ticket_pdf,
     validate_ticket,
 )
@@ -54,6 +54,11 @@ class TicketDownloadView(APIView):
 
     def get(self, request, id):
         ticket = generics.get_object_or_404(_own_tickets(request.user), id=id)
+        if ticket.status != Ticket.Status.VALID:
+            return Response(
+                {"detail": "Only a valid ticket can be downloaded."},
+                status=status.HTTP_409_CONFLICT,
+            )
         pdf_bytes = render_ticket_pdf(ticket)
         response = HttpResponse(pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = (
@@ -62,22 +67,29 @@ class TicketDownloadView(APIView):
         return response
 
 
-class TicketValidateView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsTicketEventOwnerOrAdmin]
+class TicketCheckInView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsOwnerOrAdmin]
+    owner_field = "organizer_id"
+    throttle_scope = "ticket-check-in"
 
-    def post(self, request, event_id, ticket_id):
-        ticket = generics.get_object_or_404(
-            Ticket.objects.select_related(*_TICKET_RELATED), id=ticket_id
-        )
-        self.check_object_permissions(request, ticket)
+    def post(self, request, event_id):
+        event = generics.get_object_or_404(Event.objects, pk=event_id)
+        self.check_object_permissions(request, event)
+        serializer = TicketCodeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        ticket = Ticket.objects.filter(
+            event_seat__event=event, ticket_code=serializer.validated_data["code"]
+        ).first()
+        if ticket is None:
+            return Response(
+                {"detail": "No ticket with this code for this event."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         try:
-            ticket = validate_ticket(ticket=ticket, event_id=event_id)
-        except TicketWrongEventError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        except TicketAlreadyUsedError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        except TicketNotValidError as exc:
+            ticket = validate_ticket(ticket=ticket)
+        except (TicketAlreadyUsedError, TicketNotValidError) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
-        return Response(TicketSerializer(ticket).data, status=status.HTTP_200_OK)
+        return Response(TicketSerializer(ticket).data, status=status.HTTP_201_CREATED)

@@ -1,5 +1,5 @@
 import pytest
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 
 from apps.common.constants import Roles
 from apps.users.models import User
@@ -125,3 +125,21 @@ def test_save_keeps_django_admin_access_for_admin_role():
     user.refresh_from_db()
     assert user.is_staff is True
     assert user.is_superuser is True
+
+
+@pytest.mark.parametrize(
+    "first, second",
+    [
+        ("ana@gmail.com", "a.n.a+x@googlemail.com"),
+        ("bo+old@example.com", "BO@example.com"),
+    ],
+)
+def test_the_database_allows_one_account_per_mailbox(first, second):
+    UserFactory(email=first)
+    with pytest.raises(IntegrityError), transaction.atomic():
+        UserFactory(email=second)
+
+
+def test_different_mailboxes_are_still_allowed():
+    UserFactory(email="a.na@example.com")
+    UserFactory(email="ana@example.com")

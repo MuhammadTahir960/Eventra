@@ -1,10 +1,10 @@
 from django.urls import path
 
 from .views import (
+    TicketCheckInView,
     TicketDetailView,
     TicketDownloadView,
     TicketListView,
-    TicketValidateView,
 )
 
 urlpatterns = [
@@ -16,8 +16,8 @@ urlpatterns = [
         name="ticket-download",
     ),
     path(
-        "events/<uuid:event_id>/tickets/<uuid:ticket_id>/validate/",
-        TicketValidateView.as_view(),
-        name="ticket-validate",
+        "events/<uuid:event_id>/check-ins/",
+        TicketCheckInView.as_view(),
+        name="event-check-ins",
     ),
 ]

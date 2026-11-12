@@ -153,6 +153,7 @@ def awaiting_payout(events) -> models.QuerySet:
             gross_revenue=Coalesce(models.Subquery(gross), zero)
             - Coalesce(models.Subquery(refunded), zero)
         )
+        .filter(gross_revenue__gt=0)
         .select_related("organizer", "venue")
         .order_by("completed_at", "id")
     )

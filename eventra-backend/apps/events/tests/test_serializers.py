@@ -223,13 +223,27 @@ def test_create_ticket_tier_assigns_event_from_context():
     assert tier.event_id == event.id
 
 
-@pytest.mark.parametrize("price", ["-5.00", "0.00"])
-def test_price_must_be_positive(price):
+@pytest.mark.parametrize(
+    "price, valid",
+    [
+        ("-5.00", False),
+        ("-0.01", False),
+        ("0.01", False),
+        ("0.49", False),
+        ("0.00", True),
+        ("0.50", True),
+        ("100.00", True),
+    ],
+)
+def test_a_tier_is_free_or_costs_at_least_fifty_cents(price, valid):
     serializer = TicketTierSerializer(
         data={"name": "VIP", "price": price}, context={"event": EventFactory()}
     )
-    assert serializer.is_valid() is False
-    assert "price" in serializer.errors
+    assert serializer.is_valid() is valid
+    if not valid:
+        assert serializer.errors["price"] == [
+            "A ticket is free (0.00) or costs at least 0.50."
+        ]
 
 
 def test_client_supplied_event_field_is_ignored_on_create():
@@ -339,3 +353,24 @@ def test_duplicate_section_for_same_event_becomes_validation_error_not_500():
     serializer.create({"section": "A"})
     with pytest.raises(serializers.ValidationError):
         serializer.create({"section": "A"})
+
+
+@pytest.mark.parametrize(
+    "name, valid",
+    [
+        ("VIP", True),
+        ("Stalls (front rows) & Circle", True),
+        ("Family / Kids 50% off", True),
+        ("گیلری", True),
+        ("<script>alert(1)</script>", False),
+        ("<img src=x onerror=alert(1)>", False),
+        ("VIP!!!", False),
+        ("Seat $5", False),
+        ("--", False),
+    ],
+)
+def test_tier_names_follow_the_event_title_rule(name, valid):
+    serializer = TicketTierSerializer(
+        data={"name": name, "price": "10.00"}, context={"event": EventFactory()}
+    )
+    assert serializer.is_valid() is valid

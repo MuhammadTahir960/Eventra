@@ -3,6 +3,7 @@ import { ApiError, apiFetch } from '@/lib/api-client'
 import {
   CreateEventError,
   emptyProgress,
+  isDisplayName,
   submitEvent,
   suggestTiersFromSections,
   validateDraft,
@@ -28,6 +29,7 @@ function makeDraft(overrides: Partial<EventDraft> = {}): EventDraft {
       { key: 'a', name: 'VIP', price: '120.00' },
       { key: 'b', name: 'Economy', price: '40' },
     ],
+    maxTickets: '10',
     assignments: { North: 'a', South: 'b' },
     ...overrides,
   }
@@ -80,18 +82,37 @@ describe('validateDraft', () => {
     expect(errors.end).toMatch(/after the start/)
   })
 
-  it.each(['0', '0.00', '-5', 'abc', '1.234', ''])(
-    'rejects the price %j',
-    (price) => {
+  it.each([
+    ['0', true],
+    ['0.00', true],
+    ['0.50', true],
+    ['0.49', false],
+    ['0.01', false],
+    ['-5', false],
+    ['abc', false],
+    ['1.234', false],
+    ['', false],
+  ])('the price %j is valid: %s (free, or at least 0.50)', (price, valid) => {
+    const errors = validateDraft(
+      makeDraft({
+        tiers: [{ key: 'a', name: 'VIP', price }],
+        assignments: { North: 'a', South: 'a' },
+      }),
+      ['North', 'South'],
+      NOW,
+    )
+    expect('tier-a-price' in errors).toBe(!valid)
+  })
+
+  it.each(['0', '51', '2.5', 'ten', ''])(
+    'rejects %j tickets per buyer',
+    (maxTickets) => {
       const errors = validateDraft(
-        makeDraft({
-          tiers: [{ key: 'a', name: 'VIP', price }],
-          assignments: { North: 'a', South: 'a' },
-        }),
+        makeDraft({ maxTickets }),
         ['North', 'South'],
         NOW,
       )
-      expect(errors).toHaveProperty('tier-a-price')
+      expect(errors.maxTickets).toMatch(/1 to 50/)
     },
   )
 
@@ -326,5 +347,21 @@ describe('submitEvent', () => {
     expect(error).toBeInstanceOf(CreateEventError)
     expect((error as CreateEventError).step).toBe('event')
     expect((error as CreateEventError).message).toBe('Bad dates')
+  })
+})
+
+describe('isDisplayName (event titles and tier names)', () => {
+  it.each([
+    ['VIP', true],
+    ['Stalls (front rows) & Circle', true],
+    ['Family / Kids 50% off', true],
+    ['گیلری', true],
+    ['<script>alert(1)</script>', false],
+    ['<img src=x onerror=alert(1)>', false],
+    ['VIP!!!', false],
+    ['Seat $5', false],
+    ['--', false],
+  ])('%j is %s', (name, valid) => {
+    expect(isDisplayName(name)).toBe(valid)
   })
 })

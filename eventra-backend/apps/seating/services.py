@@ -8,6 +8,7 @@ from channels.layers import get_channel_layer
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, OperationalError, transaction
+from django.db.models import Q
 from django.utils import timezone
 from psycopg import errors as pg_errors
 
@@ -59,6 +60,12 @@ class TooManySeatsError(Exception):
             f"A single hold request can cover at most {MAX_SEATS_PER_HOLD} seats "
             f"(requested {requested})."
         )
+
+
+class TicketLimitReachedError(Exception):
+    def __init__(self, limit):
+        noun = "ticket" if limit == 1 else "tickets"
+        super().__init__(f"You can have at most {limit} {noun} for this event.")
 
 
 class TooManyActiveSeatsError(Exception):
@@ -200,6 +207,22 @@ def hold_seats(
             )
             if active_elsewhere + len(found_ids) > MAX_ACTIVE_SEATS_PER_USER:
                 raise TooManyActiveSeatsError()
+
+            owned_here = (
+                EventSeat.objects.filter(event=event)
+                .filter(
+                    Q(hold__user=user, hold__expires_at__gte=now)
+                    | Q(
+                        tickets__booking__user=user,
+                        tickets__status__in=("pending", "valid", "used"),
+                    )
+                )
+                .exclude(id__in=found_ids)
+                .distinct()
+                .count()
+            )
+            if owned_here + len(found_ids) > event.max_tickets_per_buyer:
+                raise TicketLimitReachedError(event.max_tickets_per_buyer)
 
             SeatHold.objects.filter(event_seat__in=locked_seats).delete()
             EventSeat.objects.filter(id__in=found_ids).update(
