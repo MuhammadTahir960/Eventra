@@ -41,7 +41,13 @@ class TestStripeWebhookView:
     def test_valid_payment_intent_succeeded_confirms_payment(self, monkeypatch):
         fake_event = {
             "type": "payment_intent.succeeded",
-            "data": {"object": {"id": "pi_from_webhook"}},
+            "data": {
+                "object": {
+                    "id": "pi_from_webhook",
+                    "amount_received": 2500,
+                    "currency": "usd",
+                }
+            },
         }
         monkeypatch.setattr(
             "apps.payments.views.verify_stripe_webhook_signature",
@@ -61,7 +67,9 @@ class TestStripeWebhookView:
         )
 
         assert response.status_code == 200
-        mock_confirm.assert_called_once_with("pi_from_webhook")
+        mock_confirm.assert_called_once_with(
+            "pi_from_webhook", amount_received=2500, currency="usd"
+        )
 
     def test_unhandled_event_type_returns_200_without_acting(self, monkeypatch):
         fake_event = {"type": "charge.refunded", "data": {"object": {}}}
@@ -90,14 +98,20 @@ class TestStripeWebhookView:
 
         fake_event = {
             "type": "payment_intent.succeeded",
-            "data": {"object": {"id": "pi_unknown"}},
+            "data": {
+                "object": {
+                    "id": "pi_unknown",
+                    "amount_received": 100,
+                    "currency": "usd",
+                }
+            },
         }
         monkeypatch.setattr(
             "apps.payments.views.verify_stripe_webhook_signature",
             MagicMock(return_value=fake_event),
         )
 
-        def _boom(payment_intent_id):
+        def _boom(payment_intent_id, **amount):
             raise PaymentNotFoundError(payment_intent_id)
 
         monkeypatch.setattr("apps.payments.views.confirm_payment_from_webhook", _boom)

@@ -40,9 +40,14 @@ class StripeWebhookView(APIView):
             return HttpResponse(status=400)
 
         if event["type"] == "payment_intent.succeeded":
-            payment_intent_id = event["data"]["object"]["id"]
+            intent = event["data"]["object"]
+            payment_intent_id = intent["id"]
             try:
-                confirm_payment_from_webhook(payment_intent_id)
+                confirm_payment_from_webhook(
+                    payment_intent_id,
+                    amount_received=intent["amount_received"],
+                    currency=intent["currency"],
+                )
             except PaymentNotFoundError:
                 logger.warning(
                     "Webhook for unknown PaymentIntent %s", payment_intent_id

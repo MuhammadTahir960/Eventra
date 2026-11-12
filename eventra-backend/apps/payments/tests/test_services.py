@@ -25,17 +25,18 @@ from apps.seating.models import EventSeat
 from apps.tickets.factories import TicketFactory
 from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
-from tests.helpers import paid_booking, unpaid_booking
+from tests.helpers import confirm_paid_in_full, paid_booking, unpaid_booking
 
 from ..factories import PaymentFactory
 from ..models import Payment, Refund, RefundItem
 from ..services import (
+    BookingNotCancellableError,
     PaymentGatewayError,
     PaymentNotFoundError,
     RefundNotAllowedError,
-    RefundRequestNotAllowedError,
     WebhookSignatureError,
     _to_cents,
+    cancel_booking,
     cancel_payment_intent_if_unpaid,
     confirm_payment_from_webhook,
     create_or_refresh_payment_intent,
@@ -43,7 +44,6 @@ from ..services import (
     process_refund,
     refund_booking,
     refund_event_bookings,
-    refund_on_request,
     refund_part_of_event,
     refund_price_drops,
     retry_unfinished_refunds,
@@ -198,7 +198,7 @@ class TestConfirmPaymentFromWebhook:
 
         booking, seat, payment = _pending_booking_with_held_seat()
 
-        result = confirm_payment_from_webhook(payment.stripe_payment_intent_id)
+        result = confirm_paid_in_full(payment.stripe_payment_intent_id)
 
         result.refresh_from_db()
         seat.refresh_from_db()
@@ -221,8 +221,8 @@ class TestConfirmPaymentFromWebhook:
 
         booking, seat, payment = _pending_booking_with_held_seat()
 
-        confirm_payment_from_webhook(payment.stripe_payment_intent_id)
-        confirm_payment_from_webhook(payment.stripe_payment_intent_id)
+        confirm_paid_in_full(payment.stripe_payment_intent_id)
+        confirm_paid_in_full(payment.stripe_payment_intent_id)
 
         assert Ticket.objects.filter(booking=booking).count() == 1
 
@@ -244,9 +244,9 @@ class TestConfirmPaymentFromWebhook:
 
         _, _, payment = _pending_booking_with_held_seat()
         with django_capture_on_commit_callbacks(execute=True):
-            confirm_payment_from_webhook(payment.stripe_payment_intent_id)
+            confirm_paid_in_full(payment.stripe_payment_intent_id)
         with django_capture_on_commit_callbacks(execute=True):
-            confirm_payment_from_webhook(payment.stripe_payment_intent_id)
+            confirm_paid_in_full(payment.stripe_payment_intent_id)
 
         mock_pdf.assert_called_once()
         mock_email.assert_called_once()
@@ -285,9 +285,7 @@ class TestConfirmPaymentFromWebhook:
 
         webhook = threading.Thread(
             target=run,
-            args=(
-                lambda: confirm_payment_from_webhook(payment.stripe_payment_intent_id),
-            ),
+            args=(lambda: confirm_paid_in_full(payment.stripe_payment_intent_id),),
         )
         reject = threading.Thread(
             target=run,
@@ -312,7 +310,7 @@ class TestConfirmPaymentFromWebhook:
 
     def test_unknown_payment_intent_raises(self):
         with pytest.raises(PaymentNotFoundError):
-            confirm_payment_from_webhook("pi_does_not_exist")
+            confirm_paid_in_full("pi_does_not_exist")
 
 
 class TestVerifyStripeWebhookSignature:
@@ -470,7 +468,7 @@ def _pending_booking(event=None, *, pi="pi_pending", age_minutes=0):
 def webhook(django_capture_on_commit_callbacks):
     def run(pi):
         with django_capture_on_commit_callbacks(execute=True):
-            return confirm_payment_from_webhook(pi)
+            return confirm_paid_in_full(pi)
 
     return run
 
@@ -536,7 +534,7 @@ class TestWebhookForUnfulfillableBooking:
     def test_normal_payment_still_confirms(self, stripe_mocks):
         booking, seat, payment = _pending_booking(pi="pi_ok")
 
-        confirm_payment_from_webhook("pi_ok")
+        confirm_paid_in_full("pi_ok")
 
         booking.refresh_from_db()
         seat.refresh_from_db()
@@ -563,7 +561,7 @@ class TestUnfulfillableWebhookReleasesSeats:
         booking, seat, _ = _pending_booking(event, pi="pi_release")
 
         with django_capture_on_commit_callbacks(execute=True):
-            confirm_payment_from_webhook("pi_release")
+            confirm_paid_in_full("pi_release")
 
         seat.refresh_from_db()
         assert seat.status == EventSeat.Status.AVAILABLE
@@ -580,7 +578,7 @@ class TestUnfulfillableWebhookReleasesSeats:
         sold_seat = EventSeatFactory(event=event, status=EventSeat.Status.BOOKED)
 
         with django_capture_on_commit_callbacks(execute=True):
-            confirm_payment_from_webhook("pi_mixed")
+            confirm_paid_in_full("pi_mixed")
 
         held_seat.refresh_from_db()
         sold_seat.refresh_from_db()
@@ -598,9 +596,70 @@ class TestUnfulfillableWebhookReleasesSeats:
         booking.tickets.update(status=Ticket.Status.CANCELLED)
 
         with django_capture_on_commit_callbacks(execute=True):
-            confirm_payment_from_webhook("pi_noseats")
+            confirm_paid_in_full("pi_noseats")
 
         broadcast.assert_not_called()
+
+
+@pytest.mark.parametrize("extra_cents, currency", [(-1, "usd"), (1, "usd"), (0, "eur")])
+def test_a_payment_that_doesnt_match_the_tickets_is_refunded_not_fulfilled(
+    stripe_refunds, django_capture_on_commit_callbacks, caplog, extra_cents, currency
+):
+    booking, seat, _ = _pending_booking(pi="pi_odd")
+    cents = _to_cents(booking.total_amount) + extra_cents
+
+    with django_capture_on_commit_callbacks(execute=True):
+        result = confirm_payment_from_webhook(
+            "pi_odd", amount_received=cents, currency=currency
+        )
+
+    seat.refresh_from_db()
+    assert result.status == Booking.Status.REFUNDED
+    assert seat.status == EventSeat.Status.AVAILABLE
+    assert not booking.tickets.exclude(status=Ticket.Status.CANCELLED).exists()
+    refund = Refund.objects.get(booking=booking)
+    assert refund.reason == Refund.Reason.UNAVAILABLE
+    assert _to_cents(sum(i.amount for i in refund.items.all())) == cents
+    assert stripe_refunds.call_args.kwargs["amount"] == cents
+    assert "refunding" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "received, lines",
+    [
+        (4000, ["10.00", "30.00"]),
+        (3000, ["7.50", "22.50"]),
+        (4001, None),
+        (1, None),
+    ],
+)
+def test_a_mismatched_payment_is_shared_across_the_tickets_to_the_cent(
+    stripe_refunds, django_capture_on_commit_callbacks, received, lines
+):
+    event = EventFactory(status=Event.Status.CANCELLED)
+    booking = unpaid_booking("10.00", event=event)
+    TicketFactory(
+        booking=booking,
+        event_seat=EventSeatFactory(event=event, status=EventSeat.Status.HELD),
+        price=Decimal("30.00"),
+        status=Ticket.Status.PENDING,
+    )
+    PaymentFactory(booking=booking, stripe_payment_intent_id="pi_split")
+
+    with django_capture_on_commit_callbacks(execute=True):
+        confirm_payment_from_webhook(
+            "pi_split", amount_received=received, currency="usd"
+        )
+
+    amounts = sorted(
+        RefundItem.objects.filter(refund__booking=booking).values_list(
+            "amount", flat=True
+        )
+    )
+    assert _to_cents(sum(amounts)) == received
+    if lines:
+        assert [str(a) for a in amounts] == lines
+    assert stripe_refunds.call_args.kwargs["amount"] == received
 
 
 class TestSweepCancelsPaymentIntent:
@@ -624,25 +683,41 @@ class TestSweepCancelsPaymentIntent:
         assert booking.status == Booking.Status.CANCELLED
         assert payment.status == Payment.Status.CANCELED
 
-    def test_sweep_leaves_a_booking_alone_when_the_customer_already_paid(
-        self, monkeypatch
+    @pytest.mark.parametrize(
+        "extra_cents, outcome", [(0, "confirmed"), (100, "refunded")]
+    )
+    def test_sweep_confirms_a_paid_booking_whose_webhook_never_came(
+        self, monkeypatch, stripe_refunds, extra_cents, outcome
     ):
         monkeypatch.setattr(
             "apps.payments.services.stripe.PaymentIntent.cancel",
             MagicMock(side_effect=stripe.error.InvalidRequestError("done", "id")),
         )
+        booking, seat, payment = _pending_booking(pi="pi_paid", age_minutes=6)
         monkeypatch.setattr(
             "apps.payments.services.stripe.PaymentIntent.retrieve",
-            MagicMock(return_value=MagicMock(status="succeeded")),
+            MagicMock(
+                return_value=MagicMock(
+                    id="pi_paid",
+                    status="succeeded",
+                    amount_received=_to_cents(booking.total_amount) + extra_cents,
+                    currency="usd",
+                )
+            ),
         )
-        booking, seat, _ = _pending_booking(pi="pi_paid", age_minutes=6)
 
         sweep_expired_pending_bookings()
 
         booking.refresh_from_db()
         seat.refresh_from_db()
-        assert booking.status == Booking.Status.PENDING
-        assert booking.held_seats().filter(id=seat.id).exists()
+        payment.refresh_from_db()
+        assert booking.status == outcome
+        assert payment.status == Payment.Status.SUCCEEDED
+        assert seat.status == (
+            EventSeat.Status.BOOKED
+            if outcome == "confirmed"
+            else EventSeat.Status.AVAILABLE
+        )
 
     def test_stripe_outage_defers_the_cancellation(self, monkeypatch):
         monkeypatch.setattr(
@@ -878,7 +953,7 @@ class TestRefundOnRequest:
         seat = EventSeat.objects.get(tickets__booking=booking)
 
         with django_capture_on_commit_callbacks(execute=True):
-            refund_on_request(booking)
+            cancel_booking(booking)
 
         booking.refresh_from_db()
         seat.refresh_from_db()
@@ -892,13 +967,66 @@ class TestRefundOnRequest:
     ):
         plain = EventFactory(status=Event.Status.APPROVED)
         booking = paid_booking(plain, (TicketTierFactory(event=plain), "25.00"))
-        with pytest.raises(RefundRequestNotAllowedError, match="postponed"):
-            refund_on_request(booking)
+        with pytest.raises(BookingNotCancellableError, match="postponed"):
+            cancel_booking(booking)
 
         soon = self._postponed(hours_until_start=23)
         booking = paid_booking(soon, (TicketTierFactory(event=soon), "25.00"))
-        with pytest.raises(RefundRequestNotAllowedError, match="24 hours"):
-            refund_on_request(booking)
+        with pytest.raises(BookingNotCancellableError, match="24 hours"):
+            cancel_booking(booking)
+        assert stripe_refunds.call_count == 0
+
+    def test_free_tickets_can_be_returned_until_the_event_starts(
+        self, stripe_refunds, django_capture_on_commit_callbacks
+    ):
+        start = timezone.now() + timedelta(hours=2)
+        event = EventFactory(
+            status=Event.Status.APPROVED,
+            start_datetime=start,
+            end_datetime=start + timedelta(hours=2),
+        )
+        booking = paid_booking(event, (TicketTierFactory(event=event), "0.00"))
+        seat = EventSeat.objects.get(tickets__booking=booking)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            cancel_booking(booking)
+
+        booking.refresh_from_db()
+        seat.refresh_from_db()
+        assert booking.status == Booking.Status.REFUNDED
+        assert seat.status == EventSeat.Status.AVAILABLE
+        assert not Refund.objects.filter(booking=booking).exists()
+        assert stripe_refunds.call_count == 0
+
+    def test_free_tickets_cannot_be_returned_once_the_event_started(
+        self, stripe_refunds
+    ):
+        start = timezone.now() - timedelta(minutes=5)
+        event = EventFactory(
+            status=Event.Status.APPROVED,
+            start_datetime=start,
+            end_datetime=start + timedelta(hours=2),
+        )
+        booking = paid_booking(event, (TicketTierFactory(event=event), "0.00"))
+        with pytest.raises(BookingNotCancellableError, match="until the event starts"):
+            cancel_booking(booking)
+
+    def test_paid_tickets_still_need_a_postponement(self, stripe_refunds):
+        event = EventFactory(status=Event.Status.APPROVED)
+        booking = paid_booking(event, (TicketTierFactory(event=event), "0.50"))
+        with pytest.raises(BookingNotCancellableError, match="postponed"):
+            cancel_booking(booking)
+
+    def test_refused_once_a_ticket_was_used_at_the_door(self, stripe_refunds):
+        event = self._postponed()
+        booking = paid_booking(event, (TicketTierFactory(event=event), "25.00"))
+        booking.tickets.update(status=Ticket.Status.USED)
+
+        with pytest.raises(BookingNotCancellableError, match="used at the door"):
+            cancel_booking(booking)
+
+        booking.refresh_from_db()
+        assert booking.status == Booking.Status.CONFIRMED
         assert stripe_refunds.call_count == 0
 
 
@@ -919,14 +1047,14 @@ def test_a_late_duplicate_refund_request_leaves_a_resold_seat_alone(stripe_refun
     )
     booking = paid_booking(event, (TicketTierFactory(event=event), "25.00"))
     stale = Booking.objects.get(pk=booking.pk)
-    refund_on_request(booking)
+    cancel_booking(booking)
     seat = EventSeat.objects.get(
         tickets__booking=booking, tickets__status=Ticket.Status.CANCELLED
     )
     TicketFactory(booking=BookingFactory(), event_seat=seat)
     EventSeat.objects.filter(pk=seat.pk).update(status=EventSeat.Status.BOOKED)
 
-    refund_on_request(stale)
+    cancel_booking(stale)
 
     seat.refresh_from_db()
     assert seat.status == EventSeat.Status.BOOKED
