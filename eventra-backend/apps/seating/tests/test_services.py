@@ -10,12 +10,16 @@ from django.utils import timezone
 from psycopg import errors as pg_errors
 from rest_framework.test import APIClient
 
+from apps.bookings.factories import BookingFactory
+from apps.bookings.models import Booking
 from apps.events.factories import (
     EventFactory,
     TicketTierFactory,
     TierSectionMappingFactory,
 )
 from apps.events.models import Event
+from apps.tickets.factories import TicketFactory
+from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory, VenueFactory
 
@@ -31,6 +35,7 @@ from ..services import (
     SeatLockConflictError,
     SeatsNotFoundError,
     SeatsUnavailableError,
+    TicketLimitReachedError,
     TooManyActiveSeatsError,
     TooManySeatsError,
     UncoveredSectionsError,
@@ -567,6 +572,51 @@ class TestHoldLimits:
 
         with pytest.raises(TooManyActiveSeatsError):
             hold_seats(event=event, seat_ids=[extra.id], user=user)
+
+    def test_a_buyer_cannot_go_over_the_events_ticket_limit(self):
+        user = UserFactory()
+        event = EventFactory(status=Event.Status.APPROVED, max_tickets_per_buyer=3)
+        held = _seat(event, status=EventSeat.Status.HELD)
+        SeatHoldFactory(
+            event_seat=held, user=user, expires_at=timezone.now() + timedelta(minutes=5)
+        )
+        owned = _seat(event, status=EventSeat.Status.BOOKED)
+        TicketFactory(
+            booking=BookingFactory(user=user, status=Booking.Status.CONFIRMED),
+            event_seat=owned,
+        )
+        TicketFactory(
+            booking=BookingFactory(user=user, status=Booking.Status.REFUNDED),
+            event_seat=_seat(event),
+            status=Ticket.Status.CANCELLED,
+        )
+        TicketFactory(
+            booking=BookingFactory(user=user, status=Booking.Status.CONFIRMED),
+            event_seat=_seat(EventFactory(status=Event.Status.APPROVED)),
+        )
+        first, second = _seat(event), _seat(event)
+
+        with pytest.raises(TicketLimitReachedError, match="at most 3 tickets"):
+            hold_seats(event=event, seat_ids=[first.id, second.id], user=user)
+        hold_seats(event=event, seat_ids=[first.id], user=user)
+
+    def test_the_ticket_limit_is_a_409_from_the_hold_endpoint(self):
+        user = UserFactory()
+        event = EventFactory(status=Event.Status.APPROVED, max_tickets_per_buyer=1)
+        seats = [_seat(event), _seat(event)]
+        client = APIClient()
+        client.force_authenticate(user)
+
+        response = client.post(
+            f"/events/{event.id}/seats/hold/",
+            {"seat_ids": [str(seat.id) for seat in seats]},
+            format="json",
+        )
+
+        assert response.status_code == 409
+        assert response.data["detail"] == (
+            "You can have at most 1 ticket for this event."
+        )
 
     def test_refreshing_an_existing_hold_does_not_count_twice(self):
         user = UserFactory()

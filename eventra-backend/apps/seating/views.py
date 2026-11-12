@@ -23,6 +23,7 @@ from .services import (
     SeatLockConflictError,
     SeatsNotFoundError,
     SeatsUnavailableError,
+    TicketLimitReachedError,
     TooManyActiveSeatsError,
     TooManySeatsError,
     UncoveredSectionsError,
@@ -100,7 +101,11 @@ class EventSeatHoldView(APIView):
                 {"detail": str(exc), "seat_ids": exc.seat_ids},
                 status=status.HTTP_409_CONFLICT,
             )
-        except (SeatLockConflictError, TooManyActiveSeatsError) as exc:
+        except (
+            SeatLockConflictError,
+            TooManyActiveSeatsError,
+            TicketLimitReachedError,
+        ) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
         return Response(

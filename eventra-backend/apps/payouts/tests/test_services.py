@@ -360,6 +360,14 @@ class TestAwaitingPayout:
 
         assert list(awaiting_payout(Event.all_objects.all())) == [waiting]
 
+    def test_an_event_that_only_gave_away_free_tickets_has_nothing_to_pay_out(self):
+        free = EventFactory(status=Event.Status.COMPLETED)
+        confirmed_booking_with_ticket(free, Decimal("0.00"))
+
+        assert not awaiting_payout(Event.all_objects.filter(pk=free.pk)).exists()
+        with pytest.raises(PayoutNotAvailableError):
+            pay_out_event(free)
+
 
 class TestRequestPayoutSettlement:
     def test_flips_pending_to_processing_and_enqueues_settle_task(
