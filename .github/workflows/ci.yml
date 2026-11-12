@@ -70,6 +70,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements/dev.txt -r requirements/prod.txt
 
+      - name: Dependency audit
+        run: |
+          pip install pip-audit==2.10.1
+          pip-audit -r requirements/dev.txt -r requirements/prod.txt
+
       - name: Ruff
         run: ruff check .
 
@@ -159,6 +164,11 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Dependency audit
+        run: |
+          npm audit --omit=dev
+          npm audit --audit-level=high
 
       - name: Oxlint
         run: npx oxlint --deny-warnings
