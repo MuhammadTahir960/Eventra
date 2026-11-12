@@ -21,7 +21,8 @@ import {
   useEventsById,
   useMyTickets,
   canRefundPostponed,
-  useRefundBooking,
+  canReturnFree,
+  useCancelBooking,
   type Ticket,
 } from '../api'
 import { usePageTitle } from '@/lib/use-page-title'
@@ -81,9 +82,14 @@ function isPast(order: Order): boolean {
   )
 }
 
-function RequestRefundButton({ order }: { order: Order }) {
+function isFree(order: Order): boolean {
+  return order.tickets.every((ticket) => Number(ticket.price) === 0)
+}
+
+function CancelBookingButton({ order }: { order: Order }) {
   const [open, setOpen] = useState(false)
-  const request = useRefundBooking()
+  const request = useCancelBooking()
+  const free = isFree(order)
   const which =
     order.tickets.length === 1
       ? 'Your ticket'
@@ -98,21 +104,27 @@ function RequestRefundButton({ order }: { order: Order }) {
       }}
       trigger={
         <Button variant="outline" size="sm" className="mt-3 w-fit">
-          Request a refund
+          {free ? "Can't go? Return tickets" : 'Request a refund'}
         </Button>
       }
-      title="Refund these tickets?"
-      description={`${which} for "${order.title}" will be cancelled and everything you paid goes back on your card. This can't be undone.`}
-      confirmLabel="Refund my tickets"
+      title={free ? 'Return these tickets?' : 'Refund these tickets?'}
+      description={
+        free
+          ? `${which} for "${order.title}" will be cancelled so someone else can have the seats. This can't be undone.`
+          : `${which} for "${order.title}" will be cancelled and everything you paid goes back on your card. This can't be undone.`
+      }
+      confirmLabel={free ? 'Return my tickets' : 'Refund my tickets'}
       destructive
       pending={request.isPending}
       onConfirm={() =>
         request.mutate(order.booking, {
           onSuccess: () => {
             setOpen(false)
-            toast.success('Refund on its way', {
-              description: 'It goes back to the card you paid with.',
-            })
+            if (free) toast.success('Tickets returned')
+            else
+              toast.success('Refund on its way', {
+                description: 'It goes back to the card you paid with.',
+              })
           },
         })
       }
@@ -291,21 +303,27 @@ export function MyTicketsPage() {
                     )}
                     {order.event?.status === 'cancelled' ? (
                       <Notice tone="warning" className="mt-3">
-                        This event was cancelled. Your payment is refunded to
-                        the card you used.
+                        {isFree(order)
+                          ? 'This event was cancelled.'
+                          : 'This event was cancelled. Your payment is refunded to the card you used.'}
                       </Notice>
                     ) : (
                       isRefunded(order) && (
                         <Notice className="mt-3">
-                          You were refunded for these tickets, to the card you
-                          used.
+                          {isFree(order)
+                            ? 'You returned these tickets.'
+                            : 'You were refunded for these tickets, to the card you used.'}
                         </Notice>
                       )
                     )}
                     {order.event &&
-                      canRefundPostponed(order.event) &&
-                      order.tickets.some((t) => t.status === 'valid') && (
-                        <RequestRefundButton order={order} />
+                      (isFree(order)
+                        ? canReturnFree(order.event)
+                        : canRefundPostponed(order.event)) &&
+                      order.tickets.some((t) => t.status === 'valid') &&
+                      // A ticket already used at the door can't be handed back
+                      !order.tickets.some((t) => t.status === 'used') && (
+                        <CancelBookingButton order={order} />
                       )}
                   </div>
                 </TicketStub>

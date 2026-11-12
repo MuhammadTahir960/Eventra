@@ -71,11 +71,14 @@ export function SeatsPage() {
     event.data ? `Choose seats: ${event.data.title}` : 'Choose seats',
   )
   const { resolve } = useEventLookups(event.data ? [event.data] : undefined)
-  // No live socket when nothing can be booked: ticket holders on an event under
-  // review can't open its seat feed, so it would only retry and then poll a 404
+  // Nothing to load when nothing can be booked: the page shows only the reason,
+  // and the seat endpoints 404 for events that aren't public
   const liveSlug =
     event.data && !bookingBlocker(event.data) ? event.data.slug : undefined
-  const { seats, connection } = useLiveSeats(id, liveSlug)
+  const { seats, connection } = useLiveSeats(
+    liveSlug ? id : undefined,
+    liveSlug,
+  )
 
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [message, setMessage] = useState<{
@@ -93,12 +96,12 @@ export function SeatsPage() {
   // expiry sweep release them too.
   const { refetch } = seats
   useEffect(() => {
-    if (!isUuid(id)) return
+    if (!liveSlug || !isUuid(id)) return
     seatingApi
       .releaseMyBooking(id)
       .then(() => refetch())
       .catch(() => {})
-  }, [id, refetch])
+  }, [id, liveSlug, refetch])
 
   // Someone else took a seat in the cart: drop it and say which
   useEffect(() => {
@@ -120,12 +123,19 @@ export function SeatsPage() {
     [allSeats, selected],
   )
   const total = sumPrices(cart.map((seat) => seat.price))
+  const free = cart.length > 0 && Number(total) === 0
+  // The server also counts tickets this buyer already has for the event
+  const eventLimit = event.data?.max_tickets_per_buyer ?? MAX_SEATS_PER_HOLD
+  const cap = Math.min(MAX_SEATS_PER_HOLD, eventLimit)
 
   function toggle(seatId: string) {
-    if (!selected.has(seatId) && selected.size >= MAX_SEATS_PER_HOLD) {
+    if (!selected.has(seatId) && selected.size >= cap) {
       setMessage({
         tone: 'warning',
-        text: `You can book up to ${MAX_SEATS_PER_HOLD} seats at a time.`,
+        text:
+          cap < MAX_SEATS_PER_HOLD
+            ? `This event allows ${cap} ${cap === 1 ? 'ticket' : 'tickets'} per person.`
+            : `You can book up to ${cap} seats at a time.`,
       })
       return
     }
@@ -303,7 +313,11 @@ export function SeatsPage() {
                     onClick={() => void checkout()}
                   >
                     <SwapLabel>
-                      {pending ? 'Reserving seats…' : 'Continue to payment'}
+                      {pending
+                        ? 'Reserving seats…'
+                        : free
+                          ? 'Get free tickets'
+                          : 'Continue to payment'}
                     </SwapLabel>
                   </Button>
                   <p className="text-[13px] text-muted-foreground">
@@ -317,7 +331,7 @@ export function SeatsPage() {
                   Your selection
                 </h2>
                 <span className="tabular text-[13px] text-muted-foreground">
-                  {cart.length} of {MAX_SEATS_PER_HOLD}
+                  {cart.length} of {cap}
                 </span>
               </div>
 
@@ -382,7 +396,9 @@ export function SeatsPage() {
             disabled={cart.length === 0 || pending}
             onClick={() => void checkout()}
           >
-            <SwapLabel>{pending ? 'Reserving…' : 'Continue'}</SwapLabel>
+            <SwapLabel>
+              {pending ? 'Reserving…' : free ? 'Get tickets' : 'Continue'}
+            </SwapLabel>
           </Button>
         </div>
       )}

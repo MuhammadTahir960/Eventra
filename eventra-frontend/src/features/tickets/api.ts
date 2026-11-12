@@ -23,6 +23,8 @@ export interface Ticket {
   seat_number: number
   // What the QR code encodes; staff scan it at the door
   ticket_code: string
+  // Decimal string; "0.00" for a free ticket
+  price: string
   attendee_name: string
   status: TicketStatus
   created_at: string
@@ -46,13 +48,13 @@ export function useMyTickets() {
   })
 }
 
-// A postponed event's buyer takes a full refund instead of the new date.
-// The whole booking is refunded and its seats go back on sale.
-export function useRefundBooking() {
+// The buyer cancels: a postponed event's buyer is refunded in full, and free
+// tickets are simply handed back. The seats go back on sale either way.
+export function useCancelBooking() {
   const client = useQueryClient()
   return useMutation({
     mutationFn: (bookingId: string) =>
-      apiFetch(`/bookings/${bookingId}/refunds/`, { method: 'POST' }),
+      apiFetch(`/bookings/${bookingId}/cancel/`, { method: 'POST' }),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ['tickets'] })
     },
@@ -69,8 +71,8 @@ export function useTicket(id: string | undefined) {
 }
 
 // Tickets carry only the event's id and title; dates and venues come from
-// the events themselves. A cancelled event may no longer be visible (404),
-// so a failed lookup just leaves that event's details out.
+// the events themselves. Buyers can always open events they paid for, even
+// cancelled or trashed ones; a failed lookup just leaves that event's details out.
 export function useEventsById(ids: string[]) {
   const results = useQueries({
     queries: ids.map((id) => ({
@@ -85,6 +87,14 @@ export function useEventsById(ids: string[]) {
     if (result.data) byId.set(result.data.id, result.data)
   }
   return { byId, isPending: results.some((result) => result.isPending) }
+}
+
+// Free tickets can be handed back until the event starts
+export function canReturnFree(event: EventItem, now = Date.now()): boolean {
+  return (
+    event.status === 'approved' &&
+    now < new Date(event.start_datetime).getTime()
+  )
 }
 
 // Offered until a day before the new start (REFUND_REQUEST_CUTOFF_HOURS in

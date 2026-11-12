@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { EventItem } from '@/features/events/types'
-import { canRefundPostponed } from './api'
+import { canRefundPostponed, canReturnFree } from './api'
 
 const HOUR = 60 * 60 * 1000
 const start = Date.parse('2026-11-14T14:00:00Z')
@@ -35,4 +35,18 @@ describe('canRefundPostponed', () => {
       false,
     )
   })
+})
+
+describe('canReturnFree', () => {
+  it('is offered until the event starts', () => {
+    expect(canReturnFree(event('approved', null), start - 1)).toBe(true)
+    expect(canReturnFree(event('approved', null), start)).toBe(false)
+  })
+
+  it.each(['cancelled', 'completed', 'pending_approval'] as const)(
+    'is not offered once the event is %s',
+    (status) => {
+      expect(canReturnFree(event(status, null), start - HOUR)).toBe(false)
+    },
+  )
 })

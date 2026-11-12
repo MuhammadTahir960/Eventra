@@ -75,6 +75,7 @@ export function TicketPage() {
 
   const item = ticket.data
   const status = TICKET_STATUS[item.status]
+  const cancelled = item.status === 'cancelled'
   const venue = event ? resolve(event).venue : undefined
 
   async function download() {
@@ -103,13 +104,19 @@ export function TicketPage() {
         as="article"
         aria-label={`Ticket for ${item.event_title}`}
         stub={
-          <div className="flex flex-col items-center gap-3 py-2">
-            <TicketQr code={item.ticket_code} />
-            <CopyCode code={item.ticket_code} />
-            <p className="text-center text-[13px] text-muted-foreground">
-              Show this code at the entrance.
+          cancelled ? (
+            <p className="py-2 text-center text-sm text-muted-foreground">
+              This ticket was cancelled and can't be used for entry.
             </p>
-          </div>
+          ) : (
+            <div className="flex flex-col items-center gap-3 py-2">
+              <TicketQr code={item.ticket_code} />
+              <CopyCode code={item.ticket_code} />
+              <p className="text-center text-[13px] text-muted-foreground">
+                Show this code at the entrance.
+              </p>
+            </div>
+          )
         }
       >
         <div className="flex items-center justify-between">
@@ -165,15 +172,18 @@ export function TicketPage() {
       </TicketStub>
 
       {error && <Notice tone="error">{error}</Notice>}
-      <Button
-        variant="ink"
-        size="lg"
-        onClick={() => void download()}
-        disabled={downloading}
-      >
-        <HugeiconsIcon icon={Download04Icon} size={18} />
-        {downloading ? 'Preparing PDF…' : 'Download PDF'}
-      </Button>
+      {/* The server only hands out a PDF for a ticket that can still get in */}
+      {item.status === 'valid' && (
+        <Button
+          variant="ink"
+          size="lg"
+          onClick={() => void download()}
+          disabled={downloading}
+        >
+          <HugeiconsIcon icon={Download04Icon} size={18} />
+          {downloading ? 'Preparing PDF…' : 'Download PDF'}
+        </Button>
+      )}
     </div>
   )
 }
