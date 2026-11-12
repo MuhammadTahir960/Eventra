@@ -90,6 +90,26 @@ def test_register_serializer_duplicate_email_rejected(email):
     assert "email" in serializer.errors
 
 
+@pytest.mark.parametrize(
+    "existing, new, blocked",
+    [
+        ("ana@gmail.com", "ana+tickets@gmail.com", True),
+        ("ana@gmail.com", "a.n.a@gmail.com", True),
+        ("ana@gmail.com", "A.NA+2@GoogleMail.com", True),
+        ("ana+old@example.com", "ana@example.com", True),
+        ("a.na@example.com", "ana@example.com", False),
+        ("ana@gmail.com", "ana@example.com", False),
+        ("anna@gmail.com", "ana@gmail.com", False),
+    ],
+)
+def test_one_mailbox_gets_one_account(existing, new, blocked):
+    UserFactory(email=existing)
+    serializer = RegisterSerializer(data=_register_payload(email=new))
+    assert serializer.is_valid() is not blocked
+    if blocked:
+        assert serializer.errors["email"] == ["A user with that email already exists."]
+
+
 def test_register_serializer_race_condition_integrity_error_becomes_validation_error():
     UserFactory(email="taken@example.com")
     serializer = RegisterSerializer()

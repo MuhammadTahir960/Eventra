@@ -11,6 +11,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from apps.common.constants import Roles
 
 from .models import User
+from .services import email_in_use
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -41,10 +42,11 @@ class RegisterSerializer(serializers.ModelSerializer):
             "role",
         ]
         read_only_fields = ["id"]
+        extra_kwargs = {"email": {"validators": []}}
 
     def validate_email(self, value):
         value = value.strip().lower()
-        if User.objects.filter(email__iexact=value).exists():
+        if email_in_use(value):
             raise serializers.ValidationError("A user with that email already exists.")
         return value
 

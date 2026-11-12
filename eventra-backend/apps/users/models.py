@@ -43,6 +43,18 @@ class UserManager(BaseUserManager):
         return self.create_user(email, password, **extra_fields)
 
 
+class CanonicalEmail(models.Func):
+    template = (
+        "CASE WHEN split_part(lower(%(expressions)s), '@', 2) "
+        "IN ('gmail.com', 'googlemail.com') "
+        "THEN replace(split_part(split_part(lower(%(expressions)s), '@', 1), '+', 1),"
+        " '.', '') || '@gmail.com' "
+        "ELSE split_part(split_part(lower(%(expressions)s), '@', 1), '+', 1)"
+        " || '@' || split_part(lower(%(expressions)s), '@', 2) END"
+    )
+    output_field = models.CharField()
+
+
 class User(AbstractBaseUser, PermissionsMixin):
     class Gender(models.TextChoices):
         MALE = "male", "Male"
@@ -75,6 +87,11 @@ class User(AbstractBaseUser, PermissionsMixin):
     deleted_at = models.DateTimeField(null=True, blank=True)
 
     objects = UserManager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(CanonicalEmail("email"), name="uniq_user_mailbox")
+        ]
 
     def save(self, *args, **kwargs):
         if self.role != Roles.ADMIN and (self.is_staff or self.is_superuser):
