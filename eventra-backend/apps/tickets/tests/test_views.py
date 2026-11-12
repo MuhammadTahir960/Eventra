@@ -25,93 +25,173 @@ def _ticket_for_event(event, status=Ticket.Status.VALID, attendee=None):
     return TicketFactory(booking=booking, event_seat=seat, status=status)
 
 
-class TestTicketValidateView:
-    def test_owning_organizer_can_validate(self):
+def _check_in(user, event, code):
+    client = auth_client(user) if user else APIClient()
+    return client.post(f"/events/{event.id}/check-ins/", {"code": code}, format="json")
+
+
+class TestCheckIns:
+    def test_owning_organizer_checks_a_ticket_in_by_its_code(self):
         organizer = UserFactory(role=Roles.ORGANIZER)
         event = EventFactory(status="approved", organizer=organizer)
         ticket = _ticket_for_event(event)
 
-        client = auth_client(organizer)
-        response = client.post(f"/events/{event.id}/tickets/{ticket.id}/validate/")
+        response = _check_in(organizer, event, ticket.ticket_code)
 
-        assert response.status_code == 200
+        assert response.status_code == 201
+        assert response.data["id"] == str(ticket.id)
         ticket.refresh_from_db()
         assert ticket.status == Ticket.Status.USED
 
-    def test_non_owning_organizer_is_rejected(self):
-        owner = UserFactory(role=Roles.ORGANIZER)
-        other_organizer = UserFactory(role=Roles.ORGANIZER)
-        event = EventFactory(status="approved", organizer=owner)
+    def test_admin_can_check_in_at_any_event(self):
+        event = EventFactory(status="approved")
         ticket = _ticket_for_event(event)
+        response = _check_in(UserFactory(role=Roles.ADMIN), event, ticket.ticket_code)
+        assert response.status_code == 201
 
-        client = auth_client(other_organizer)
-        response = client.post(f"/events/{event.id}/tickets/{ticket.id}/validate/")
+    @pytest.mark.parametrize("real_code", [True, False])
+    def test_other_organizer_learns_nothing_about_codes(self, real_code):
+        event = EventFactory(status="approved")
+        ticket = _ticket_for_event(event)
+        code = ticket.ticket_code if real_code else "NoSuchCode1"
+
+        response = _check_in(UserFactory(role=Roles.ORGANIZER), event, code)
 
         assert response.status_code == 403
         ticket.refresh_from_db()
         assert ticket.status == Ticket.Status.VALID
 
-    def test_admin_can_validate_any_event(self):
-        organizer = UserFactory(role=Roles.ORGANIZER)
-        admin = UserFactory(role=Roles.ADMIN)
-        event = EventFactory(status="approved", organizer=organizer)
+    @pytest.mark.parametrize("role", [Roles.ATTENDEE, None])
+    def test_attendees_and_anonymous_are_refused(self, role):
+        event = EventFactory(status="approved")
         ticket = _ticket_for_event(event)
+        user = UserFactory(role=role) if role else None
+        response = _check_in(user, event, ticket.ticket_code)
+        assert response.status_code == (403 if role else 401)
 
-        client = auth_client(admin)
-        response = client.post(f"/events/{event.id}/tickets/{ticket.id}/validate/")
-
-        assert response.status_code == 200
-
-    def test_wrong_event_in_url_returns_409_with_distinct_message(self):
+    def test_a_code_from_another_event_is_not_found(self):
         organizer = UserFactory(role=Roles.ORGANIZER)
         event_a = EventFactory(status="approved", organizer=organizer)
         event_b = EventFactory(status="approved", organizer=organizer)
         ticket = _ticket_for_event(event_a)
 
-        client = auth_client(organizer)
-        response = client.post(f"/events/{event_b.id}/tickets/{ticket.id}/validate/")
+        response = _check_in(organizer, event_b, ticket.ticket_code)
 
-        assert response.status_code == 409
-        assert response.data["detail"] == "Ticket is for a different event"
+        assert response.status_code == 404
         ticket.refresh_from_db()
         assert ticket.status == Ticket.Status.VALID
 
-    def test_already_used_returns_409_with_distinct_message(self):
+    def test_unknown_code_is_not_found(self):
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status="approved", organizer=organizer)
+        response = _check_in(organizer, event, "ABCD-EFGH-JKMN")
+        assert response.status_code == 404
+        assert response.data["detail"] == "No ticket with this code for this event."
+
+    @pytest.mark.parametrize("code", ["", " ", "' OR 1=1 --", "a" * 33, None])
+    def test_malformed_codes_are_rejected(self, code):
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status="approved", organizer=organizer)
+        response = _check_in(organizer, event, code)
+        assert response.status_code == 400
+
+    @pytest.mark.parametrize(
+        "typed", ["lower", "no dashes", "spaces", "lower no dashes"]
+    )
+    def test_staff_can_type_the_code_loosely(self, typed):
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status="approved", organizer=organizer)
+        ticket = _ticket_for_event(event)
+        code = ticket.ticket_code
+        typed_code = {
+            "lower": code.lower(),
+            "no dashes": code.replace("-", ""),
+            "spaces": code.replace("-", " "),
+            "lower no dashes": code.replace("-", "").lower(),
+        }[typed]
+        assert _check_in(organizer, event, typed_code).status_code == 201
+
+    @pytest.mark.parametrize(
+        "code", ["ABCD-EFGH-JKM", "ABCD-EFGH-JKMNP", "ABC0-EFGH-JKMN", "ABCI-EFGH-JKMN"]
+    )
+    def test_codes_of_the_wrong_length_or_characters_are_refused(self, code):
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status="approved", organizer=organizer)
+        assert _check_in(organizer, event, code).status_code == 400
+
+    def test_a_malformed_code_gets_a_plain_message(self):
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status="approved", organizer=organizer)
+        response = _check_in(organizer, event, "' OR 1=1")
+        assert response.data["code"] == ["That isn't a ticket code."]
+
+    def test_already_used_returns_409_with_its_own_message(self):
         organizer = UserFactory(role=Roles.ORGANIZER)
         event = EventFactory(status="approved", organizer=organizer)
         ticket = _ticket_for_event(event, status=Ticket.Status.USED)
 
-        client = auth_client(organizer)
-        response = client.post(f"/events/{event.id}/tickets/{ticket.id}/validate/")
+        response = _check_in(organizer, event, ticket.ticket_code)
 
         assert response.status_code == 409
         assert response.data["detail"] == "Ticket already used"
 
-    def test_cancelled_returns_409_with_its_own_message(self):
+    @pytest.mark.parametrize("status", [Ticket.Status.CANCELLED, Ticket.Status.PENDING])
+    def test_cancelled_or_unpaid_returns_409_with_its_own_message(self, status):
         organizer = UserFactory(role=Roles.ORGANIZER)
         event = EventFactory(status="approved", organizer=organizer)
-        ticket = _ticket_for_event(event, status=Ticket.Status.CANCELLED)
+        ticket = _ticket_for_event(event, status=status)
 
-        client = auth_client(organizer)
-        response = client.post(f"/events/{event.id}/tickets/{ticket.id}/validate/")
+        response = _check_in(organizer, event, ticket.ticket_code)
 
         assert response.status_code == 409
         assert response.data["detail"] == (
             "This ticket isn't valid: it was cancelled or never paid for."
         )
 
-    def test_unauthenticated_is_rejected(self):
+    @pytest.mark.parametrize("old", ["tickets/{ticket}/validate", "tickets/validate"])
+    def test_the_old_validate_routes_are_gone(self, old):
         organizer = UserFactory(role=Roles.ORGANIZER)
         event = EventFactory(status="approved", organizer=organizer)
         ticket = _ticket_for_event(event)
+        path = old.format(ticket=ticket.id)
+        response = auth_client(organizer).post(
+            f"/events/{event.id}/{path}/", {"code": ticket.ticket_code}, format="json"
+        )
+        assert response.status_code == 404
+        ticket.refresh_from_db()
+        assert ticket.status == Ticket.Status.VALID
 
-        client = APIClient()
-        response = client.post(f"/events/{event.id}/tickets/{ticket.id}/validate/")
-
-        assert response.status_code == 401
+    def test_a_check_in_takes_a_fixed_number_of_queries(
+        self, django_assert_max_num_queries
+    ):
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status="approved", organizer=organizer)
+        ticket = _ticket_for_event(event)
+        client = auth_client(organizer)
+        with django_assert_max_num_queries(7):
+            response = client.post(
+                f"/events/{event.id}/check-ins/",
+                {"code": ticket.ticket_code},
+                format="json",
+            )
+        assert response.status_code == 201
 
 
 class TestTicketDownloadView:
+    @pytest.mark.parametrize(
+        "status", [Ticket.Status.USED, Ticket.Status.CANCELLED, Ticket.Status.PENDING]
+    )
+    def test_only_a_valid_ticket_has_a_pdf(self, monkeypatch, status):
+        render = MagicMock(return_value=b"%PDF-1")
+        monkeypatch.setattr("apps.tickets.views.render_ticket_pdf", render)
+        user = UserFactory()
+        ticket = _ticket_for_event(EventFactory(), status=status, attendee=user)
+
+        response = auth_client(user).get(f"/tickets/{ticket.id}/download/")
+
+        assert response.status_code == 409
+        render.assert_not_called()
+
     def test_owner_can_download(self, monkeypatch):
         monkeypatch.setattr(
             "apps.tickets.views.render_ticket_pdf", MagicMock(return_value=b"%PDF-1")

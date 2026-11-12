@@ -10,7 +10,6 @@ from apps.common.permissions import (
     IsOrganizer,
     IsOwnerOrAdmin,
 )
-from apps.tickets.permissions import IsTicketEventOwnerOrAdmin
 from apps.users.factories import UserFactory
 from tests.helpers import fake_request, user_with_role
 
@@ -88,8 +87,6 @@ def test_is_owner_or_admin_follows_a_dotted_owner_field(owns_it, allowed):
     ticket = SimpleNamespace(
         event_seat=SimpleNamespace(event=SimpleNamespace(organizer_id=owner_id))
     )
+    view = SimpleNamespace(owner_field="event_seat.event.organizer_id")
     request = fake_request(user)
-    assert (
-        IsTicketEventOwnerOrAdmin().has_object_permission(request, None, ticket)
-        is allowed
-    )
+    assert IsOwnerOrAdmin().has_object_permission(request, view, ticket) is allowed

@@ -12,7 +12,6 @@ from ..models import Ticket
 from ..services import (
     TicketAlreadyUsedError,
     TicketNotValidError,
-    TicketWrongEventError,
     render_ticket_pdf,
     validate_ticket,
 )
@@ -28,24 +27,10 @@ class TestValidateTicket:
             booking=BookingFactory(), event_seat=seat, status=Ticket.Status.VALID
         )
 
-        result = validate_ticket(ticket=ticket, event_id=event.id)
+        result = validate_ticket(ticket=ticket)
 
         result.refresh_from_db()
         assert result.status == Ticket.Status.USED
-
-    def test_wrong_event_raises_before_touching_status(self):
-        event = EventFactory(status="approved")
-        other_event = EventFactory(status="approved")
-        seat = EventSeatFactory(event=event)
-        ticket = TicketFactory(
-            booking=BookingFactory(), event_seat=seat, status=Ticket.Status.VALID
-        )
-
-        with pytest.raises(TicketWrongEventError):
-            validate_ticket(ticket=ticket, event_id=other_event.id)
-
-        ticket.refresh_from_db()
-        assert ticket.status == Ticket.Status.VALID
 
     def test_already_used_raises(self):
         event = EventFactory(status="approved")
@@ -55,7 +40,7 @@ class TestValidateTicket:
         )
 
         with pytest.raises(TicketAlreadyUsedError):
-            validate_ticket(ticket=ticket, event_id=event.id)
+            validate_ticket(ticket=ticket)
 
     @pytest.mark.parametrize("status", [Ticket.Status.CANCELLED, Ticket.Status.PENDING])
     def test_cancelled_or_unpaid_raises(self, status):
@@ -64,20 +49,9 @@ class TestValidateTicket:
         ticket = TicketFactory(booking=BookingFactory(), event_seat=seat, status=status)
 
         with pytest.raises(TicketNotValidError):
-            validate_ticket(ticket=ticket, event_id=event.id)
+            validate_ticket(ticket=ticket)
         ticket.refresh_from_db()
         assert ticket.status == status
-
-    def test_wrong_event_check_runs_before_status_check(self):
-        event = EventFactory(status="approved")
-        other_event = EventFactory(status="approved")
-        seat = EventSeatFactory(event=event)
-        ticket = TicketFactory(
-            booking=BookingFactory(), event_seat=seat, status=Ticket.Status.USED
-        )
-
-        with pytest.raises(TicketWrongEventError):
-            validate_ticket(ticket=ticket, event_id=other_event.id)
 
     @pytest.mark.django_db(transaction=True)
     def test_concurrent_scans_of_the_same_ticket_yield_exactly_one_success(self):
@@ -95,7 +69,7 @@ class TestValidateTicket:
             barrier.wait()
             local_ticket = Ticket.objects.get(pk=ticket.pk)
             try:
-                validate_ticket(ticket=local_ticket, event_id=event.id)
+                validate_ticket(ticket=local_ticket)
                 results.append("used")
             except TicketAlreadyUsedError:
                 results.append("rejected")
