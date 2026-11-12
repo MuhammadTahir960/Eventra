@@ -1,4 +1,5 @@
 from datetime import timedelta
+from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
@@ -16,7 +17,7 @@ from apps.tickets.factories import TicketFactory
 from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
 from apps.venues.factories import VenueFactory
-from tests.helpers import paid_booking
+from tests.helpers import confirmed_booking_with_ticket, paid_booking
 
 from ..constants import MAX_EVENT_LENGTH_DAYS, RUNNING_LATE_OPENS_HOURS
 from ..factories import EventFactory, TicketTierFactory
@@ -67,6 +68,17 @@ def test_ensure_event_deletable_blocks_non_terminal_statuses(status):
     event = EventFactory(status=status)
     with pytest.raises(EventNotDeletableError):
         ensure_event_deletable(event)
+
+
+@pytest.mark.parametrize("price, deletable", [("0.00", True), ("10.00", False)])
+def test_a_completed_event_waits_for_its_payout_only_if_it_took_money(price, deletable):
+    event = EventFactory(status=Event.Status.COMPLETED)
+    confirmed_booking_with_ticket(event, Decimal(price))
+    if deletable:
+        ensure_event_deletable(event)
+    else:
+        with pytest.raises(EventNotDeletableError, match="paid out"):
+            ensure_event_deletable(event)
 
 
 # ==================================================

@@ -1,7 +1,12 @@
 import pytest
 from django.contrib.admin.sites import AdminSite
 
+from apps.bookings.factories import BookingFactory
+from apps.bookings.models import Booking
 from apps.seating.factories import EventSeatFactory
+from apps.tickets.factories import TicketFactory
+from apps.tickets.models import Ticket
+from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory
 
 from ..admin import EventAdmin, TicketTierAdmin
@@ -21,6 +26,24 @@ def test_admin_queryset_includes_soft_deleted_events():
     titles = set(admin.get_queryset(request=None).values_list("title", flat=True))
 
     assert titles == {"Visible Event", "Archived Event"}
+
+
+@pytest.mark.parametrize(
+    "ticket_status", [Ticket.Status.VALID, Ticket.Status.CANCELLED, None]
+)
+def test_django_admin_cannot_delete_an_event_that_has_or_had_tickets(rf, ticket_status):
+    seat = EventSeatFactory()
+    if ticket_status:
+        TicketFactory(
+            booking=BookingFactory(status=Booking.Status.REFUNDED),
+            event_seat=seat,
+            status=ticket_status,
+        )
+    request = rf.get("/")
+    request.user = UserFactory(role="admin", is_staff=True, is_superuser=True)
+    admin = EventAdmin(Event, AdminSite())
+
+    assert admin.has_delete_permission(request, seat.event) is (ticket_status is None)
 
 
 def test_tier_price_is_editable_until_seats_exist():
