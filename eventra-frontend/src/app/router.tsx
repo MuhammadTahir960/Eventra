@@ -89,6 +89,14 @@ const loadPayouts = (scope: 'organizer' | 'admin') =>
     () => import('@/features/organizer/pages/PayoutsPage'),
     (m) => () => <m.PayoutsPage scope={scope} />,
   )
+const loadDoor = page(
+  () => import('@/features/organizer/pages/DoorPage'),
+  (m) => m.DoorPage,
+)
+const loadTrash = page(
+  () => import('@/features/organizer/pages/TrashPage'),
+  (m) => m.TrashPage,
+)
 const loadVenueRequests = (scope: 'organizer' | 'admin') =>
   page(
     () => import('@/features/organizer/pages/VenueRequestsPage'),
@@ -182,11 +190,13 @@ export const router = createBrowserRouter([
                   { path: 'organizer/events', lazy: loadOrganizerEvents },
                   { path: 'organizer/events/:id', lazy: loadEditEvent },
                   { path: 'organizer/events/:id/sales', lazy: loadEventSales },
+                  { path: 'organizer/events/:id/door', lazy: loadDoor },
                   { path: 'organizer/payouts', lazy: loadPayouts('organizer') },
                   {
                     path: 'organizer/venue-requests',
                     lazy: loadVenueRequests('organizer'),
                   },
+                  { path: 'organizer/trash', lazy: loadTrash },
                 ],
               },
 
@@ -195,6 +205,7 @@ export const router = createBrowserRouter([
                 children: [
                   { path: 'admin/moderation', lazy: loadModeration },
                   { path: 'admin/events', lazy: loadAdminEvents },
+                  { path: 'admin/events/:id/door', lazy: loadDoor },
                   { path: 'admin/users', lazy: loadUsers },
                   { path: 'admin/payouts', lazy: loadPayouts('admin') },
                   { path: 'admin/venues', lazy: loadAdminVenues },
@@ -205,6 +216,7 @@ export const router = createBrowserRouter([
                     path: 'admin/venue-requests',
                     lazy: loadVenueRequests('admin'),
                   },
+                  { path: 'admin/trash', lazy: loadTrash },
                 ],
               },
             ],

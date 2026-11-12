@@ -21,6 +21,7 @@ export const WORKSPACE_NAV: Record<'organizer' | 'admin', NavItem[]> = {
     { to: '/organizer/events/new', label: 'Create event' },
     { to: '/organizer/payouts', label: 'Payouts' },
     { to: '/organizer/venue-requests', label: 'Venue requests' },
+    { to: '/organizer/trash', label: 'Trash' },
   ],
   admin: [
     { to: '/admin/moderation', label: 'Moderation' },
@@ -30,6 +31,7 @@ export const WORKSPACE_NAV: Record<'organizer' | 'admin', NavItem[]> = {
     { to: '/admin/venues', label: 'Venues' },
     { to: '/admin/sports', label: 'Sports' },
     { to: '/admin/venue-requests', label: 'Venue requests' },
+    { to: '/admin/trash', label: 'Trash' },
     { to: '/organizer/events/new', label: 'Create event' },
   ],
 }
