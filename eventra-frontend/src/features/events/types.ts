@@ -22,6 +22,7 @@ export interface EventItem {
   status: EventStatus
   rejection_reason?: string
   is_seated: boolean
+  max_tickets_per_buyer: number
   start_datetime: string
   end_datetime: string
   // Set when the event is marked completed; payouts open 24h later
