@@ -34,6 +34,7 @@ import {
   type TierDraft,
 } from '../create-event'
 import { MAX_TIERS, tierColor } from '../tier-colors'
+import { DEFAULT_TICKETS_PER_BUYER, MAX_TICKETS_PER_BUYER } from '../constants'
 import { usePageTitle } from '@/lib/use-page-title'
 
 const STEP_LABEL = {
@@ -49,6 +50,7 @@ function fieldIdFor(key: string): string {
     title: 'event-title',
     category: 'event-category',
     description: 'event-description',
+    maxTickets: 'event-max-tickets',
     start: 'event-start',
     end: 'event-end',
     tiers: 'tiers',
@@ -63,6 +65,7 @@ function fieldIdFor(key: string): string {
 const SERVER_FIELD: Record<string, string> = {
   title: 'title',
   description: 'description',
+  max_tickets_per_buyer: 'maxTickets',
   category: 'category',
   start_datetime: 'start',
   end_datetime: 'end',
@@ -84,6 +87,7 @@ function blankDraft(): EventDraft {
     start: '',
     end: '',
     tiers: [{ key: newTierKey(), name: '', price: '' }],
+    maxTickets: String(DEFAULT_TICKETS_PER_BUYER),
     assignments: {},
   }
 }
@@ -610,6 +614,29 @@ export function CreateEventPage() {
                       disabled={locked}
                       onChange={(event) =>
                         patch({ description: event.target.value })
+                      }
+                    />
+                  )}
+                </FormField>
+
+                <FormField
+                  id="event-max-tickets"
+                  label="Tickets per buyer"
+                  hint={`The most one account can buy for this event (1 to ${MAX_TICKETS_PER_BUYER}).`}
+                  error={errors.maxTickets}
+                >
+                  {(control) => (
+                    <Input
+                      {...control}
+                      type="number"
+                      inputMode="numeric"
+                      min={1}
+                      max={MAX_TICKETS_PER_BUYER}
+                      className="sm:w-40"
+                      value={draft.maxTickets}
+                      disabled={locked}
+                      onChange={(event) =>
+                        patch({ maxTickets: event.target.value })
                       }
                     />
                   )}

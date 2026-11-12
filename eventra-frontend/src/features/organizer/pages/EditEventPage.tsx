@@ -18,6 +18,7 @@ import { toLocalInput } from '@/lib/format'
 import { isUuid } from '@/lib/ids'
 import { useUpdateEvent, type EventPatch } from '../api'
 import { usePageTitle } from '@/lib/use-page-title'
+import { MAX_TICKETS_PER_BUYER } from '../constants'
 import { LoadingBlock } from '@/components/LoadingBlock'
 
 interface Values {
@@ -26,6 +27,7 @@ interface Values {
   category: string
   start: string
   end: string
+  maxTickets: string
 }
 
 function initialValues(event: EventItem): Values {
@@ -35,6 +37,7 @@ function initialValues(event: EventItem): Values {
     category: event.category ?? '',
     start: toLocalInput(event.start_datetime),
     end: toLocalInput(event.end_datetime),
+    maxTickets: String(event.max_tickets_per_buyer),
   }
 }
 
@@ -51,6 +54,8 @@ function diff(event: EventItem, values: Values): EventPatch {
     patch.start_datetime = new Date(values.start).toISOString()
   if (values.end !== toLocalInput(event.end_datetime))
     patch.end_datetime = new Date(values.end).toISOString()
+  if (Number(values.maxTickets) !== event.max_tickets_per_buyer)
+    patch.max_tickets_per_buyer = Number(values.maxTickets)
   return patch
 }
 
@@ -88,6 +93,13 @@ function EditForm({ event }: { event: EventItem }) {
       new Date(values.end) <= new Date(values.start)
     )
       clientErrors.end_datetime = 'The end must be after the start.'
+    const maxTickets = Number(values.maxTickets)
+    if (
+      !Number.isInteger(maxTickets) ||
+      maxTickets < 1 ||
+      maxTickets > MAX_TICKETS_PER_BUYER
+    )
+      clientErrors.max_tickets_per_buyer = `Enter a whole number from 1 to ${MAX_TICKETS_PER_BUYER}.`
     setErrors(clientErrors)
     setNotice(null)
     if (Object.keys(clientErrors).length > 0) return
@@ -191,6 +203,26 @@ function EditForm({ event }: { event: EventItem }) {
             maxLength={5000}
             value={values.description}
             onChange={(e) => set('description', e.target.value)}
+          />
+        )}
+      </FormField>
+
+      <FormField
+        id="edit-max-tickets"
+        label="Tickets per buyer"
+        hint={`The most one account can buy for this event (1 to ${MAX_TICKETS_PER_BUYER}). Tickets already sold aren't affected.`}
+        error={errors.max_tickets_per_buyer}
+      >
+        {(control) => (
+          <Input
+            {...control}
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={MAX_TICKETS_PER_BUYER}
+            className="sm:w-40"
+            value={values.maxTickets}
+            onChange={(e) => set('maxTickets', e.target.value)}
           />
         )}
       </FormField>

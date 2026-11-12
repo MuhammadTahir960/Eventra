@@ -1,7 +1,13 @@
 import { apiFetch, ApiError } from '@/lib/api-client'
 import type { EventItem, TicketTier } from '@/features/events/types'
 import { HOUR_MS } from '@/lib/constants'
-import { MAX_LEAD_DAYS, MAX_LENGTH_DAYS, PRICE_PATTERN } from './constants'
+import {
+  MAX_LEAD_DAYS,
+  MAX_LENGTH_DAYS,
+  MAX_TICKETS_PER_BUYER,
+  MIN_PAID_PRICE,
+  PRICE_PATTERN,
+} from './constants'
 
 // ---------- the form's data ----------
 
@@ -21,6 +27,8 @@ export interface EventDraft {
   start: string
   end: string
   tiers: TierDraft[]
+  // Text while typing, like prices
+  maxTickets: string
   // section name -> tier key
   assignments: Record<string, string>
   // Set for a sports match (admins only: the backend refuses organizers)
@@ -43,6 +51,17 @@ export function newTierKey(): string {
 }
 
 // ---------- validation (mirrors the backend; the server still has the final say) ----------
+
+// The backend's validate_display_name, used for event titles and tier names
+const DISPLAY_NAME_CHARS =
+  /^[\p{L}\p{M}\p{N} &'\u2019\-\u2013:,.!?()/+#%\u200c\u200d]+$/u
+export function isDisplayName(value: string): boolean {
+  return (
+    /[\p{L}\p{N}]/u.test(value) &&
+    DISPLAY_NAME_CHARS.test(value) &&
+    !/([^\p{L}\p{N}_\s])\1/u.test(value)
+  )
+}
 
 // `noticeHours`: organizers need 24h so an admin can review the event in time
 export function validateDraft(
@@ -92,6 +111,14 @@ export function validateDraft(
     }
   }
 
+  const maxTickets = Number(draft.maxTickets)
+  if (
+    !Number.isInteger(maxTickets) ||
+    maxTickets < 1 ||
+    maxTickets > MAX_TICKETS_PER_BUYER
+  )
+    errors.maxTickets = `Enter a whole number from 1 to ${MAX_TICKETS_PER_BUYER}.`
+
   if (draft.tiers.length === 0) errors.tiers = 'Add at least one ticket tier.'
 
   const seenNames = new Set<string>()
@@ -100,13 +127,21 @@ export function validateDraft(
     if (!name) errors[`tier-${tier.key}-name`] = 'Name this tier.'
     else if (name.length > 100) {
       errors[`tier-${tier.key}-name`] = 'Use 100 characters or fewer.'
+    } else if (!isDisplayName(name)) {
+      errors[`tier-${tier.key}-name`] =
+        "Use letters, numbers, spaces and basic punctuation only: & ' - : , . ! ? ( ) / + # %"
     } else if (seenNames.has(name.toLowerCase())) {
       errors[`tier-${tier.key}-name`] = 'Tier names must be different.'
     }
     seenNames.add(name.toLowerCase())
 
-    if (!PRICE_PATTERN.test(tier.price.trim()) || Number(tier.price) < 0.01) {
-      errors[`tier-${tier.key}-price`] = 'Enter a price of at least 0.01.'
+    const price = Number(tier.price)
+    if (
+      !PRICE_PATTERN.test(tier.price.trim()) ||
+      (price !== 0 && price < MIN_PAID_PRICE)
+    ) {
+      errors[`tier-${tier.key}-price`] =
+        `Enter 0 for free, or at least ${MIN_PAID_PRICE.toFixed(2)}.`
     }
   }
 
@@ -217,6 +252,7 @@ export async function submitEvent(
               }
             : { event_type: 'general' }),
           is_seated: true,
+          max_tickets_per_buyer: Number(draft.maxTickets),
           start_datetime: new Date(draft.start).toISOString(),
           end_datetime: new Date(draft.end).toISOString(),
         },
