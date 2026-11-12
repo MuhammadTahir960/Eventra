@@ -6,6 +6,11 @@ from apps.users.factories import UserFactory
 
 
 @pytest.fixture(autouse=True)
+def pass_turnstile(monkeypatch):
+    monkeypatch.setattr("apps.users.views.verify_turnstile", lambda token: True)
+
+
+@pytest.fixture(autouse=True)
 def clear_throttle_cache():
     """
     A test file that calls /auth/register/ more than 5 times in one run

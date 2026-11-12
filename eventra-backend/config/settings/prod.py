@@ -16,6 +16,11 @@ MIDDLEWARE = ["apps.common.middleware.InternalHostMiddleware", *MIDDLEWARE]
 INTERNAL_CANONICAL_HOST = _CANONICAL_HOST
 SECURE_REDIRECT_EXEMPT = [r"^healthz/$", r"^internal/"]
 
+if not TURNSTILE_SECRET_KEY or TURNSTILE_SECRET_KEY.startswith(
+    ("1x0000", "2x0000", "3x0000")
+):
+    raise ImproperlyConfigured("TURNSTILE_SECRET_KEY must be a real key in production.")
+
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = True
 
