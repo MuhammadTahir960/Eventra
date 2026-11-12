@@ -1,5 +1,7 @@
 from django.contrib import admin
 
+from apps.tickets.models import Ticket
+
 from .models import Event, TicketTier, TierSectionMapping
 from .services import TierPriceImmutableError, ensure_tier_price_mutable
 
@@ -21,6 +23,11 @@ class EventAdmin(admin.ModelAdmin):
 
     def get_queryset(self, request):
         return Event.all_objects.all()
+
+    def has_delete_permission(self, request, obj=None):
+        if obj is not None and Ticket.objects.filter(event_seat__event=obj).exists():
+            return False
+        return super().has_delete_permission(request, obj)
 
 
 @admin.register(TicketTier)
