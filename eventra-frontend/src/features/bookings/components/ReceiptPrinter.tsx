@@ -77,6 +77,7 @@ export function ReceiptPrinter({
   onPrinted: () => void
 }) {
   const status = stalled ? 'Payment received, confirming' : STATUS[stage]
+  const free = Number(total) === 0
 
   return (
     <div className="mx-auto flex w-full max-w-[380px] flex-col items-center">
@@ -138,11 +139,18 @@ export function ReceiptPrinter({
             <Row label="Booking fees" value={formatMoney(0)} />
           </div>
           <div className="my-3 border-t border-dashed border-hairline-strong" />
-          <Row label="Total paid" value={formatMoney(total)} strong />
+          <Row
+            label={free ? 'Total' : 'Total paid'}
+            value={formatMoney(total)}
+            strong
+          />
           <div className="mt-3 flex flex-col gap-0.5 text-muted-foreground">
             <Row label="Order" value={orderId.slice(0, 8).toUpperCase()} />
-            <Row label="Paid" value={stamp.format(paidAt)} />
-            <Row label="Card" value="Visa •••• 4242" />
+            <Row
+              label={free ? 'Booked' : 'Paid'}
+              value={stamp.format(paidAt)}
+            />
+            {!free && <Row label="Card" value="Visa •••• 4242" />}
           </div>
           <p className="mt-4 text-center text-muted-foreground">
             Your tickets are in My tickets.

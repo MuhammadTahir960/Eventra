@@ -4,7 +4,10 @@ import {
   useElements,
   useStripe,
 } from '@stripe/react-stripe-js'
-import { loadStripe, type Appearance, type Stripe } from '@stripe/stripe-js'
+// /pure: Stripe's script loads only when a paid checkout calls loadStripe,
+// not on every page that imports this module
+import type { Appearance, Stripe } from '@stripe/stripe-js'
+import { loadStripe } from '@stripe/stripe-js/pure'
 import { useMemo, useState, type FormEvent } from 'react'
 import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import { EmptyState } from '@/components/EmptyState'
@@ -382,7 +385,7 @@ export function CheckoutPage() {
                   </span>
                 </p>
               )}
-              <TestCardHint />
+              {Number(order.total_amount) > 0 && <TestCardHint />}
               {checkout.isPending ? (
                 <LoadingBlock label="Loading payment form" className="h-64" />
               ) : checkout.isError ? (
