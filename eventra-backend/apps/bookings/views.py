@@ -4,9 +4,9 @@ from rest_framework.views import APIView
 
 from apps.payments.serializers import CheckoutResponseSerializer
 from apps.payments.services import (
+    BookingNotCancellableError,
     PaymentGatewayError,
-    RefundRequestNotAllowedError,
-    refund_on_request,
+    cancel_booking,
 )
 
 from .models import Booking
@@ -91,20 +91,23 @@ class BookingCheckoutView(APIView):
             )
 
         return Response(
-            CheckoutResponseSerializer(payment).data, status=status.HTTP_200_OK
+            CheckoutResponseSerializer(
+                payment or {"client_secret": "", "status": "confirmed"}
+            ).data,
+            status=status.HTTP_200_OK,
         )
 
 
-class BookingRefundsView(APIView):
+class BookingCancelView(APIView):
     permission_classes = [permissions.IsAuthenticated]
-    throttle_scope = "booking-refund"
+    throttle_scope = "booking-cancel"
 
     def post(self, request, id):
         booking = generics.get_object_or_404(
             Booking.objects.filter(user=request.user), id=id
         )
         try:
-            booking = refund_on_request(booking)
-        except RefundRequestNotAllowedError as exc:
+            booking = cancel_booking(booking)
+        except BookingNotCancellableError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        return Response(BookingSerializer(booking).data, status=status.HTTP_201_CREATED)
+        return Response(BookingSerializer(booking).data, status=status.HTTP_200_OK)

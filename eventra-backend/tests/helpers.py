@@ -7,8 +7,10 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.bookings.factories import BookingFactory
 from apps.bookings.models import Booking
+from apps.payments.constants import CURRENCY
 from apps.payments.factories import PaymentFactory
 from apps.payments.models import Payment, Refund
+from apps.payments.services import _to_cents, confirm_payment_from_webhook
 from apps.seating.factories import EventSeatFactory
 from apps.seating.models import EventSeat
 from apps.tickets.factories import TicketFactory
@@ -89,3 +91,15 @@ def failed_refund(booking, reason=Refund.Reason.CANCELLED_EVENT):
     for ticket in booking.tickets.all():
         refund.items.create(ticket=ticket, amount=ticket.price)
     return refund
+
+
+def confirm_paid_in_full(payment_intent_id):
+    payment = (
+        Payment.objects.filter(stripe_payment_intent_id=payment_intent_id)
+        .select_related("booking")
+        .first()
+    )
+    cents = _to_cents(payment.booking.total_amount) if payment else 0
+    return confirm_payment_from_webhook(
+        payment_intent_id, amount_received=cents, currency=CURRENCY
+    )
