@@ -6,12 +6,19 @@ from rest_framework.exceptions import PermissionDenied
 
 from apps.common.constants import Roles
 from apps.common.permissions import has_role
-from apps.common.serializers import AllowedTextMixin, IntegrityErrorHandlingMixin
+from apps.common.serializers import (
+    AllowedTextMixin,
+    IntegrityErrorHandlingMixin,
+    RejectUnknownFieldsMixin,
+    StrictCharField,
+)
+from apps.common.validators import validate_multiline_text
 from apps.payments.services import refund_price_drops
 
 from .constants import (
     MAX_EVENT_LEAD_DAYS,
     MAX_EVENT_LENGTH_DAYS,
+    MAX_REJECTION_REASON_LENGTH,
     ORGANIZER_MIN_NOTICE_HOURS,
 )
 from .models import Event, TicketTier, TierSectionMapping
@@ -45,7 +52,10 @@ def validate_schedule(start, end, now):
 
 
 class EventSerializer(
-    AllowedTextMixin, IntegrityErrorHandlingMixin, serializers.ModelSerializer
+    RejectUnknownFieldsMixin,
+    AllowedTextMixin,
+    IntegrityErrorHandlingMixin,
+    serializers.ModelSerializer,
 ):
     integrity_error_field = "slug"
     integrity_error_message = "An event with a conflicting slug already exists."
@@ -221,7 +231,7 @@ class EventSerializer(
         return super().update(instance, validated_data)
 
 
-class PostponementSerializer(serializers.Serializer):
+class PostponementSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     start_datetime = serializers.DateTimeField()
     end_datetime = serializers.DateTimeField()
 
@@ -235,7 +245,13 @@ class PostponementSerializer(serializers.Serializer):
         return attrs
 
 
-class RunningLateSerializer(serializers.Serializer):
+class RejectionSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
+    reason = StrictCharField(
+        max_length=MAX_REJECTION_REASON_LENGTH, validators=[validate_multiline_text]
+    )
+
+
+class RunningLateSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     end_datetime = serializers.DateTimeField()
 
 
@@ -247,7 +263,10 @@ class PendingEventSerializer(EventSerializer):
 
 
 class TicketTierSerializer(
-    AllowedTextMixin, IntegrityErrorHandlingMixin, serializers.ModelSerializer
+    RejectUnknownFieldsMixin,
+    AllowedTextMixin,
+    IntegrityErrorHandlingMixin,
+    serializers.ModelSerializer,
 ):
     class Meta:
         model = TicketTier
@@ -275,7 +294,10 @@ class TicketTierSerializer(
 
 
 class TierSectionMappingSerializer(
-    AllowedTextMixin, IntegrityErrorHandlingMixin, serializers.ModelSerializer
+    RejectUnknownFieldsMixin,
+    AllowedTextMixin,
+    IntegrityErrorHandlingMixin,
+    serializers.ModelSerializer,
 ):
     integrity_error_field = "section"
     integrity_error_message = (

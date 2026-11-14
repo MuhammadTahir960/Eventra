@@ -70,27 +70,25 @@ def test_create_by_admin_lands_approved_immediately():
     assert event.status == Event.Status.APPROVED
 
 
-def test_client_supplied_organizer_is_ignored():
+def test_client_supplied_organizer_is_refused():
     organizer = UserFactory(role=Roles.ORGANIZER)
     other = UserFactory(role=Roles.ORGANIZER)
     serializer = EventSerializer(
         data=_event_payload(organizer=str(other.id)),
         context={"request": _request_for(organizer)},
     )
-    assert serializer.is_valid(), serializer.errors
-    event = serializer.save()
-    assert event.organizer_id == organizer.id
+    assert not serializer.is_valid()
+    assert set(serializer.errors) == {"organizer"}
 
 
-def test_client_supplied_status_is_ignored_on_create():
+def test_client_supplied_status_is_refused_on_create():
     organizer = UserFactory(role=Roles.ORGANIZER)
     serializer = EventSerializer(
         data=_event_payload(status=Event.Status.APPROVED),
         context={"request": _request_for(organizer)},
     )
-    assert serializer.is_valid(), serializer.errors
-    event = serializer.save()
-    assert event.status == Event.Status.PENDING_APPROVAL
+    assert not serializer.is_valid()
+    assert set(serializer.errors) == {"status"}
 
 
 # ==================================================
@@ -246,16 +244,15 @@ def test_a_tier_is_free_or_costs_at_least_fifty_cents(price, valid):
         ]
 
 
-def test_client_supplied_event_field_is_ignored_on_create():
+def test_client_supplied_event_field_is_refused_on_create():
     event = EventFactory()
     other_event = EventFactory()
     serializer = TicketTierSerializer(
         data={"name": "VIP", "price": "50.00", "event": str(other_event.id)},
         context={"event": event},
     )
-    assert serializer.is_valid(), serializer.errors
-    tier = serializer.save()
-    assert tier.event_id == event.id
+    assert not serializer.is_valid()
+    assert set(serializer.errors) == {"event"}
 
 
 def test_price_update_allowed_when_no_seats_instantiated():

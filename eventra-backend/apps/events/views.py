@@ -14,17 +14,17 @@ from apps.common.permissions import (
     IsAdmin,
     IsEventOwnerStrict,
     IsOrganizer,
+    IsOwnerOrAdmin,
     has_role,
 )
-from apps.common.validators import has_allowed_text
 from apps.payments.tasks import refund_event_bookings_task, retry_event_refunds_task
 
 from .models import EVENT_SEARCH_CONFIG, Event, TicketTier
-from .permissions import IsEventOwnerOrAdmin
 from .serializers import (
     EventSerializer,
     PendingEventSerializer,
     PostponementSerializer,
+    RejectionSerializer,
     RunningLateSerializer,
     TicketTierSerializer,
     TierSectionMappingSerializer,
@@ -38,7 +38,6 @@ from .services import (
     EventNotEditableError,
     EventNotPendingApprovalError,
     EventNotPostponableError,
-    EventRejectionReasonRequiredError,
     InvalidEventEndError,
     SeatMapLockedError,
     approve_event,
@@ -135,6 +134,7 @@ class EventViewSet(
     serializer_class = EventSerializer
     filterset_class = EventFilterSet
     permission_classes = [permissions.IsAuthenticated]
+    owner_field = "organizer_id"
     http_method_names = ["get", "post", "patch", "delete"]
     throttle_scope = None
     include_inactive_roles = (Roles.ADMIN, Roles.ORGANIZER)
@@ -177,7 +177,7 @@ class EventViewSet(
             "extend_end",
             "postponements",
         ):
-            return [permissions.IsAuthenticated(), IsEventOwnerOrAdmin()]
+            return [permissions.IsAuthenticated(), IsOwnerOrAdmin()]
         return [perm() for perm in self.permission_classes]
 
     def update(self, request, *args, **kwargs):
@@ -218,7 +218,7 @@ class EventViewSet(
 
         with transaction.atomic():
             try:
-                cancel_event(event, allow_completed=request.user.role == Roles.ADMIN)
+                cancel_event(event, allow_completed=has_role(request.user, Roles.ADMIN))
             except EventNotCancellableError as exc:
                 return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
@@ -345,20 +345,12 @@ class EventRejectView(views.APIView):
 
     def post(self, request, event_id):
         event = get_object_or_404(Event.objects, pk=event_id)
+        payload = RejectionSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
         try:
-            reason = (
-                request.data.get("reason") if hasattr(request.data, "get") else None
-            )
-            if isinstance(reason, str) and not has_allowed_text(reason, multiline=True):
-                return Response(
-                    {"reason": ["This contains characters that aren't allowed."]},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            reject_event(event, reason if isinstance(reason, str) else "")
+            reject_event(event, payload.validated_data["reason"])
         except (EventNotPendingApprovalError, EventHasPaidBookingsError) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        except EventRejectionReasonRequiredError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(EventSerializer(event, context={"request": request}).data)
 
 

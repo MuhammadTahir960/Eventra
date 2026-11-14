@@ -16,7 +16,6 @@ from .constants import (
     COMPLETE_PAST_EVENTS_BUFFER_HOURS,
     DELETABLE_STATUSES,
     MAX_EVENT_LENGTH_DAYS,
-    MAX_REJECTION_REASON_LENGTH,
     PUBLIC_STATUSES,
     RUNNING_LATE_OPENS_HOURS,
     SENSITIVE_EVENT_FIELDS,
@@ -38,10 +37,6 @@ class DuplicateEventSlugError(Exception):
 
 class EventNotPendingApprovalError(Exception):
     """Raised when approve/reject is attempted on an event not awaiting approval."""
-
-
-class EventRejectionReasonRequiredError(Exception):
-    """Raised when POST /admin/events/{id}/reject/ is called with no (or blank) reason."""
 
 
 class EventNotCancellableError(Exception):
@@ -183,26 +178,13 @@ def _email_buyers_on_commit(task_name: str, event: Event, user_ids: list[str]) -
     transaction.on_commit(enqueue, robust=True)
 
 
+@transaction.atomic
 def reject_event(event: Event, reason: str) -> Event:
-    with transaction.atomic():
-        return _reject_locked(event, reason)
-
-
-def _reject_locked(event: Event, reason: str) -> Event:
     lock_event(event)
     if event.status != Event.Status.PENDING_APPROVAL:
         raise EventNotPendingApprovalError(
             "Only events awaiting approval can be rejected "
             f"(current status: {event.get_status_display()})."
-        )
-    reason = (reason if isinstance(reason, str) else "").strip()
-    if not reason:
-        raise EventRejectionReasonRequiredError(
-            "A non-empty 'reason' is required to reject an event."
-        )
-    if len(reason) > MAX_REJECTION_REASON_LENGTH:
-        raise EventRejectionReasonRequiredError(
-            f"'reason' must be at most {MAX_REJECTION_REASON_LENGTH} characters."
         )
     if paid_bookings(event).exists():
         raise EventHasPaidBookingsError(

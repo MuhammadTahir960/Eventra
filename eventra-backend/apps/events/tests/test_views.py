@@ -1,9 +1,11 @@
+import threading
 from datetime import timedelta
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from django.core import mail
+from django.db import connection
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -17,10 +19,11 @@ from apps.sports.factories import SportFactory, TeamFactory
 from apps.tickets.factories import TicketFactory
 from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory, VenueFactory
-from tests.helpers import auth_client, results
+from tests.helpers import auth_client, paid_booking, results
 
 from ..factories import EventFactory, TicketTierFactory, TierSectionMappingFactory
 from ..models import Event, TicketTier, TierSectionMapping
+from ..views import EventViewSet
 
 pytestmark = pytest.mark.django_db
 
@@ -640,14 +643,16 @@ class TestUpdateEvent:
         )
         assert response.status_code == status.HTTP_409_CONFLICT
 
-    def test_client_supplied_status_is_ignored(self, organizer_user):
+    def test_client_supplied_status_is_refused(self, organizer_user):
         event = EventFactory(organizer=organizer_user, status=Event.Status.APPROVED)
         client = auth_client(organizer_user)
         response = client.patch(
             f"/events/{event.pk}/", {"status": Event.Status.CANCELLED}, format="json"
         )
-        assert response.status_code == status.HTTP_200_OK
-        assert response.data["status"] == Event.Status.APPROVED
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "status" in response.data
+        event.refresh_from_db()
+        assert event.status == Event.Status.APPROVED
 
     def test_anonymous_cannot_update(self, api_client):
         event = EventFactory(status=Event.Status.APPROVED)
@@ -1918,3 +1923,220 @@ def test_a_tier_can_only_be_mapped_to_a_section_the_venue_has():
 
     assert client.post(url, {"section": "Nowhere"}, format="json").status_code == 400
     assert client.post(url, {"section": "Stalls"}, format="json").status_code == 201
+
+
+class TestCancelledEventEmails:
+    def test_buyers_get_the_notice_first_then_the_refund_email(
+        self, monkeypatch, django_capture_on_commit_callbacks
+    ):
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.Refund.create",
+            MagicMock(return_value=MagicMock(id="re_test")),
+        )
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status=Event.Status.APPROVED, organizer=organizer)
+        buyer = UserFactory()
+        tier = TicketTierFactory(event=event)
+        booking = paid_booking(event, (tier, "25.00"), user=buyer)
+        paid_booking(event, (tier, "25.00"), user=buyer)
+        already_refunded = paid_booking(event, (tier, "25.00"))
+        already_refunded.status = Booking.Status.REFUNDED
+        already_refunded.save(update_fields=["status", "updated_at"])
+
+        with django_capture_on_commit_callbacks(execute=True):
+            response = auth_client(organizer).post(f"/events/{event.id}/cancel/")
+
+        assert response.status_code == 200
+        booking.refresh_from_db()
+        assert booking.status == Booking.Status.REFUNDED
+        assert [(m.to, m.subject) for m in mail.outbox] == [
+            ([buyer.email], "An event you booked has been cancelled"),
+            ([buyer.email], "Your booking has been refunded"),
+            ([buyer.email], "Your booking has been refunded"),
+        ]
+
+    def test_cancelling_an_unsold_event_sends_no_email(
+        self, monkeypatch, django_capture_on_commit_callbacks
+    ):
+        monkeypatch.setattr(
+            "apps.events.views.refund_event_bookings_task.delay", MagicMock()
+        )
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status=Event.Status.APPROVED, organizer=organizer)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            auth_client(organizer).post(f"/events/{event.id}/cancel/")
+
+        assert mail.outbox == []
+
+
+class TestEventCancelAction:
+    def test_owning_organizer_can_cancel(
+        self, monkeypatch, django_capture_on_commit_callbacks
+    ):
+        mock_delay = MagicMock()
+        monkeypatch.setattr(
+            "apps.events.views.refund_event_bookings_task.delay", mock_delay
+        )
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status=Event.Status.APPROVED, organizer=organizer)
+
+        client = auth_client(organizer)
+        with django_capture_on_commit_callbacks(execute=True):
+            response = client.post(f"/events/{event.id}/cancel/")
+
+        assert response.status_code == 200
+        event.refresh_from_db()
+        assert event.status == Event.Status.CANCELLED
+        mock_delay.assert_called_once_with(str(event.id))
+
+    def test_non_owning_organizer_is_rejected(self, monkeypatch):
+        monkeypatch.setattr(
+            "apps.events.views.refund_event_bookings_task.delay", MagicMock()
+        )
+        owner = UserFactory(role=Roles.ORGANIZER)
+        other = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status=Event.Status.APPROVED, organizer=owner)
+
+        client = auth_client(other)
+        response = client.post(f"/events/{event.id}/cancel/")
+
+        assert response.status_code == 403
+        event.refresh_from_db()
+        assert event.status == Event.Status.APPROVED
+
+    def test_admin_can_cancel_any_event(self, monkeypatch):
+        monkeypatch.setattr(
+            "apps.events.views.refund_event_bookings_task.delay", MagicMock()
+        )
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        admin = UserFactory(role=Roles.ADMIN)
+        event = EventFactory(status=Event.Status.APPROVED, organizer=organizer)
+
+        client = auth_client(admin)
+        response = client.post(f"/events/{event.id}/cancel/")
+
+        assert response.status_code == 200
+
+    def test_already_cancelled_returns_409(self, monkeypatch):
+        monkeypatch.setattr(
+            "apps.events.views.refund_event_bookings_task.delay", MagicMock()
+        )
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status=Event.Status.CANCELLED, organizer=organizer)
+
+        client = auth_client(organizer)
+        response = client.post(f"/events/{event.id}/cancel/")
+
+        assert response.status_code == 409
+
+    def test_completed_event_returns_409(self, monkeypatch):
+        mock_delay = MagicMock()
+        monkeypatch.setattr(
+            "apps.events.views.refund_event_bookings_task.delay", mock_delay
+        )
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status=Event.Status.COMPLETED, organizer=organizer)
+
+        client = auth_client(organizer)
+        response = client.post(f"/events/{event.id}/cancel/")
+
+        assert response.status_code == 409
+        mock_delay.assert_not_called()
+
+
+class TestEventRetryRefundsAction:
+    def test_admin_can_retry_an_events_refunds(self, monkeypatch):
+        mock_delay = MagicMock()
+        monkeypatch.setattr(
+            "apps.events.views.retry_event_refunds_task.delay", mock_delay
+        )
+        admin = UserFactory(role=Roles.ADMIN)
+        event = EventFactory(status=Event.Status.CANCELLED)
+
+        response = auth_client(admin).post(f"/admin/events/{event.id}/retry-refunds/")
+
+        assert response.status_code == 202
+        mock_delay.assert_called_once_with(str(event.id))
+
+    def test_non_admin_is_rejected(self, monkeypatch):
+        mock_delay = MagicMock()
+        monkeypatch.setattr(
+            "apps.events.views.retry_event_refunds_task.delay", mock_delay
+        )
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(status=Event.Status.CANCELLED, organizer=organizer)
+
+        response = auth_client(organizer).post(
+            f"/admin/events/{event.id}/retry-refunds/"
+        )
+
+        assert response.status_code == 403
+        mock_delay.assert_not_called()
+
+
+class TestEditRacingCancel:
+    @pytest.mark.django_db(transaction=True)
+    @pytest.mark.parametrize("edit", ["event", "tier", "tier_create", "mapping"])
+    def test_edit_that_read_before_the_cancel_gets_409(self, monkeypatch, edit):
+        monkeypatch.setattr(
+            "apps.events.views.refund_event_bookings_task.delay", MagicMock()
+        )
+        owner = UserFactory(role=Roles.ORGANIZER)
+        event = EventFactory(organizer=owner, status=Event.Status.APPROVED)
+        SeatFactory(venue=event.venue, section="Upper")
+        tier = TicketTierFactory(event=event)
+        request = {
+            "event": ("patch", f"/events/{event.id}/", {"description": "Edited"}),
+            "tier": (
+                "patch",
+                f"/events/{event.id}/ticket-tiers/{tier.id}/",
+                {"price": "12.00"},
+            ),
+            "tier_create": (
+                "post",
+                f"/events/{event.id}/ticket-tiers/",
+                {"name": "Late", "price": "20.00"},
+            ),
+            "mapping": (
+                "post",
+                f"/events/{event.id}/ticket-tiers/{tier.id}/sections/",
+                {"section": "Upper"},
+            ),
+        }[edit]
+
+        read_done, release = threading.Event(), threading.Event()
+        original_get_object = EventViewSet.get_object
+
+        def paused_get_object(self):
+            obj = original_get_object(self)
+            if self.request.user == owner:
+                read_done.set()
+                release.wait(10)
+            return obj
+
+        monkeypatch.setattr(EventViewSet, "get_object", paused_get_object)
+        out = {}
+
+        def owner_edit():
+            try:
+                method, url, data = request
+                out["response"] = getattr(auth_client(owner), method)(
+                    url, data, format="json"
+                )
+            finally:
+                connection.close()
+
+        thread = threading.Thread(target=owner_edit)
+        thread.start()
+        assert read_done.wait(10)
+        cancel = auth_client(UserFactory(role=Roles.ADMIN)).post(
+            f"/events/{event.id}/cancel/"
+        )
+        assert cancel.status_code == 200
+        release.set()
+        thread.join(15)
+
+        assert out["response"].status_code == 409
+        event.refresh_from_db()
+        assert event.status == Event.Status.CANCELLED
