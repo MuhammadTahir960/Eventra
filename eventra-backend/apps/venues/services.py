@@ -82,58 +82,29 @@ class VenueRequestNotPendingError(Exception):
     """Raised when reject/fulfil is attempted on a request no longer pending."""
 
 
-class VenueRequestAdminNotesRequiredError(Exception):
-    """Raised when POST /venues/requests/{id}/reject/ is called with no (or blank) admin_notes."""
-
-
-MAX_ADMIN_NOTES_LENGTH = 2000
+@transaction.atomic
+def _review(venue_request: VenueRequest, status, verb: str, **fields) -> VenueRequest:
+    venue_request.refresh_from_db(
+        from_queryset=VenueRequest.objects.select_for_update()
+    )
+    if venue_request.status != VenueRequest.Status.PENDING:
+        raise VenueRequestNotPendingError(
+            f"Only pending venue requests can be {verb} "
+            f"(current status: {venue_request.get_status_display()})."
+        )
+    for name, value in fields.items():
+        setattr(venue_request, name, value)
+    venue_request.status = status
+    venue_request.reviewed_at = timezone.now()
+    venue_request.save(update_fields=["status", "reviewed_at", *fields])
+    return venue_request
 
 
 def reject_venue_request(venue_request: VenueRequest, admin_notes: str) -> VenueRequest:
-    with transaction.atomic():
-        return _reject_locked(venue_request, admin_notes)
-
-
-def _reject_locked(venue_request: VenueRequest, admin_notes: str) -> VenueRequest:
-    venue_request.refresh_from_db(
-        from_queryset=VenueRequest.objects.select_for_update()
+    return _review(
+        venue_request, VenueRequest.Status.REJECTED, "rejected", admin_notes=admin_notes
     )
-    if venue_request.status != VenueRequest.Status.PENDING:
-        raise VenueRequestNotPendingError(
-            "Only pending venue requests can be rejected "
-            f"(current status: {venue_request.get_status_display()})."
-        )
-    admin_notes = (admin_notes or "").strip()
-    if not admin_notes:
-        raise VenueRequestAdminNotesRequiredError(
-            "A non-empty 'admin_notes' is required to reject a venue request."
-        )
-    if len(admin_notes) > MAX_ADMIN_NOTES_LENGTH:
-        raise VenueRequestAdminNotesRequiredError(
-            f"'admin_notes' must be at most {MAX_ADMIN_NOTES_LENGTH} characters."
-        )
-    venue_request.status = VenueRequest.Status.REJECTED
-    venue_request.admin_notes = admin_notes
-    venue_request.reviewed_at = timezone.now()
-    venue_request.save(update_fields=["status", "admin_notes", "reviewed_at"])
-    return venue_request
 
 
 def fulfil_venue_request(venue_request: VenueRequest) -> VenueRequest:
-    with transaction.atomic():
-        return _fulfil_locked(venue_request)
-
-
-def _fulfil_locked(venue_request: VenueRequest) -> VenueRequest:
-    venue_request.refresh_from_db(
-        from_queryset=VenueRequest.objects.select_for_update()
-    )
-    if venue_request.status != VenueRequest.Status.PENDING:
-        raise VenueRequestNotPendingError(
-            "Only pending venue requests can be fulfilled "
-            f"(current status: {venue_request.get_status_display()})."
-        )
-    venue_request.status = VenueRequest.Status.FULFILLED
-    venue_request.reviewed_at = timezone.now()
-    venue_request.save(update_fields=["status", "reviewed_at"])
-    return venue_request
+    return _review(venue_request, VenueRequest.Status.FULFILLED, "fulfilled")

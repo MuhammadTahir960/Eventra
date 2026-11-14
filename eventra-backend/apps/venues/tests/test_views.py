@@ -456,16 +456,81 @@ def test_venue_request_submissions_are_throttled(settings):
     assert 429 in codes[10:]
 
 
-def test_reject_with_non_string_admin_notes_is_a_400():
+@pytest.mark.parametrize("notes", [["x"], 123, None])
+def test_reject_with_non_string_admin_notes_is_a_400(notes):
     admin_user = UserFactory(role=Roles.ADMIN)
     request = VenueRequestFactory()
     response = auth_client(admin_user).post(
-        f"/venues/requests/{request.id}/reject/", {"admin_notes": ["x"]}, format="json"
+        f"/venues/requests/{request.id}/reject/", {"admin_notes": notes}, format="json"
     )
     assert response.status_code == 400
+    request.refresh_from_db()
+    assert request.status == VenueRequest.Status.PENDING
 
 
 @pytest.mark.django_db
+class TestVenueLayoutShape:
+    def test_defaults_to_oval_and_is_public(self):
+        venue = VenueFactory()
+
+        response = APIClient().get(f"/venues/{venue.id}/")
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["layout_shape"] == Venue.LayoutShape.OVAL
+
+    def test_admin_can_create_with_a_shape(self):
+        admin = UserFactory(role=Roles.ADMIN)
+
+        response = auth_client(admin).post(
+            "/venues/", _venue_payload(layout_shape="u_shape"), format="json"
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        assert response.data["layout_shape"] == "u_shape"
+
+    def test_create_without_a_shape_uses_the_default(self):
+        admin = UserFactory(role=Roles.ADMIN)
+
+        response = auth_client(admin).post("/venues/", _venue_payload(), format="json")
+
+        assert response.status_code == status.HTTP_201_CREATED
+        assert response.data["layout_shape"] == "oval"
+
+    def test_unknown_shape_is_rejected(self):
+        admin = UserFactory(role=Roles.ADMIN)
+
+        response = auth_client(admin).post(
+            "/venues/", _venue_payload(layout_shape="triangle"), format="json"
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "layout_shape" in response.data
+
+    def test_admin_can_change_the_shape(self):
+        admin = UserFactory(role=Roles.ADMIN)
+        venue = VenueFactory()
+
+        response = auth_client(admin).patch(
+            f"/venues/{venue.id}/", {"layout_shape": "circle"}, format="json"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        venue.refresh_from_db()
+        assert venue.layout_shape == Venue.LayoutShape.CIRCLE
+
+    def test_organizer_cannot_change_the_shape(self):
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        venue = VenueFactory()
+
+        response = auth_client(organizer).patch(
+            f"/venues/{venue.id}/", {"layout_shape": "circle"}, format="json"
+        )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        venue.refresh_from_db()
+        assert venue.layout_shape == Venue.LayoutShape.OVAL
+
+
 class TestProtectedHardDelete:
     def test_hard_deleting_a_venue_with_event_history_is_a_409(self):
         admin_user = UserFactory(role=Roles.ADMIN)
@@ -539,9 +604,8 @@ class TestCreateVenueRequest:
                 "requested_by": str(other_organizer.pk),
             },
         )
-        assert response.status_code == status.HTTP_201_CREATED
-        request = VenueRequest.objects.get(pk=response.data["id"])
-        assert request.requested_by == organizer_user
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert not VenueRequest.objects.filter(venue_name="X").exists()
 
 
 # ==================================================
