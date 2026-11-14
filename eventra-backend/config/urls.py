@@ -29,7 +29,6 @@ urlpatterns = [
     path("", include("apps.categories.urls")),
     path("", include("apps.sports.urls")),
     path("", include("apps.events.urls")),
-    path("", include("apps.seating.urls")),
     path("", include("apps.bookings.urls")),
     path("", include("apps.payments.urls")),
     path("", include("apps.tickets.urls")),
