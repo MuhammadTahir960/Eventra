@@ -1,7 +1,12 @@
+import os
+import subprocess
+import sys
+import threading
 from decimal import Decimal
 from types import SimpleNamespace
 
 from django.contrib.auth.models import AnonymousUser
+from django.db import connection
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -102,4 +107,52 @@ def confirm_paid_in_full(payment_intent_id):
     cents = _to_cents(payment.booking.total_amount) if payment else 0
     return confirm_payment_from_webhook(
         payment_intent_id, amount_received=cents, currency=CURRENCY
+    )
+
+
+def race(*calls, timeout=15):
+    barrier = threading.Barrier(len(calls))
+    outcomes = [None] * len(calls)
+
+    def run(index, call):
+        barrier.wait()
+        try:
+            outcomes[index] = call()
+        except Exception as exc:  # noqa: BLE001
+            outcomes[index] = exc
+        finally:
+            connection.close()
+
+    threads = [threading.Thread(target=run, args=pair) for pair in enumerate(calls)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout)
+    assert not any(thread.is_alive() for thread in threads), "a racing call hung"
+    return outcomes
+
+
+PROD_ENV = {
+    "SECRET_KEY": "test-only-" + "k3y-" * 12,
+    "JWT_SIGNING_KEY": "test-only-" + "jwt-" * 12,
+    "ALLOWED_HOSTS": "example.com",
+    "CSRF_TRUSTED_ORIGINS": "https://example.com",
+    "CORS_ALLOWED_ORIGINS": "https://example.com",
+    "EMAIL_HOST": "smtp.example.com",
+    "TURNSTILE_SECRET_KEY": "0x4AAAAAAAreal-looking-secret",
+    "R2_ACCOUNT_ID": "demo-account-id",
+    "R2_ACCESS_KEY_ID": "demo-access-key",
+    "R2_SECRET_ACCESS_KEY": "demo-secret-key",
+    "R2_BUCKET_NAME": "demo-bucket",
+    "R2_PUBLIC_DOMAIN": "media.example.com",
+}
+
+
+def run_with_settings(settings_module, env=None, code="import django; django.setup()"):
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "DJANGO_SETTINGS_MODULE": settings_module, **(env or {})},
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
