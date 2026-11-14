@@ -2,12 +2,14 @@ import pytest
 from django.contrib.admin.sites import AdminSite
 
 from apps.bookings.factories import BookingFactory
+from apps.events.factories import EventFactory, TicketTierFactory
 from apps.seating.factories import EventSeatFactory
 from apps.tickets.factories import TicketFactory
 from apps.tickets.models import Ticket
+from tests.helpers import failed_refund, paid_booking
 
-from ..admin import PaymentAdmin
-from ..models import Payment
+from ..admin import PaymentAdmin, RefundAdmin
+from ..models import Payment, Refund
 
 pytestmark = pytest.mark.django_db
 
@@ -57,3 +59,22 @@ def test_payments_list_names_the_event_of_an_orphaned_payment():
     payment = admin.get_queryset(request=None).get()
 
     assert admin.event(payment) == seat.event.title
+
+
+def test_refunds_list_shows_the_event_and_the_refund_total():
+    event = EventFactory()
+    tier = TicketTierFactory(event=event)
+    failed_refund(paid_booking(event, (tier, "20.00"), (tier, "15.50")))
+
+    admin = RefundAdmin(Refund, AdminSite())
+    refund = admin.get_queryset(request=None).get()
+
+    assert admin.event(refund) == event.title
+    assert str(admin.amount(refund)) == "35.50"
+
+
+def test_refunds_are_read_only_records():
+    admin = RefundAdmin(Refund, AdminSite())
+    assert not admin.has_add_permission(request=None)
+    assert not admin.has_change_permission(request=None)
+    assert not admin.has_delete_permission(request=None)
