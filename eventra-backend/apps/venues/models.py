@@ -62,7 +62,9 @@ class Venue(SoftDeleteModel):
 
 
 class Seat(UUIDBaseModel):
-    venue = models.ForeignKey(Venue, on_delete=models.CASCADE, related_name="seats")
+    venue = models.ForeignKey(
+        Venue, on_delete=models.CASCADE, related_name="seats", db_index=False
+    )
     section = models.CharField(max_length=50)
     row_label = models.CharField(max_length=10)
     seat_number = models.PositiveIntegerField()
@@ -102,10 +104,7 @@ class VenueRequest(UUIDBaseModel):
     reviewed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        indexes = [
-            models.Index(fields=["requested_by"]),
-            models.Index(fields=["status"]),
-        ]
+        indexes = [models.Index(fields=["status"])]
         ordering = ["created_at"]
 
     def __str__(self) -> str:

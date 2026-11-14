@@ -7,7 +7,6 @@ class Notification(UUIDBaseModel):
     class NotificationType(models.TextChoices):
         BOOKING_CONFIRMATION = "booking_confirmation", "Booking Confirmation"
         EVENT_CANCELLED_REFUND = "event_cancelled_refund", "Event Cancelled Refund"
-        PAYOUT_READY = "payout_ready", "Payout Ready"
         PAYOUT_SETTLED = "payout_settled", "Payout Settled"
         EVENT_REMINDER = "event_reminder", "Event Reminder"
         EVENT_UPDATED = "event_updated", "Event Updated"
@@ -38,7 +37,6 @@ class Notification(UUIDBaseModel):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        indexes = [models.Index(fields=["user"])]
         constraints = [
             models.UniqueConstraint(
                 fields=["user", "event"],
