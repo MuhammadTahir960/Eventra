@@ -29,17 +29,19 @@ class OrganizerPayoutSerializer(serializers.ModelSerializer):
 
 
 class TicketSaleSerializer(serializers.Serializer):
-    ticket_id = serializers.UUIDField()
-    ticket_code = serializers.CharField()
-    amount = serializers.DecimalField(max_digits=10, decimal_places=2)
-    refunded = serializers.DecimalField(max_digits=10, decimal_places=2)
-    status = serializers.ChoiceField(choices=["confirmed", "refunded"])
+    ticket_id = serializers.UUIDField(read_only=True)
+    ticket_code = serializers.CharField(read_only=True)
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    refunded = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    status = serializers.ChoiceField(choices=["confirmed", "refunded"], read_only=True)
 
 
 class EventSalesSerializer(serializers.Serializer):
-    tickets_sold = serializers.IntegerField()
-    gross_revenue = serializers.DecimalField(max_digits=10, decimal_places=2)
-    tickets = TicketSaleSerializer(many=True)
+    tickets_sold = serializers.IntegerField(read_only=True)
+    gross_revenue = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True
+    )
+    tickets = TicketSaleSerializer(many=True, read_only=True)
 
 
 class AwaitingPayoutSerializer(serializers.Serializer):

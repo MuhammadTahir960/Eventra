@@ -2,12 +2,14 @@ import re
 
 from rest_framework import serializers
 
+from apps.common.serializers import RejectUnknownFieldsMixin
+
 from .models import TICKET_CODE_ALPHABET, Ticket, format_ticket_code
 
 _NOT_A_CODE = "That isn't a ticket code."
 
 
-class TicketCodeSerializer(serializers.Serializer):
+class TicketCodeSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     code = serializers.CharField(
         max_length=32,
         error_messages=dict.fromkeys(
