@@ -12,6 +12,15 @@ from tests.helpers import paid_booking
 pytestmark = pytest.mark.django_db
 
 
+def _post_webhook(signature="valid"):
+    return APIClient().post(
+        "/webhooks/stripe/",
+        data=b"{}",
+        content_type="application/json",
+        HTTP_STRIPE_SIGNATURE=signature,
+    )
+
+
 class TestStripeWebhookView:
     def test_invalid_signature_returns_400_and_does_not_confirm(self, monkeypatch):
         from ..services import WebhookSignatureError
@@ -27,13 +36,7 @@ class TestStripeWebhookView:
             "apps.payments.views.confirm_payment_from_webhook", mock_confirm
         )
 
-        client = APIClient()
-        response = client.post(
-            "/webhooks/stripe/",
-            data=b"{}",
-            content_type="application/json",
-            HTTP_STRIPE_SIGNATURE="bad",
-        )
+        response = _post_webhook(signature="bad")
 
         assert response.status_code == 400
         mock_confirm.assert_not_called()
@@ -58,13 +61,7 @@ class TestStripeWebhookView:
             "apps.payments.views.confirm_payment_from_webhook", mock_confirm
         )
 
-        client = APIClient()
-        response = client.post(
-            "/webhooks/stripe/",
-            data=b"{}",
-            content_type="application/json",
-            HTTP_STRIPE_SIGNATURE="valid",
-        )
+        response = _post_webhook(signature="valid")
 
         assert response.status_code == 200
         mock_confirm.assert_called_once_with(
@@ -82,13 +79,7 @@ class TestStripeWebhookView:
             "apps.payments.views.confirm_payment_from_webhook", mock_confirm
         )
 
-        client = APIClient()
-        response = client.post(
-            "/webhooks/stripe/",
-            data=b"{}",
-            content_type="application/json",
-            HTTP_STRIPE_SIGNATURE="valid",
-        )
+        response = _post_webhook(signature="valid")
 
         assert response.status_code == 200
         mock_confirm.assert_not_called()
@@ -116,13 +107,7 @@ class TestStripeWebhookView:
 
         monkeypatch.setattr("apps.payments.views.confirm_payment_from_webhook", _boom)
 
-        client = APIClient()
-        response = client.post(
-            "/webhooks/stripe/",
-            data=b"{}",
-            content_type="application/json",
-            HTTP_STRIPE_SIGNATURE="valid",
-        )
+        response = _post_webhook(signature="valid")
 
         assert response.status_code == 200
 
@@ -132,13 +117,7 @@ class TestStripeWebhookView:
             "apps.payments.views.verify_stripe_webhook_signature",
             MagicMock(return_value={"type": "unhandled.type", "data": {"object": {}}}),
         )
-        client = APIClient()
-        response = client.post(
-            "/webhooks/stripe/",
-            data=b"{}",
-            content_type="application/json",
-            HTTP_STRIPE_SIGNATURE="valid",
-        )
+        response = _post_webhook(signature="valid")
         assert response.status_code == 200
 
 

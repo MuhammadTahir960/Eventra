@@ -2,9 +2,8 @@ import logging
 from datetime import timedelta
 
 from django.conf import settings
-from django.core.mail import EmailMessage, send_mail
+from django.core.mail import EmailMessage
 from django.db import IntegrityError, transaction
-from django.db.models import Sum
 from django.utils import timezone
 
 from apps.payments.constants import REFUND_REQUEST_CUTOFF_HOURS
@@ -23,112 +22,86 @@ from .models import Notification
 logger = logging.getLogger(__name__)
 
 
-def send_booking_confirmation_email(booking) -> None:
-    tickets = list(
-        booking.tickets.select_related(
-            "event_seat", "event_seat__event", "event_seat__seat", "booking__user"
-        )
+def _email(user, subject: str, body: str) -> EmailMessage:
+    return EmailMessage(
+        subject=subject,
+        body=f"Hi {user.first_name or user.email},\n\n{body}",
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to=[user.email],
     )
 
-    notification = Notification(
-        user=booking.user,
-        event=booking.event,
-        type=Notification.NotificationType.BOOKING_CONFIRMATION,
-        status=Notification.Status.FAILED,
-    )
 
-    try:
-        message = EmailMessage(
-            subject="Your Eventra booking is confirmed",
-            body=(
-                f"Hi {booking.user.first_name or booking.user.email},\n\n"
-                f"Your booking is confirmed. {len(tickets)} e-ticket(s) are "
-                "attached to this email.\n\nSee you there!"
-            ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            to=[booking.user.email],
-        )
-        for ticket in tickets:
-            pdf_bytes = get_or_render_ticket_pdf(ticket)
-            message.attach(
-                f"ticket-{ticket.ticket_code}.pdf", pdf_bytes, "application/pdf"
-            )
-        message.send(fail_silently=False)
-
-        notification.status = Notification.Status.SENT
-        notification.sent_at = timezone.now()
-        notification.message = f"Booking confirmation, {len(tickets)} ticket(s)"
-    except Exception:
-        logger.exception(
-            "Failed to send booking confirmation email for booking %s", booking.id
-        )
-        notification.message = "Failed to send booking confirmation email"
-        notification.save()
-        raise
-    else:
-        notification.save()
-
-
-def send_payout_settled_email(payout) -> None:
-    organizer = payout.event.organizer
-    notification = Notification(
-        user=organizer,
-        type=Notification.NotificationType.PAYOUT_SETTLED,
-        status=Notification.Status.FAILED,
-    )
-    try:
-        message = EmailMessage(
-            subject="Your Eventra payout has been settled",
-            body=(
-                f"Hi {organizer.first_name or organizer.email},\n\n"
-                f'Your payout for "{payout.event.title}" has been settled: '
-                f"net amount ${payout.net_amount}."
-            ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            to=[organizer.email],
-        )
-        message.send(fail_silently=False)
-
-        notification.status = Notification.Status.SENT
-        notification.sent_at = timezone.now()
-        notification.message = f"Payout settled: {payout.event.title}"
-    except Exception:
-        logger.exception("Failed to send payout-settled email for payout %s", payout.id)
-        notification.message = "Failed to send payout-settled email"
-        notification.save()
-        raise
-    else:
-        notification.save()
-
-
-def _email_buyer(event, user, notification_type, subject, body) -> None:
+def _send_and_record(
+    user, notification_type, subject, body, *, record, event=None, attachments=()
+) -> None:
     notification = Notification(
         user=user,
         event=event,
         type=notification_type,
         status=Notification.Status.FAILED,
-        message=f"{notification_type}: {event.id}",
+        message=record,
     )
     try:
-        send_mail(
-            subject=subject,
-            message=f"Hi {user.first_name or user.email},\n\n{body}",
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[user.email],
-            fail_silently=False,
-        )
+        email = _email(user, subject, body)
+        for name, content, mimetype in attachments:
+            email.attach(name, content, mimetype)
+        email.send(fail_silently=False)
     except Exception:
         logger.exception(
-            "Failed to send %s email for event %s to user %s",
-            notification_type,
-            event.id,
-            user.id,
+            "Failed to send %s email to user %s", notification_type, user.id
         )
         notification.save()
         raise
     notification.status = Notification.Status.SENT
     notification.sent_at = timezone.now()
     notification.save()
+
+
+def send_booking_confirmation_email(booking) -> None:
+    tickets = list(
+        booking.tickets.select_related(
+            "event_seat", "event_seat__event", "event_seat__seat", "booking__user"
+        )
+    )
+    _send_and_record(
+        booking.user,
+        Notification.NotificationType.BOOKING_CONFIRMATION,
+        "Your Eventra booking is confirmed",
+        f"Your booking is confirmed. {len(tickets)} e-ticket(s) are attached to this "
+        "email.\n\nSee you there!",
+        record=f"Booking confirmation, {len(tickets)} ticket(s)",
+        event=booking.event,
+        attachments=(
+            (
+                f"ticket-{ticket.ticket_code}.pdf",
+                get_or_render_ticket_pdf(ticket),
+                "application/pdf",
+            )
+            for ticket in tickets
+        ),
+    )
+
+
+def send_payout_settled_email(payout) -> None:
+    title = payout.event.title
+    _send_and_record(
+        payout.event.organizer,
+        Notification.NotificationType.PAYOUT_SETTLED,
+        "Your Eventra payout has been settled",
+        f'Your payout for "{title}" has been settled: net amount ${payout.net_amount}.',
+        record=f"Payout settled: {title}",
+    )
+
+
+def _email_buyer(event, user, notification_type, subject, body) -> None:
+    _send_and_record(
+        user,
+        notification_type,
+        subject,
+        body,
+        record=f"{notification_type}: {event.id}",
+        event=event,
+    )
 
 
 def send_event_updated_notice(event, user) -> None:
@@ -174,9 +147,9 @@ def send_event_postponed_notice(event, user) -> None:
 
 
 def send_refund_notice(refund) -> None:
-    item = refund.items.select_related("ticket__event_seat__event__venue").first()
-    event = item.ticket.event_seat.event
-    amount = refund.items.aggregate(total=Sum("amount"))["total"]
+    items = list(refund.items.select_related("ticket__event_seat__event"))
+    event = items[0].ticket.event_seat.event
+    amount = sum(item.amount for item in items)
     full = refund.reason in Refund.FULL_REASONS
     _email_buyer(
         event,
@@ -274,17 +247,12 @@ def send_event_reminders_batch() -> int:
         if claim is None:
             continue
         try:
-            send_mail(
-                subject=f"Reminder: {event.title} is coming up",
-                message=(
-                    f"Hi {user.first_name or user.email},\n\n"
-                    f'"{event.title}" starts on {event.start_datetime:%Y-%m-%d %H:%M} '
-                    "UTC. Your e-tickets are in your Eventra account."
-                ),
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
-                fail_silently=False,
-            )
+            _email(
+                user,
+                f"Reminder: {event.title} is coming up",
+                f'"{event.title}" starts on {event.start_datetime:%Y-%m-%d %H:%M} '
+                "UTC. Your e-tickets are in your Eventra account.",
+            ).send(fail_silently=False)
         except Exception:
             logger.exception("Failed to send reminder for event %s", event_id)
             claim.status = Notification.Status.FAILED

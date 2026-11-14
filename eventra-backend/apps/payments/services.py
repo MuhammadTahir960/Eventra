@@ -15,7 +15,7 @@ from django.utils import timezone
 from apps.bookings.models import Booking
 from apps.events.models import Event
 from apps.seating.models import EventSeat
-from apps.seating.services import broadcast_seat_update
+from apps.seating.services import broadcast_seat_update, release_seats
 from apps.tickets.models import Ticket
 from apps.tickets.tasks import generate_ticket_pdf
 
@@ -113,17 +113,6 @@ def verify_stripe_webhook_signature(payload: bytes, sig_header: str):
         raise WebhookSignatureError("Invalid webhook signature or payload") from exc
 
 
-def _put_back_on_sale(seats) -> None:
-    for seat in seats:
-        seat.status = EventSeat.Status.AVAILABLE
-    EventSeat.objects.bulk_update(seats, ["status"])
-    if seats:
-        transaction.on_commit(
-            lambda: broadcast_seat_update(event=seats[0].event, seats=seats),
-            robust=True,
-        )
-
-
 def fulfil_booking(booking: Booking, seats: list) -> None:
     booking.status = Booking.Status.CONFIRMED
     booking.save(update_fields=["status", "updated_at"])
@@ -157,14 +146,10 @@ def confirm_payment_from_webhook(
     with transaction.atomic():
         booking = Booking.objects.select_for_update().get(id=payment.booking_id)
 
-        if booking.status in (Booking.Status.CONFIRMED, Booking.Status.REFUNDED):
+        if booking.status in Booking.PAID_STATUSES:
             return booking
 
-        seats = list(
-            booking.held_seats()
-            .select_for_update(of=("self",))
-            .select_related("event", "seat", "ticket_tier")
-        )
+        seats = booking.lock_held_seats()
 
         event_status = (
             Event.all_objects.select_for_update()
@@ -198,7 +183,7 @@ def confirm_payment_from_webhook(
             booking.tickets.filter(status=Ticket.Status.PENDING).update(
                 status=Ticket.Status.CANCELLED, updated_at=timezone.now()
             )
-            _put_back_on_sale(seats)
+            release_seats(seats)
         else:
             fulfil_booking(booking, seats)
             payment.status = Payment.Status.SUCCEEDED
@@ -433,14 +418,17 @@ def refund_price_drops(event: Event) -> list:
 
 
 def process_refund(refund_id) -> None:
-    refund = Refund.objects.select_related("booking__payment").get(id=refund_id)
+    refund = (
+        Refund.objects.select_related("booking__payment")
+        .annotate(total=Sum("items__amount"))
+        .get(id=refund_id)
+    )
     if refund.status == Refund.Status.SUCCEEDED:
         return
-    amount = refund.items.aggregate(total=Sum("amount"))["total"]
     try:
         stripe_refund = stripe.Refund.create(
             payment_intent=refund.booking.payment.stripe_payment_intent_id,
-            amount=_to_cents(amount),
+            amount=_to_cents(refund.total),
             idempotency_key=refund.key,
         )
     except stripe.error.StripeError:
@@ -454,13 +442,15 @@ def process_refund(refund_id) -> None:
         )
         return
 
-    with transaction.atomic():
-        refund = Refund.objects.select_for_update().get(id=refund.id)
-        if refund.status in UNFINISHED_REFUND_STATUSES:
-            refund.status = Refund.Status.SUCCEEDED
-            refund.stripe_refund_id = stripe_refund.id
-            refund.save(update_fields=["status", "stripe_refund_id", "updated_at"])
-            transaction.on_commit(lambda: _enqueue_refund_email(refund.id), robust=True)
+    succeeded = Refund.objects.filter(
+        id=refund.id, status__in=UNFINISHED_REFUND_STATUSES
+    ).update(
+        status=Refund.Status.SUCCEEDED,
+        stripe_refund_id=stripe_refund.id,
+        updated_at=timezone.now(),
+    )
+    if succeeded:
+        transaction.on_commit(lambda: _enqueue_refund_email(refund.id), robust=True)
 
 
 def retry_unfinished_refunds() -> int:
@@ -526,6 +516,6 @@ def cancel_booking(booking: Booking) -> Booking:
                 .select_related("event")
                 .filter(tickets__booking=booking, status=EventSeat.Status.BOOKED)
             )
-            _put_back_on_sale(seats)
+            release_seats(seats)
     booking.refresh_from_db()
     return booking
