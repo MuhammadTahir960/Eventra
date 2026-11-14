@@ -1,10 +1,8 @@
-import threading
 from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
-from django.db import connection
 from django.utils import timezone
 
 from apps.bookings.factories import BookingFactory
@@ -18,7 +16,7 @@ from apps.seating.models import EventSeat
 from apps.tickets.factories import TicketFactory
 from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
-from tests.helpers import confirmed_booking_with_ticket, paid_booking
+from tests.helpers import confirmed_booking_with_ticket, paid_booking, race
 
 from ..factories import OrganizerPayoutFactory
 from ..models import OrganizerPayout
@@ -239,32 +237,11 @@ class TestCreatePayout:
     def test_concurrent_calls_for_the_same_event_yield_exactly_one_payout(self):
         event = EventFactory(status=Event.Status.COMPLETED)
 
-        results = []
-        errors = []
-        barrier = threading.Barrier(2)
+        results = race(lambda: create_payout(event), lambda: create_payout(event))
 
-        def attempt():
-            barrier.wait()
-            try:
-                payout, created = create_payout(event)
-                results.append((payout.id, created))
-            except Exception as exc:
-                errors.append(exc)
-            finally:
-                connection.close()
-
-        threads = [threading.Thread(target=attempt) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert errors == []
         assert OrganizerPayout.objects.filter(event=event).count() == 1
-        payout_ids = {pid for pid, _ in results}
-        assert len(payout_ids) == 1
-        created_flags = sorted(created for _, created in results)
-        assert created_flags == [False, True]
+        assert len({payout.id for payout, _ in results}) == 1
+        assert sorted(created for _, created in results) == [False, True]
 
 
 class TestPayOutEvent:
@@ -319,25 +296,12 @@ class TestPayOutEvent:
     def test_concurrent_pay_outs_create_exactly_one_payout(self, monkeypatch):
         monkeypatch.setattr("apps.payouts.tasks.settle_payout", MagicMock())
         event = self._completed(hours_ago=25)
-        outcomes, barrier = [], threading.Barrier(2)
+        outcomes = race(lambda: pay_out_event(event), lambda: pay_out_event(event))
 
-        def attempt():
-            barrier.wait()
-            try:
-                pay_out_event(event)
-                outcomes.append("paid")
-            except PayoutNotAvailableError:
-                outcomes.append("refused")
-            finally:
-                connection.close()
-
-        threads = [threading.Thread(target=attempt) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert sorted(outcomes) == ["paid", "refused"]
+        assert sorted(type(outcome).__name__ for outcome in outcomes) == [
+            "OrganizerPayout",
+            "PayoutNotAvailableError",
+        ]
         assert OrganizerPayout.objects.filter(event=event).count() == 1
 
     def test_soft_deleted_completed_event_can_still_be_paid(self):

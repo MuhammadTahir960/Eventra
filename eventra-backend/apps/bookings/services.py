@@ -10,7 +10,7 @@ from apps.payments.services import (
     fulfil_booking,
 )
 from apps.seating.models import EventSeat, SeatHold
-from apps.seating.services import notify_seats_available
+from apps.seating.services import release_seats
 from apps.tickets.models import Ticket
 
 from .models import Booking
@@ -131,11 +131,7 @@ def checkout_booking(booking):
 def _confirm_free_booking(booking) -> None:
     with transaction.atomic():
         booking = Booking.objects.select_for_update().get(id=booking.id)
-        seats = list(
-            booking.held_seats()
-            .select_for_update(of=("self",))
-            .select_related("event", "seat", "ticket_tier")
-        )
+        seats = booking.lock_held_seats()
         if booking.status != Booking.Status.PENDING:
             raise BookingNotPendingError(
                 f"Booking {booking.id} is '{booking.status}', not 'pending'."
@@ -180,16 +176,11 @@ def _release_booking(booking_id) -> None:
         if booking is None or booking.status != Booking.Status.PENDING:
             return
 
-        seats = list(
-            booking.held_seats().select_for_update(of=("self",)).select_related("event")
-        )
-        for seat in seats:
-            seat.status = EventSeat.Status.AVAILABLE
-        EventSeat.objects.bulk_update(seats, ["status"])
+        seats = booking.lock_held_seats()
+        release_seats(seats)
 
         booking.status = Booking.Status.CANCELLED
         booking.save(update_fields=["status", "updated_at"])
         booking.tickets.filter(status=Ticket.Status.PENDING).update(
             status=Ticket.Status.CANCELLED, updated_at=timezone.now()
         )
-        notify_seats_available(seats)

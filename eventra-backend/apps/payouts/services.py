@@ -159,6 +159,12 @@ def awaiting_payout(events) -> models.QuerySet:
     )
 
 
+def _start_settling(payout: OrganizerPayout) -> None:
+    payout.status = OrganizerPayout.Status.PROCESSING
+    payout.save(update_fields=["status", "updated_at"])
+    transaction.on_commit(lambda: _enqueue_settle_payout_or_fail(payout.id))
+
+
 def pay_out_event(event: Event) -> OrganizerPayout:
     with transaction.atomic():
         event = Event.all_objects.select_for_update(of=("self",)).get(pk=event.pk)
@@ -184,9 +190,7 @@ def pay_out_event(event: Event) -> OrganizerPayout:
             )
 
         payout, _ = create_payout(event)
-        payout.status = OrganizerPayout.Status.PROCESSING
-        payout.save(update_fields=["status", "updated_at"])
-        transaction.on_commit(lambda: _enqueue_settle_payout_or_fail(payout.id))
+        _start_settling(payout)
 
     return payout
 
@@ -205,10 +209,7 @@ def request_payout_settlement(payout: OrganizerPayout) -> OrganizerPayout:
                 f"Payout {payout.id} is '{payout.status}', not 'pending' or 'failed'."
             )
 
-        payout.status = OrganizerPayout.Status.PROCESSING
-        payout.save(update_fields=["status", "updated_at"])
-
-        transaction.on_commit(lambda: _enqueue_settle_payout_or_fail(payout.id))
+        _start_settling(payout)
 
     return payout
 

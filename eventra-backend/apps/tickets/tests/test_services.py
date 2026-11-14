@@ -1,12 +1,10 @@
-import threading
-
 import pytest
-from django.db import connection
 
 from apps.bookings.factories import BookingFactory
 from apps.events.factories import EventFactory
 from apps.seating.factories import EventSeatFactory
 from apps.tickets.factories import TicketFactory
+from tests.helpers import race
 
 from ..models import Ticket
 from ..services import (
@@ -61,31 +59,15 @@ class TestValidateTicket:
             booking=BookingFactory(), event_seat=seat, status=Ticket.Status.VALID
         )
 
-        results = []
-        errors = []
-        barrier = threading.Barrier(2)
+        def scan():
+            return validate_ticket(ticket=Ticket.objects.get(pk=ticket.pk))
 
-        def attempt():
-            barrier.wait()
-            local_ticket = Ticket.objects.get(pk=ticket.pk)
-            try:
-                validate_ticket(ticket=local_ticket)
-                results.append("used")
-            except TicketAlreadyUsedError:
-                results.append("rejected")
-            except Exception as exc:  # noqa: BLE001
-                errors.append(exc)
-            finally:
-                connection.close()
+        outcomes = race(scan, scan)
 
-        threads = [threading.Thread(target=attempt) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert errors == []
-        assert sorted(results) == ["rejected", "used"]
+        assert sorted(type(outcome).__name__ for outcome in outcomes) == [
+            "Ticket",
+            "TicketAlreadyUsedError",
+        ]
         ticket.refresh_from_db()
         assert ticket.status == Ticket.Status.USED
 

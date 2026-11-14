@@ -1,7 +1,6 @@
 import uuid
 from datetime import timedelta
 from decimal import Decimal
-from unittest.mock import MagicMock
 
 import pytest
 from django.utils import timezone
@@ -39,11 +38,8 @@ def _stale_pending_booking(user):
 
 class TestReleaseExpiredBookingsTask:
     def test_task_delegates_to_the_sweep_service_and_completes_it(
-        self, monkeypatch, django_capture_on_commit_callbacks
+        self, django_capture_on_commit_callbacks
     ):
-        monkeypatch.setattr(
-            "apps.seating.services.notify_internal_broadcast", MagicMock()
-        )
         user = UserFactory()
         booking, seat = _stale_pending_booking(user)
 
