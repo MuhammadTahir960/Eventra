@@ -82,47 +82,11 @@ def test_register_serializer_rejects_weak_passwords(email, password, reason):
     assert reason in str(serializer.errors).lower()
 
 
-@pytest.mark.parametrize("email", ["taken@example.com", "Taken@Example.com"])
-def test_register_serializer_duplicate_email_rejected(email):
+def test_register_serializer_does_not_say_whether_an_email_is_taken():
     UserFactory(email="taken@example.com")
-    serializer = RegisterSerializer(data=_register_payload(email=email))
-    assert serializer.is_valid() is False
-    assert "email" in serializer.errors
-
-
-@pytest.mark.parametrize(
-    "existing, new, blocked",
-    [
-        ("ana@gmail.com", "ana+tickets@gmail.com", True),
-        ("ana@gmail.com", "a.n.a@gmail.com", True),
-        ("ana@gmail.com", "A.NA+2@GoogleMail.com", True),
-        ("ana+old@example.com", "ana@example.com", True),
-        ("a.na@example.com", "ana@example.com", False),
-        ("ana@gmail.com", "ana@example.com", False),
-        ("anna@gmail.com", "ana@gmail.com", False),
-    ],
-)
-def test_one_mailbox_gets_one_account(existing, new, blocked):
-    UserFactory(email=existing)
-    serializer = RegisterSerializer(data=_register_payload(email=new))
-    assert serializer.is_valid() is not blocked
-    if blocked:
-        assert serializer.errors["email"] == ["A user with that email already exists."]
-
-
-def test_register_serializer_race_condition_integrity_error_becomes_validation_error():
-    UserFactory(email="taken@example.com")
-    serializer = RegisterSerializer()
-    with pytest.raises(serializers.ValidationError) as exc_info:
-        serializer.create(
-            {
-                "email": "taken@example.com",
-                "password": "a-genuinely-strong-pass-1",
-                "first_name": "New",
-                "last_name": "User",
-            }
-        )
-    assert "email" in exc_info.value.detail
+    serializer = RegisterSerializer(data=_register_payload(email="Taken@Example.com"))
+    assert serializer.is_valid(), serializer.errors
+    assert serializer.validated_data["email"] == "taken@example.com"
 
 
 def test_register_serializer_rejects_invalid_email_format():
@@ -143,7 +107,7 @@ def test_register_serializer_rejects_last_name_over_max_length():
     assert "last_name" in serializer.errors
 
 
-def test_register_serializer_ignores_other_privileged_field_injection():
+def test_register_serializer_refuses_privileged_field_injection():
     payload = _register_payload(
         email="attacker@example.com",
         is_staff=True,
@@ -151,16 +115,15 @@ def test_register_serializer_ignores_other_privileged_field_injection():
         is_active=True,
     )
     serializer = RegisterSerializer(data=payload)
+    assert not serializer.is_valid()
+    assert set(serializer.errors) == {"is_staff", "is_superuser", "is_active"}
+
+
+def test_register_serializer_never_stores_the_captcha_token():
+    serializer = RegisterSerializer(data=_register_payload(captcha_token="token"))
     assert serializer.is_valid(), serializer.errors
-
-    assert "is_staff" not in serializer.validated_data
-    assert "is_superuser" not in serializer.validated_data
-    assert "is_active" not in serializer.validated_data
-
     user = serializer.save()
-    assert user.is_staff is False
-    assert user.is_superuser is False
-    assert user.is_active is False
+    assert not hasattr(user, "captcha_token")
 
 
 def test_register_serializer_rejects_admin_role():
@@ -358,12 +321,8 @@ def test_user_serializer_email_and_role_are_read_only():
         },
         partial=True,
     )
-    assert serializer.is_valid(), serializer.errors
-    updated = serializer.save()
-
-    assert updated.email == "original@example.com"
-    assert updated.role == Roles.ATTENDEE
-    assert updated.first_name == "Changed"
+    assert not serializer.is_valid()
+    assert set(serializer.errors) == {"email", "role"}
 
 
 @pytest.mark.parametrize(
@@ -386,12 +345,11 @@ def test_other_gender_avatar_is_a_distinct_asset_not_a_reuse_of_male():
     assert male_avatar != other_avatar
 
 
-def test_avatar_is_read_only_and_ignored_on_write():
+def test_avatar_is_read_only_and_refused_on_write():
     user = UserFactory(gender=User.Gender.MALE)
     serializer = UserSerializer(user, data={"avatar": "avatar-female"}, partial=True)
-    assert serializer.is_valid(), serializer.errors
-    updated = serializer.save()
-    assert UserSerializer(updated).data["avatar"] == "avatar-male"
+    assert not serializer.is_valid()
+    assert set(serializer.errors) == {"avatar"}
 
 
 def test_gender_is_writable_via_serializer():

@@ -47,7 +47,8 @@ export const authApi = {
   me: () => apiFetch<SessionUser>('/auth/me/'),
 
   register: (payload: RegisterPayload) =>
-    apiFetch<Omit<SessionUser, 'avatar'>>('/auth/register/', {
+    // The same answer whether or not the email already had an account
+    apiFetch<{ email: string }>('/auth/register/', {
       method: 'POST',
       body: payload,
       auth: false,

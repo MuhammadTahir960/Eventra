@@ -55,9 +55,8 @@ class TestRegister:
         }
         response = api_client.post(self.url, payload)
 
-        assert response.status_code == status.HTTP_201_CREATED
-        assert response.data["email"] == "newuser@example.com"
-        assert "password" not in response.data
+        assert response.status_code == status.HTTP_202_ACCEPTED
+        assert response.data == {"email": "newuser@example.com"}
 
         user = User.objects.get(email="newuser@example.com")
         assert user.is_active is False
@@ -65,18 +64,14 @@ class TestRegister:
         assert len(mail.outbox) == 1
         assert mail.outbox[0].to == [user.email]
 
-    def test_duplicate_email_rejected(self, api_client):
+    def test_a_taken_email_gets_the_same_answer_as_a_free_one(self, api_client):
         UserFactory(email="taken@example.com")
-        payload = {
-            "email": "taken@example.com",
-            "password": "a-genuinely-strong-pass-1",
-            "first_name": "New",
-            "last_name": "User",
-            "gender": "other",
-            "role": "attendee",
-        }
-        response = api_client.post(self.url, payload)
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        taken = api_client.post(self.url, self._payload(email="Taken@Example.com"))
+        free = api_client.post(self.url, self._payload(email="Free@Example.com"))
+        assert taken.status_code == free.status_code == status.HTTP_202_ACCEPTED
+        assert taken.data == {"email": "taken@example.com"}
+        assert free.data == {"email": "free@example.com"}
+        assert User.objects.filter(email="taken@example.com").count() == 1
 
     def test_weak_password_rejected(self, api_client):
         payload = {
@@ -134,6 +129,12 @@ class TestRegister:
         assert seen == ["bad"]
         assert not User.objects.filter(email="newuser@example.com").exists()
 
+    def test_the_human_check_token_is_accepted_alongside_the_form(self, api_client):
+        response = api_client.post(
+            self.url, {**self._payload(), "captcha_token": "ok"}, format="json"
+        )
+        assert response.status_code == status.HTTP_202_ACCEPTED
+
     def _payload(self, **overrides):
         payload = {
             "email": "newuser@example.com",
@@ -150,8 +151,7 @@ class TestRegister:
     @pytest.mark.parametrize("role", [Roles.ATTENDEE, Roles.ORGANIZER])
     def test_can_register_as_attendee_or_organizer(self, api_client, role):
         response = api_client.post(self.url, self._payload(role=role))
-        assert response.status_code == status.HTTP_201_CREATED
-        assert response.data["role"] == role
+        assert response.status_code == status.HTTP_202_ACCEPTED
         user = User.objects.get(email="newuser@example.com")
         assert user.role == role
         assert user.is_staff is False
@@ -181,7 +181,7 @@ class TestRegister:
         assert User.objects.filter(email="newuser@example.com").exists() is False
 
     @pytest.mark.django_db(transaction=True)
-    def test_other_privileged_fields_are_ignored(self, api_client):
+    def test_other_privileged_fields_are_refused(self, api_client):
         response = api_client.post(
             self.url,
             self._payload(
@@ -191,11 +191,8 @@ class TestRegister:
                 is_active=True,
             ),
         )
-        assert response.status_code == status.HTTP_201_CREATED
-        user = User.objects.get(email="attacker@example.com")
-        assert user.is_staff is False
-        assert user.is_superuser is False
-        assert user.is_active is False
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert not User.objects.filter(email="attacker@example.com").exists()
 
     def test_get_not_allowed(self, api_client):
         response = api_client.get(self.url)
@@ -502,7 +499,7 @@ class TestMe:
         response = client.patch(
             self.url, {"email": "hacked@example.com", "role": Roles.ADMIN}
         )
-        assert response.status_code == status.HTTP_200_OK
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
         user.refresh_from_db()
         assert user.email == "original@example.com"
         assert user.role == Roles.ATTENDEE
@@ -875,7 +872,9 @@ class TestDeleteAccount:
             {"password": self.password, "id": str(other.id), "email": other.email},
             format="json",
         )
-        assert response.status_code == status.HTTP_204_NO_CONTENT
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        user.refresh_from_db()
+        assert user.is_active and user.deleted_at is None
         other.refresh_from_db()
         assert other.is_active and other.deleted_at is None
 
@@ -918,7 +917,7 @@ class TestDeleteAccount:
                 "role": "attendee",
             },
         )
-        assert response.status_code == status.HTTP_201_CREATED, response.data
+        assert response.status_code == status.HTTP_202_ACCEPTED, response.data
 
     def test_deleted_user_access_token_stops_working(self):
         user = UserFactory()
