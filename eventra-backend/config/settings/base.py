@@ -101,13 +101,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer",
-    }
-}
 
 
 # Database
@@ -165,20 +159,23 @@ EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
 EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
-BACKEND_BASE_URL = env("BACKEND_BASE_URL", default="http://localhost:8000")
-
-INTERNAL_API_BASE_URL = env("INTERNAL_API_BASE_URL", default="http://web:8000")
 
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[])
 
 
 REDIS_URL = env("REDIS_URL", default="redis://localhost:6379/0")
 
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {"hosts": [{"address": REDIS_URL, "socket_timeout": 10}]},
+    }
+}
+
 CELERY_BROKER_URL = REDIS_URL
-CELERY_RESULT_BACKEND = REDIS_URL
+CELERY_TASK_IGNORE_RESULT = True
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
-CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
@@ -228,6 +225,7 @@ WS_CONNECT_RATE_LIMIT_WINDOW_SECONDS = 60
 
 
 REST_FRAMEWORK = {
+    "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
@@ -278,6 +276,7 @@ SIMPLE_JWT = {
 TURNSTILE_SECRET_KEY = env(
     "TURNSTILE_SECRET_KEY", default="1x0000000000000000000000000000000AA"
 )
+TURNSTILE_HOSTNAME = ""
 
 
 STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY")

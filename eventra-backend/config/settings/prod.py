@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+
 from django.core.exceptions import ImproperlyConfigured
 
 from .base import *
@@ -14,12 +16,33 @@ if _CANONICAL_HOST is None:
     )
 MIDDLEWARE = ["apps.common.middleware.InternalHostMiddleware", *MIDDLEWARE]
 INTERNAL_CANONICAL_HOST = _CANONICAL_HOST
-SECURE_REDIRECT_EXEMPT = [r"^healthz/$", r"^internal/"]
+SECURE_REDIRECT_EXEMPT = [r"^healthz/$"]
+
+for _name, _key in (
+    ("SECRET_KEY", SECRET_KEY),
+    ("JWT_SIGNING_KEY", SIMPLE_JWT["SIGNING_KEY"]),
+):
+    if (
+        len(_key) < 50
+        or len(set(_key)) < 5
+        or _key.startswith(("change-me", "django-insecure-"))
+    ):
+        raise ImproperlyConfigured(
+            f"{_name} must be a long random value in production "
+            "(python -c 'import secrets; print(secrets.token_urlsafe(64))')."
+        )
+
+if not urlparse(REDIS_URL).password:
+    raise ImproperlyConfigured("REDIS_URL must include a password in production.")
 
 if not TURNSTILE_SECRET_KEY or TURNSTILE_SECRET_KEY.startswith(
     ("1x0000", "2x0000", "3x0000")
 ):
     raise ImproperlyConfigured("TURNSTILE_SECRET_KEY must be a real key in production.")
+
+TURNSTILE_HOSTNAME = urlparse(FRONTEND_URL).hostname or ""
+if not TURNSTILE_HOSTNAME:
+    raise ImproperlyConfigured("FRONTEND_URL must be a full URL in production.")
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = True
