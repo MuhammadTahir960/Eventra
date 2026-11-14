@@ -10,8 +10,9 @@ https://docs.djangoproject.com/en/6.0/howto/deployment/asgi/
 import os
 
 from channels.routing import ProtocolTypeRouter, URLRouter
-from channels.security.websocket import OriginValidator
+from channels.security.websocket import OriginValidator, WebsocketDenier
 from django.core.asgi import get_asgi_application
+from django.urls import re_path
 
 if "DJANGO_SETTINGS_MODULE" not in os.environ:
     raise RuntimeError(
@@ -31,7 +32,10 @@ application = ProtocolTypeRouter(
     {
         "http": http_application,
         "websocket": OriginValidator(
-            URLRouter(websocket_urlpatterns), settings.CORS_ALLOWED_ORIGINS
+            URLRouter(
+                [*websocket_urlpatterns, re_path(r"", WebsocketDenier.as_asgi())]
+            ),
+            settings.CORS_ALLOWED_ORIGINS,
         ),
     }
 )
