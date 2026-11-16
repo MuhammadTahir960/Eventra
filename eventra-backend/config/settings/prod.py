@@ -40,9 +40,12 @@ if not TURNSTILE_SECRET_KEY or TURNSTILE_SECRET_KEY.startswith(
 ):
     raise ImproperlyConfigured("TURNSTILE_SECRET_KEY must be a real key in production.")
 
-TURNSTILE_HOSTNAME = urlparse(FRONTEND_URL).hostname or ""
-if not TURNSTILE_HOSTNAME:
-    raise ImproperlyConfigured("FRONTEND_URL must be a full URL in production.")
+_frontend_url = urlparse(FRONTEND_URL)
+if _frontend_url.scheme != "https" or not _frontend_url.hostname:
+    raise ImproperlyConfigured(
+        "FRONTEND_URL must be a full https:// URL in production."
+    )
+TURNSTILE_HOSTNAME = _frontend_url.hostname
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = True

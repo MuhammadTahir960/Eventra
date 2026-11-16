@@ -87,7 +87,9 @@ def test_prod_rejects_r2_public_domain_that_is_not_a_bare_hostname(bad_domain):
         ({"SECRET_KEY": "django-insecure-" + "a1b2c3" * 9}, "SECRET_KEY must be"),
         ({"SECRET_KEY": "x" * 60}, "SECRET_KEY must be"),
         ({"JWT_SIGNING_KEY": "change-me-too"}, "JWT_SIGNING_KEY must be"),
-        ({"FRONTEND_URL": "not-a-url"}, "FRONTEND_URL must be a full URL"),
+        ({"FRONTEND_URL": "not-a-url"}, "FRONTEND_URL must be a full https"),
+        ({"FRONTEND_URL": "//evil.example"}, "FRONTEND_URL must be a full https"),
+        ({"FRONTEND_URL": "http://example.com"}, "FRONTEND_URL must be a full https"),
     ],
 )
 def test_prod_refuses_to_boot_with_unsafe_settings(override, message):

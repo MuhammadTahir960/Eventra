@@ -139,6 +139,7 @@ PROD_ENV = {
     "CSRF_TRUSTED_ORIGINS": "https://example.com",
     "CORS_ALLOWED_ORIGINS": "https://example.com",
     "EMAIL_HOST": "smtp.example.com",
+    "FRONTEND_URL": "https://example.com",
     "TURNSTILE_SECRET_KEY": "0x4AAAAAAAreal-looking-secret",
     "R2_ACCOUNT_ID": "demo-account-id",
     "R2_ACCESS_KEY_ID": "demo-access-key",
