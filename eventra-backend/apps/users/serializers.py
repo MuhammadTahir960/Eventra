@@ -1,5 +1,4 @@
 from django.contrib.auth.password_validation import validate_password
-from django.db import IntegrityError
 from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import AuthenticationFailed, TokenError
 from rest_framework_simplejwt.serializers import (
@@ -9,13 +8,16 @@ from rest_framework_simplejwt.serializers import (
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.common.constants import Roles
+from apps.common.serializers import RejectUnknownFieldsMixin
 
 from .models import User
-from .services import email_in_use
 
 
-class RegisterSerializer(serializers.ModelSerializer):
+class RegisterSerializer(RejectUnknownFieldsMixin, serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, max_length=128)
+    captcha_token = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, max_length=2048
+    )
     gender = serializers.ChoiceField(
         choices=User.Gender.choices,
         required=True,
@@ -40,15 +42,13 @@ class RegisterSerializer(serializers.ModelSerializer):
             "last_name",
             "gender",
             "role",
+            "captcha_token",
         ]
         read_only_fields = ["id"]
         extra_kwargs = {"email": {"validators": []}}
 
     def validate_email(self, value):
-        value = value.strip().lower()
-        if email_in_use(value):
-            raise serializers.ValidationError("A user with that email already exists.")
-        return value
+        return value.strip().lower()
 
     def validate(self, attrs):
         temp_user = User(
@@ -60,15 +60,13 @@ class RegisterSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        try:
-            return User.objects.create_user(**validated_data)
-        except IntegrityError as exc:
-            raise serializers.ValidationError(
-                {"email": ["A user with that email already exists."]}
-            ) from exc
+        validated_data.pop("captcha_token", None)
+        return User.objects.create_user(**validated_data)
 
 
-class ActiveUserTokenObtainPairSerializer(TokenObtainPairSerializer):
+class ActiveUserTokenObtainPairSerializer(
+    RejectUnknownFieldsMixin, TokenObtainPairSerializer
+):
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
@@ -110,7 +108,7 @@ class ActiveUserTokenObtainPairSerializer(TokenObtainPairSerializer):
         }
 
 
-class LogoutSerializer(serializers.Serializer):
+class LogoutSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     refresh = serializers.CharField()
 
     def save(self, **kwargs):
@@ -131,15 +129,15 @@ class LogoutSerializer(serializers.Serializer):
             raise serializers.ValidationError({"refresh": str(exc)}) from exc
 
 
-class DeleteAccountSerializer(serializers.Serializer):
+class DeleteAccountSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     password = serializers.CharField(write_only=True, max_length=128)
 
 
-class PasswordResetRequestSerializer(serializers.Serializer):
+class PasswordResetRequestSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     email = serializers.EmailField()
 
 
-class PasswordResetConfirmSerializer(serializers.Serializer):
+class PasswordResetConfirmSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     token = serializers.CharField()
     new_password = serializers.CharField(write_only=True, max_length=128)
 
@@ -155,7 +153,7 @@ _AVATAR_ASSET_KEYS = {
 }
 
 
-class UserSerializer(serializers.ModelSerializer):
+class UserSerializer(RejectUnknownFieldsMixin, serializers.ModelSerializer):
     avatar = serializers.SerializerMethodField()
 
     class Meta:
@@ -178,7 +176,7 @@ class UserSerializer(serializers.ModelSerializer):
         return _AVATAR_ASSET_KEYS.get(obj.gender)
 
 
-class SafeTokenRefreshSerializer(TokenRefreshSerializer):
+class SafeTokenRefreshSerializer(RejectUnknownFieldsMixin, TokenRefreshSerializer):
     def validate(self, attrs):
         try:
             return super().validate(attrs)

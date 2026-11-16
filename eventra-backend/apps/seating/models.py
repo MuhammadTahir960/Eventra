@@ -11,7 +11,10 @@ class EventSeat(UUIDBaseModel):
         BOOKED = "booked", "Booked"
 
     event = models.ForeignKey(
-        "events.Event", on_delete=models.CASCADE, related_name="event_seats"
+        "events.Event",
+        on_delete=models.CASCADE,
+        related_name="event_seats",
+        db_index=False,
     )
     seat = models.ForeignKey(
         "venues.Seat", on_delete=models.PROTECT, related_name="event_seats"

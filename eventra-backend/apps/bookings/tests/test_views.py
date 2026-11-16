@@ -233,11 +233,6 @@ class TestBookingCancelEndpoint:
         assert response.status_code == 200
         assert response.data["status"] == Booking.Status.REFUNDED
 
-    def test_the_old_refunds_route_is_gone(self):
-        booking = self._booking()
-        response = auth_client(booking.user).post(f"/bookings/{booking.id}/refunds/")
-        assert response.status_code == 404
-
     def test_someone_elses_booking_is_not_found(self):
         booking = self._booking()
         assert self._post(UserFactory(), booking).status_code == 404

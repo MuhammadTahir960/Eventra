@@ -1,6 +1,10 @@
 from rest_framework import serializers
 
-from apps.common.serializers import AllowedTextMixin, IntegrityErrorHandlingMixin
+from apps.common.serializers import (
+    AllowedTextMixin,
+    IntegrityErrorHandlingMixin,
+    RejectUnknownFieldsMixin,
+)
 
 from .models import League, Sport, Team
 from .services import (
@@ -14,7 +18,10 @@ from .services import (
 
 
 class SportSerializer(
-    AllowedTextMixin, IntegrityErrorHandlingMixin, serializers.ModelSerializer
+    RejectUnknownFieldsMixin,
+    AllowedTextMixin,
+    IntegrityErrorHandlingMixin,
+    serializers.ModelSerializer,
 ):
     integrity_error_field = "name"
     integrity_error_message = "This name already exists in the given scope."
@@ -60,6 +67,7 @@ class ScopedUniqueNameMixin:
 
 
 class LeagueSerializer(
+    RejectUnknownFieldsMixin,
     AllowedTextMixin,
     IntegrityErrorHandlingMixin,
     ScopedUniqueNameMixin,
@@ -76,6 +84,7 @@ class LeagueSerializer(
 
 
 class TeamSerializer(
+    RejectUnknownFieldsMixin,
     AllowedTextMixin,
     IntegrityErrorHandlingMixin,
     ScopedUniqueNameMixin,

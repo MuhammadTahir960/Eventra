@@ -83,7 +83,6 @@ class Event(SoftDeleteModel):
     class Meta:
         ordering = ["-start_datetime"]
         indexes = [
-            models.Index(fields=["organizer"]),
             models.Index(fields=["status"]),
             models.Index(fields=["is_active"]),
             models.Index(fields=["event_type", "start_datetime"]),
@@ -146,7 +145,6 @@ class TicketTier(UUIDBaseModel):
 
     class Meta:
         ordering = ["price"]
-        indexes = [models.Index(fields=["event"])]
 
     def __str__(self) -> str:
         return f"{self.name} — {self.event.title} (${self.price})"
@@ -157,7 +155,10 @@ class TierSectionMapping(UUIDBaseModel):
         TicketTier, on_delete=models.CASCADE, related_name="section_mappings"
     )
     event = models.ForeignKey(
-        Event, on_delete=models.CASCADE, related_name="tier_section_mappings"
+        Event,
+        on_delete=models.CASCADE,
+        related_name="tier_section_mappings",
+        db_index=False,
     )
     section = models.CharField(max_length=50)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -168,7 +169,6 @@ class TierSectionMapping(UUIDBaseModel):
                 fields=["event", "section"], name="unique_event_section_mapping"
             ),
         ]
-        indexes = [models.Index(fields=["event"])]
 
     def __str__(self) -> str:
         return f"{self.event.title} — {self.section} → {self.ticket_tier.name}"

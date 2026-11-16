@@ -1,12 +1,23 @@
 from rest_framework import serializers
 
-from apps.common.serializers import AllowedTextMixin, IntegrityErrorHandlingMixin
+from apps.common.serializers import (
+    AllowedTextMixin,
+    IntegrityErrorHandlingMixin,
+    RejectUnknownFieldsMixin,
+    StrictCharField,
+)
+from apps.common.validators import validate_multiline_text
 
 from .models import Seat, Venue, VenueRequest
 
+MAX_ADMIN_NOTES_LENGTH = 2000
+
 
 class VenueSerializer(
-    AllowedTextMixin, IntegrityErrorHandlingMixin, serializers.ModelSerializer
+    RejectUnknownFieldsMixin,
+    AllowedTextMixin,
+    IntegrityErrorHandlingMixin,
+    serializers.ModelSerializer,
 ):
     integrity_error_field = "name"
     integrity_error_message = "A venue with this name already exists in this city."
@@ -58,7 +69,9 @@ class SeatSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class RowSpecSerializer(AllowedTextMixin, serializers.Serializer):
+class RowSpecSerializer(
+    RejectUnknownFieldsMixin, AllowedTextMixin, serializers.Serializer
+):
     row_label = serializers.CharField(max_length=10)
     seat_count = serializers.IntegerField(
         min_value=1,
@@ -66,12 +79,14 @@ class RowSpecSerializer(AllowedTextMixin, serializers.Serializer):
     )
 
 
-class SectionSpecSerializer(AllowedTextMixin, serializers.Serializer):
+class SectionSpecSerializer(
+    RejectUnknownFieldsMixin, AllowedTextMixin, serializers.Serializer
+):
     name = serializers.CharField(max_length=50)
     rows = RowSpecSerializer(many=True, allow_empty=False)
 
 
-class BulkSeatTemplateSerializer(serializers.Serializer):
+class BulkSeatTemplateSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     sections = SectionSpecSerializer(many=True, allow_empty=False)
 
     def validate_sections(self, sections):
@@ -97,7 +112,9 @@ class BulkSeatTemplateSerializer(serializers.Serializer):
         return sections
 
 
-class VenueRequestSerializer(AllowedTextMixin, serializers.ModelSerializer):
+class VenueRequestSerializer(
+    RejectUnknownFieldsMixin, AllowedTextMixin, serializers.ModelSerializer
+):
     class Meta:
         model = VenueRequest
         fields = [
@@ -120,3 +137,9 @@ class VenueRequestSerializer(AllowedTextMixin, serializers.ModelSerializer):
             "created_at",
             "reviewed_at",
         ]
+
+
+class VenueRequestRejectionSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
+    admin_notes = StrictCharField(
+        max_length=MAX_ADMIN_NOTES_LENGTH, validators=[validate_multiline_text]
+    )

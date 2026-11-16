@@ -72,7 +72,7 @@ class TestEventBuyerNotices:
     ):
         event = EventFactory(status="cancelled")
         monkeypatch.setattr(
-            "apps.notifications.services.send_mail",
+            "apps.notifications.services.EmailMessage.send",
             MagicMock(side_effect=RuntimeError("SMTP is down")),
         )
 
@@ -174,7 +174,7 @@ class TestSendRefundNotice:
     def test_send_failure_records_a_failed_notification_and_reraises(self, monkeypatch):
         refund = _refund(Refund.Reason.UNAVAILABLE, "80.00")
         monkeypatch.setattr(
-            "apps.notifications.services.send_mail",
+            "apps.notifications.services.EmailMessage.send",
             MagicMock(side_effect=RuntimeError("SMTP is down")),
         )
 
@@ -284,7 +284,7 @@ def test_far_future_past_cancelled_and_used_ticket_events_are_skipped():
 def test_a_failed_send_is_retried_on_the_next_run(monkeypatch):
     _ticket_for(_event_starting_in(10))
     monkeypatch.setattr(
-        "apps.notifications.services.send_mail",
+        "apps.notifications.services.EmailMessage.send",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("smtp down")),
     )
     assert send_event_reminders_batch() == 0
@@ -350,7 +350,7 @@ def test_reminder_gives_up_after_max_failed_attempts(monkeypatch):
         calls.append(1)
         raise RuntimeError("bad address")
 
-    monkeypatch.setattr("apps.notifications.services.send_mail", boom)
+    monkeypatch.setattr("apps.notifications.services.EmailMessage.send", boom)
 
     for _ in range(REMINDER_MAX_ATTEMPTS + 3):
         assert send_event_reminders_batch() == 0

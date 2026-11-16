@@ -1,9 +1,11 @@
 from rest_framework import serializers
 
+from apps.common.serializers import RejectUnknownFieldsMixin
+
 from .models import Booking
 
 
-class HoldIdSerializer(serializers.Serializer):
+class HoldIdSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
 
     hold_id = serializers.UUIDField()
 

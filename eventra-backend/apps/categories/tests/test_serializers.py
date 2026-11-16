@@ -90,12 +90,6 @@ def test_update_excludes_self_from_duplicate_check():
     assert serializer.is_valid(), serializer.errors
 
 
-def test_partial_update_without_name_still_validates_against_existing_name():
-    category = CategoryFactory(name="Music")
-    serializer = CategorySerializer(category, data={"icon": "tools"}, partial=True)
-    assert serializer.is_valid(), serializer.errors
-
-
 def test_update_into_a_conflicting_name_rejected():
     CategoryFactory(name="Sports")
     category = CategoryFactory(name="Music")

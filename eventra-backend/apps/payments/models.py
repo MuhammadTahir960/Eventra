@@ -92,7 +92,9 @@ class Refund(UUIDBaseModel):
 
 
 class RefundItem(UUIDBaseModel):
-    refund = models.ForeignKey(Refund, on_delete=models.PROTECT, related_name="items")
+    refund = models.ForeignKey(
+        Refund, on_delete=models.PROTECT, related_name="items", db_index=False
+    )
     ticket = models.ForeignKey(
         "tickets.Ticket", on_delete=models.PROTECT, related_name="refund_items"
     )

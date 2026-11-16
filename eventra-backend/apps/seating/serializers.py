@@ -3,6 +3,8 @@ import json
 from rest_framework import serializers
 from rest_framework.utils.encoders import JSONEncoder as DRFJSONEncoder
 
+from apps.common.serializers import RejectUnknownFieldsMixin
+
 from .constants import MAX_SEATS_PER_HOLD
 from .models import EventSeat
 
@@ -37,18 +39,9 @@ def serialize_seats_for_ws(seats) -> list[dict]:
     return json.loads(json.dumps(data, cls=DRFJSONEncoder))
 
 
-class SeatHoldRequestSerializer(serializers.Serializer):
+class SeatHoldRequestSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
     seat_ids = serializers.ListField(
         child=serializers.UUIDField(),
         allow_empty=False,
         max_length=MAX_SEATS_PER_HOLD,
     )
-
-
-class InternalBroadcastRequestSerializer(serializers.Serializer):
-    event_slug = serializers.SlugField()
-    seat_ids = serializers.ListField(
-        child=serializers.UUIDField(),
-        allow_empty=False,
-    )
-    status = serializers.CharField(required=False, allow_blank=True)

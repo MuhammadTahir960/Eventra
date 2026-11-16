@@ -84,9 +84,10 @@ export function RegisterPage() {
     return (
       <AuthLayout title="Check your email">
         <Notice tone="success">
-          We sent a verification link to{' '}
-          <strong className="break-all">{registeredEmail}</strong>. Open it to
-          activate your account, then sign in.
+          We sent an email to{' '}
+          <strong className="break-all">{registeredEmail}</strong>. Follow it to
+          finish signing up, then sign in. If you already have an account, the
+          email says how to get back in.
         </Notice>
         <ButtonLink variant="ink" size="lg" className="w-full" to="/login">
           Go to sign in

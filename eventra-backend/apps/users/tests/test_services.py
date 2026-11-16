@@ -36,7 +36,7 @@ from apps.users.tokens import (
     verify_password_reset_token,
     verify_token,
 )
-from tests.helpers import failed_refund
+from tests.helpers import failed_refund, race
 
 from ..factories import UserFactory
 from ..models import User
@@ -44,6 +44,7 @@ from ..serializers import RegisterSerializer
 from ..services import (
     AccountDeletionBlockedError,
     IncorrectPasswordError,
+    account_for_mailbox,
     canonical_email,
     delete_account,
     flush_expired_tokens,
@@ -87,7 +88,6 @@ def test_send_verification_email_contains_working_token():
 
 @pytest.mark.django_db
 def test_verification_email_link_points_at_the_frontend_page(settings):
-    settings.BACKEND_BASE_URL = "http://api.example.test"
     settings.FRONTEND_URL = "http://app.example.test"
 
     user = UserFactory(is_active=False)
@@ -95,7 +95,6 @@ def test_verification_email_link_points_at_the_frontend_page(settings):
 
     sent = mail.outbox[0]
     assert "http://app.example.test/verify-email?token=" in sent.body
-    assert "api.example.test" not in sent.body
 
 
 # ==================================================
@@ -123,6 +122,104 @@ def test_register_user_creates_user_and_sends_email_after_commit():
     assert user.is_active is False
     assert len(mail.outbox) == 1
     assert mail.outbox[0].to == [user.email]
+
+
+def _sign_up(email):
+    serializer = RegisterSerializer(
+        data={
+            "email": email,
+            "password": "a-genuinely-strong-pass-1",
+            "first_name": "New",
+            "last_name": "User",
+            "gender": "other",
+            "role": "attendee",
+        }
+    )
+    assert serializer.is_valid(), serializer.errors
+    return register_user(serializer)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "existing, new, same_mailbox",
+    [
+        ("ana@gmail.com", "ana+tickets@gmail.com", True),
+        ("ana@gmail.com", "a.n.a@gmail.com", True),
+        ("ana@gmail.com", "A.NA+2@GoogleMail.com", True),
+        ("ana+old@example.com", "ana@example.com", True),
+        ("Taken@Example.com", "taken@example.com", True),
+        ("a.na@example.com", "ana@example.com", False),
+        ("ana@gmail.com", "ana@example.com", False),
+        ("anna@gmail.com", "ana@gmail.com", False),
+    ],
+)
+def test_one_mailbox_gets_one_account_and_its_owner_hears_about_the_attempt(
+    django_capture_on_commit_callbacks, existing, new, same_mailbox
+):
+    owner = UserFactory(email=existing, is_email_verified=True)
+
+    with django_capture_on_commit_callbacks(execute=True):
+        created = _sign_up(new)
+
+    if same_mailbox:
+        assert created is None
+        assert User.objects.count() == 1
+        assert [m.to for m in mail.outbox] == [[owner.email]]
+        assert mail.outbox[0].subject == "You already have an Eventra account"
+    else:
+        assert created is not None and User.objects.count() == 2
+        assert mail.outbox[0].subject == "Verify your Eventra account"
+
+
+@pytest.mark.django_db
+def test_signing_up_again_before_verifying_resends_the_link(
+    django_capture_on_commit_callbacks,
+):
+    owner = UserFactory(email="late@example.com", is_active=False)
+
+    with django_capture_on_commit_callbacks(execute=True):
+        assert _sign_up("late@example.com") is None
+
+    assert User.objects.count() == 1
+    assert [m.to for m in mail.outbox] == [[owner.email]]
+    assert mail.outbox[0].subject == "Verify your Eventra account"
+
+
+@pytest.mark.django_db
+def test_a_taken_mailbox_still_costs_a_password_hash(monkeypatch):
+    UserFactory(email="taken@example.com")
+    hashed = []
+    monkeypatch.setattr(
+        "apps.users.services.make_password", lambda raw: hashed.append(raw)
+    )
+
+    _sign_up("taken@example.com")
+
+    assert hashed == ["a-genuinely-strong-pass-1"]
+
+
+@pytest.mark.django_db
+def test_a_sign_up_that_loses_the_race_is_answered_like_a_taken_mailbox(
+    monkeypatch, django_capture_on_commit_callbacks
+):
+    owner = UserFactory(email="race@example.com", is_email_verified=True)
+    lookups = iter([None, owner])
+    monkeypatch.setattr(
+        "apps.users.services.account_for_mailbox", lambda email: next(lookups)
+    )
+
+    with django_capture_on_commit_callbacks(execute=True):
+        assert _sign_up("race@example.com") is None
+
+    assert User.objects.count() == 1
+    assert mail.outbox[0].subject == "You already have an Eventra account"
+
+
+@pytest.mark.django_db
+def test_account_for_mailbox_matches_aliases():
+    owner = UserFactory(email="ana@gmail.com")
+    assert account_for_mailbox("A.na+x@googlemail.com") == owner
+    assert account_for_mailbox("bob@gmail.com") is None
 
 
 @pytest.mark.django_db(transaction=True)
@@ -231,8 +328,7 @@ def test_send_password_reset_email_contains_working_token():
 
 
 @pytest.mark.django_db
-def test_password_reset_email_points_at_the_frontend_not_the_backend(settings):
-    settings.BACKEND_BASE_URL = "http://api.example.test"
+def test_password_reset_email_points_at_the_frontend_page(settings):
     settings.FRONTEND_URL = "http://app.example.test"
 
     user = UserFactory()
@@ -240,7 +336,6 @@ def test_password_reset_email_points_at_the_frontend_not_the_backend(settings):
 
     sent = mail.outbox[0]
     assert "http://app.example.test/reset-password?token=" in sent.body
-    assert "api.example.test" not in sent.body
 
 
 # ==================================================
@@ -420,18 +515,10 @@ def test_ws_ticket_two_concurrent_consumers_only_one_wins():
     user = UserFactory()
     ticket, _ = issue_ws_ticket(user)
 
-    results = []
-    barrier = threading.Barrier(2)
-
-    def attempt():
-        barrier.wait()
-        results.append(validate_and_consume_ws_ticket(ticket))
-
-    threads = [threading.Thread(target=attempt) for _ in range(2)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    results = race(
+        lambda: validate_and_consume_ws_ticket(ticket),
+        lambda: validate_and_consume_ws_ticket(ticket),
+    )
 
     winners = [r for r in results if r is not None]
     assert winners == [user.id]
@@ -565,6 +652,8 @@ def test_organizer_whose_events_are_all_settled_can_leave():
     OrganizerPayoutFactory(event=paid, status=OrganizerPayout.Status.SETTLED)
     EventFactory(organizer=user, status=Event.Status.REJECTED)
     delete_account(user, PASSWORD)
+    user.refresh_from_db()
+    assert user.is_active is False and user.deleted_at is not None
 
 
 @pytest.mark.django_db
@@ -731,6 +820,7 @@ class TestVerifyTurnstile:
             {"success": False, "error-codes": ["invalid-input-response"]},
             {},
             {"success": "true"},
+            ["success"],
         ],
     )
     def test_anything_but_success_is_refused(self, cloudflare, reply):
@@ -741,6 +831,18 @@ class TestVerifyTurnstile:
     def test_missing_or_odd_tokens_never_reach_cloudflare(self, cloudflare, token):
         assert verify_turnstile(token) is False
         cloudflare.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "hostname, accepted",
+        [("app.example.com", True), ("evil.example.net", False), (None, False)],
+    )
+    def test_the_challenge_must_be_solved_on_our_own_site(
+        self, cloudflare, settings, hostname, accepted
+    ):
+        settings.TURNSTILE_HOSTNAME = "app.example.com"
+        reply = {"success": True, "hostname": hostname}
+        cloudflare.return_value = MagicMock(ok=True, json=lambda: reply)
+        assert verify_turnstile("token-1") is accepted
 
     def test_cloudflare_being_down_fails_closed(self, cloudflare):
 

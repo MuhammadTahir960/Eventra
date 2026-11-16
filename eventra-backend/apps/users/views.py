@@ -44,10 +44,13 @@ class RegisterView(generics.CreateAPIView):
                 {"captcha_token": ["Please confirm you're human, then try again."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        return super().create(request, *args, **kwargs)
-
-    def perform_create(self, serializer):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
         register_user(serializer)
+        return Response(
+            {"email": serializer.validated_data["email"]},
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 
 class VerifyEmailView(APIView):
@@ -100,6 +103,7 @@ class LogoutView(generics.GenericAPIView):
 class MeView(generics.RetrieveUpdateAPIView):
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated]
+    http_method_names = ["get", "patch"]
 
     def get_object(self):
         return self.request.user

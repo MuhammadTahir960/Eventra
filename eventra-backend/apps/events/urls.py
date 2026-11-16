@@ -1,5 +1,5 @@
 from django.urls import path
-from rest_framework.routers import DefaultRouter
+from rest_framework.routers import SimpleRouter
 
 from apps.seating.views import (
     EventSeatHoldView,
@@ -17,7 +17,7 @@ from .views import (
     OrganizerEventListView,
 )
 
-router = DefaultRouter()
+router = SimpleRouter()
 router.register("events", EventViewSet, basename="event")
 
 urlpatterns = router.urls + [

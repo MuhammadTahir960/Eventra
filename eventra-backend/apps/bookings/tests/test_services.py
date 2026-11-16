@@ -15,7 +15,7 @@ from apps.payments.factories import PaymentFactory
 from apps.seating.factories import EventSeatFactory, SeatHoldFactory
 from apps.seating.models import EventSeat, SeatHold
 from apps.users.factories import UserFactory
-from tests.helpers import paid_booking, unpaid_booking
+from tests.helpers import paid_booking, race, unpaid_booking
 
 from ..factories import BookingFactory
 from ..models import Booking
@@ -176,33 +176,15 @@ class TestCreateBookingFromHold:
         user = UserFactory()
         group_id, seat = _held_seat_with_hold(user)
 
-        results = []
-        barrier = threading.Barrier(2)
+        results = race(
+            lambda: create_booking_from_hold(group_id, user),
+            lambda: create_booking_from_hold(group_id, user),
+        )
 
-        errors = []
-
-        def attempt():
-            barrier.wait()
-            try:
-                booking, created = create_booking_from_hold(group_id, user)
-                results.append((booking.id, created))
-            except Exception as exc:  # noqa: BLE001
-                errors.append(exc)
-            finally:
-                connection.close()
-
-        threads = [threading.Thread(target=attempt) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert errors == []
         assert Booking.objects.filter(source_hold_group_id=group_id).count() == 1
-        assert len(results) == 2
-        assert len({r[0] for r in results}) == 1
-        assert sorted(r[1] for r in results) == [False, True]
-        winner = Booking.objects.get(id=results[0][0])
+        assert len({booking.id for booking, _ in results}) == 1
+        assert sorted(created for _, created in results) == [False, True]
+        winner = results[0][0]
         assert winner.held_seats().filter(id=seat.id).exists()
 
     @pytest.mark.django_db(transaction=True)
@@ -275,9 +257,7 @@ class TestSweepExpiredPendingBookings:
         self, monkeypatch, django_capture_on_commit_callbacks
     ):
         mock_notify = MagicMock()
-        monkeypatch.setattr(
-            "apps.seating.services.notify_internal_broadcast", mock_notify
-        )
+        monkeypatch.setattr("apps.seating.services.broadcast_seat_update", mock_notify)
 
         user = UserFactory()
         group_id, seat = _held_seat_with_hold(user)
@@ -296,14 +276,12 @@ class TestSweepExpiredPendingBookings:
         assert not booking.held_seats().filter(id=seat.id).exists()
         mock_notify.assert_called_once()
         _, kwargs = mock_notify.call_args
-        assert kwargs["seat_ids"] == [seat.id]
-        assert kwargs["status_label"] == "available"
+        assert [s.id for s in kwargs["seats"]] == [seat.id]
+        assert kwargs["seats"][0].status == EventSeat.Status.AVAILABLE
 
     def test_booking_still_within_window_is_left_alone(self, monkeypatch):
         mock_notify = MagicMock()
-        monkeypatch.setattr(
-            "apps.seating.services.notify_internal_broadcast", mock_notify
-        )
+        monkeypatch.setattr("apps.seating.services.broadcast_seat_update", mock_notify)
 
         user = UserFactory()
         group_id, seat = _held_seat_with_hold(user)
@@ -319,9 +297,7 @@ class TestSweepExpiredPendingBookings:
 
     def test_already_confirmed_booking_is_untouched_even_if_stale(self, monkeypatch):
         mock_notify = MagicMock()
-        monkeypatch.setattr(
-            "apps.seating.services.notify_internal_broadcast", mock_notify
-        )
+        monkeypatch.setattr("apps.seating.services.broadcast_seat_update", mock_notify)
 
         user = UserFactory()
         group_id, seat = _held_seat_with_hold(user)
@@ -341,9 +317,7 @@ class TestSweepExpiredPendingBookings:
         self, monkeypatch, django_capture_on_commit_callbacks
     ):
         mock_notify = MagicMock()
-        monkeypatch.setattr(
-            "apps.seating.services.notify_internal_broadcast", mock_notify
-        )
+        monkeypatch.setattr("apps.seating.services.broadcast_seat_update", mock_notify)
 
         user = UserFactory()
         group_id_a, seat_a = _held_seat_with_hold(user)

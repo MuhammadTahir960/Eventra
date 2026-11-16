@@ -1,11 +1,8 @@
-import logging
 import uuid
 from datetime import timedelta
 
-import requests
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, OperationalError, transaction
 from django.db.models import Q
@@ -21,8 +18,6 @@ from .constants import (
 )
 from .models import EventSeat, SeatHold
 from .serializers import serialize_seats_for_ws
-
-logger = logging.getLogger(__name__)
 
 
 class NotSeatedEventError(Exception):
@@ -113,9 +108,10 @@ def instantiate_event_seats(event: Event) -> list[EventSeat]:
         )
 
     venue_sections = set(event.venue.seats.values_list("section", flat=True).distinct())
-    tier_by_section = dict(
-        event.tier_section_mappings.values_list("section", "ticket_tier_id")
-    )
+    tier_by_section = {
+        mapping.section: mapping.ticket_tier
+        for mapping in event.tier_section_mappings.select_related("ticket_tier")
+    }
     uncovered = sorted(venue_sections - set(tier_by_section))
     if uncovered:
         raise UncoveredSectionsError(uncovered)
@@ -124,7 +120,7 @@ def instantiate_event_seats(event: Event) -> list[EventSeat]:
         EventSeat(
             event=event,
             seat=seat,
-            ticket_tier_id=tier_by_section[seat.section],
+            ticket_tier=tier_by_section[seat.section],
         )
         for seat in event.venue.seats.all()
     ]
@@ -267,36 +263,22 @@ def broadcast_seat_update(*, event: Event, seats: list[EventSeat]) -> None:
     )
 
 
-def notify_internal_broadcast(
-    *, event_slug: str, seat_ids: list, status_label: str
-) -> None:
-    try:
-        response = requests.post(
-            f"{settings.INTERNAL_API_BASE_URL}/internal/seats/broadcast/",
-            json={
-                "event_slug": event_slug,
-                "seat_ids": [str(seat_id) for seat_id in seat_ids],
-                "status": status_label,
-            },
-            timeout=5,
-        )
-        response.raise_for_status()
-    except requests.RequestException:
-        logger.exception(
-            "Internal broadcast call failed for event %s (seats: %s)",
-            event_slug,
-            seat_ids,
-        )
-
-
-def notify_seats_available(seats) -> None:
-    seat_ids_by_event_slug: dict[str, list] = {}
+def release_seats(seats) -> None:
     for seat in seats:
-        seat_ids_by_event_slug.setdefault(seat.event.slug, []).append(seat.id)
-    for event_slug, seat_ids in seat_ids_by_event_slug.items():
+        seat.status = EventSeat.Status.AVAILABLE
+    EventSeat.objects.bulk_update(seats, ["status"])
+    seat_ids_by_event: dict[Event, list] = {}
+    for seat in seats:
+        seat_ids_by_event.setdefault(seat.event, []).append(seat.id)
+    for event, seat_ids in seat_ids_by_event.items():
         transaction.on_commit(
-            lambda event_slug=event_slug, seat_ids=seat_ids: notify_internal_broadcast(
-                event_slug=event_slug, seat_ids=seat_ids, status_label="available"
+            lambda event=event, seat_ids=seat_ids: broadcast_seat_update(
+                event=event,
+                seats=list(
+                    EventSeat.objects.filter(id__in=seat_ids).select_related(
+                        "seat", "ticket_tier"
+                    )
+                ),
             ),
             robust=True,
         )
@@ -328,10 +310,5 @@ def release_expired_holds() -> None:
             return
 
         expired_seat_ids = {hold.event_seat_id for hold in expired_holds}
-        released = [seat for seat in seats if seat.id in expired_seat_ids]
-        for seat in released:
-            seat.status = EventSeat.Status.AVAILABLE
-        EventSeat.objects.bulk_update(released, ["status"])
-
         SeatHold.objects.filter(id__in=[hold.id for hold in expired_holds]).delete()
-        notify_seats_available(released)
+        release_seats([seat for seat in seats if seat.id in expired_seat_ids])

@@ -5,8 +5,9 @@ from datetime import datetime, timedelta
 
 import requests
 from django.conf import settings
+from django.contrib.auth.hashers import make_password
 from django.core.mail import send_mail
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 from django.utils.crypto import constant_time_compare
 from rest_framework_simplejwt.token_blacklist.models import (
@@ -58,24 +59,41 @@ def send_verification_email(user: User) -> None:
     )
 
 
-def register_user(serializer) -> User:
+def register_user(serializer) -> User | None:
     """
-    Thin orchestration: save the user then queue the verification email.
-
-    An email, once sent, can't be rolled back the way a DB write can.
-    Wrapping the send in on_commit means it only actually fires once this
-    transaction has fully and successfully committed. Any delivery error
-    is caught and logged so post-commit failures do not crash the request.
+    Creates the account and returns it, or, when the mailbox already has one,
+    emails its owner instead and returns None. The caller answers the same either
+    way, so sign-up can't be used to find out who has an account. Emails go out
+    only after the transaction commits.
     """
 
-    from .tasks import send_verification_email_task
+    from .tasks import send_account_exists_email_task, send_verification_email_task
 
-    with transaction.atomic():
-        user = serializer.save()
-        transaction.on_commit(
-            lambda: send_verification_email_task.delay(str(user.id)), robust=True
-        )
-    return user
+    existing = account_for_mailbox(serializer.validated_data["email"])
+    if existing is None:
+        try:
+            with transaction.atomic():
+                user = serializer.save()
+                transaction.on_commit(
+                    lambda: send_verification_email_task.delay(str(user.id)),
+                    robust=True,
+                )
+            return user
+        except IntegrityError:
+            # A racing sign-up took the mailbox between the check and the insert
+            existing = account_for_mailbox(serializer.validated_data["email"])
+    else:
+        # The same slow hash a new account costs, so the response time doesn't tell
+        make_password(serializer.validated_data["password"])
+
+    # Someone who never verified is likely retrying: give them a fresh link
+    task = (
+        send_account_exists_email_task
+        if existing.is_email_verified
+        else send_verification_email_task
+    )
+    transaction.on_commit(lambda: task.delay(str(existing.id)), robust=True)
+    return None
 
 
 def send_password_reset_email(user: User) -> None:
@@ -330,6 +348,22 @@ def delete_account(user: User, password: str) -> None:
         )
 
 
+def send_account_exists_email(user: User) -> None:
+    send_mail(
+        subject="You already have an Eventra account",
+        message=(
+            f"Hi {user.first_name or user.email},\n\n"
+            "Someone tried to sign up with this email address, but it already has "
+            f"an Eventra account. To get in, sign in at {settings.FRONTEND_URL}/login "
+            f"or reset your password at {settings.FRONTEND_URL}/forgot-password.\n\n"
+            "If this wasn't you, you can ignore this email. Your account hasn't changed."
+        ),
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[user.email],
+        fail_silently=False,
+    )
+
+
 def send_account_deleted_email(email: str, first_name: str) -> None:
     send_mail(
         subject="Your Eventra account has been deleted",
@@ -361,11 +395,11 @@ def canonical_email(email: str) -> str:
     return f"{local}@{domain}"
 
 
-def email_in_use(email: str) -> bool:
+def account_for_mailbox(email: str) -> User | None:
     return (
         User.objects.annotate(canonical=CanonicalEmail("email"))
         .filter(canonical=canonical_email(email))
-        .exists()
+        .first()
     )
 
 
@@ -381,7 +415,11 @@ def verify_turnstile(token) -> bool:
             data={"secret": settings.TURNSTILE_SECRET_KEY, "response": token},
             timeout=5,
         )
-        return response.ok and response.json().get("success") is True
+        result = response.json() if response.ok else None
     except (requests.RequestException, ValueError):
         logger.exception("Turnstile verification failed")
         return False
+    if not isinstance(result, dict) or result.get("success") is not True:
+        return False
+    expected = settings.TURNSTILE_HOSTNAME
+    return not expected or result.get("hostname") == expected

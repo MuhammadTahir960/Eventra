@@ -8,14 +8,14 @@ from rest_framework.views import APIView
 
 from apps.common.constants import Roles
 from apps.common.mixins import SoftDeleteDestroyMixin, SoftDeleteRestoreMixin
-from apps.common.permissions import IsAdmin, IsAdminForWrite, IsOrganizer
-from apps.common.validators import has_allowed_text
+from apps.common.permissions import IsAdmin, IsAdminForWrite, IsOrganizer, has_role
 from apps.events.services import find_blocking_upcoming_event
 
 from .models import Venue, VenueRequest
 from .serializers import (
     BulkSeatTemplateSerializer,
     SeatSerializer,
+    VenueRequestRejectionSerializer,
     VenueRequestSerializer,
     VenueSerializer,
 )
@@ -24,7 +24,6 @@ from .services import (
     DuplicateSeatError,
     SeatTemplateExistsError,
     SeatTemplateInUseError,
-    VenueRequestAdminNotesRequiredError,
     VenueRequestNotPendingError,
     bulk_create_seat_template,
     fulfil_venue_request,
@@ -111,7 +110,7 @@ class VenueViewSet(
             created_seats = bulk_create_seat_template(
                 venue=venue,
                 sections=payload_serializer.validated_data["sections"],
-                allow_reseed=(request.user.role == Roles.ADMIN),
+                allow_reseed=has_role(request.user, Roles.ADMIN),
             )
         except SeatTemplateExistsError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
@@ -167,22 +166,12 @@ class VenueRequestRejectView(APIView):
 
     def post(self, request, request_id):
         venue_request = generics.get_object_or_404(VenueRequest, pk=request_id)
+        payload = VenueRequestRejectionSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
         try:
-            notes = (
-                request.data.get("admin_notes")
-                if hasattr(request.data, "get")
-                else None
-            )
-            if isinstance(notes, str) and not has_allowed_text(notes, multiline=True):
-                return Response(
-                    {"admin_notes": ["This contains characters that aren't allowed."]},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            reject_venue_request(venue_request, notes if isinstance(notes, str) else "")
+            reject_venue_request(venue_request, payload.validated_data["admin_notes"])
         except VenueRequestNotPendingError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
-        except VenueRequestAdminNotesRequiredError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(VenueRequestSerializer(venue_request).data)
 
 

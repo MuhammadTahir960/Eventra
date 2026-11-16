@@ -3,7 +3,7 @@ from django.conf import settings
 
 class InternalHostMiddleware:
     INTERNAL_HOSTS = {"localhost", "127.0.0.1", "web"}
-    INTERNAL_PATH_PREFIXES = ("/healthz/", "/internal/")
+    INTERNAL_PATH_PREFIXES = ("/healthz/",)
 
     def __init__(self, get_response):
         self.get_response = get_response

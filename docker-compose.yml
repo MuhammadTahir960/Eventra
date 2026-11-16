@@ -19,12 +19,15 @@ services:
   redis:
     image: redis:7
     restart: unless-stopped
+    command: redis-server --requirepass "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -44,7 +47,7 @@ services:
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.dev
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       XDG_CACHE_HOME: /tmp
     depends_on:
       postgres:
@@ -80,8 +83,7 @@ services:
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.dev
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379/0
-      INTERNAL_API_BASE_URL: http://web:8000
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       XDG_CACHE_HOME: /tmp
     depends_on:
       postgres:
@@ -106,7 +108,7 @@ services:
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.dev
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       XDG_CACHE_HOME: /tmp
     depends_on:
       postgres:

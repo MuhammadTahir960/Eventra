@@ -1,6 +1,10 @@
 from rest_framework import serializers
 
-from apps.common.serializers import AllowedTextMixin, IntegrityErrorHandlingMixin
+from apps.common.serializers import (
+    AllowedTextMixin,
+    IntegrityErrorHandlingMixin,
+    RejectUnknownFieldsMixin,
+)
 
 from .models import Category
 from .services import (
@@ -11,7 +15,10 @@ from .services import (
 
 
 class CategorySerializer(
-    AllowedTextMixin, IntegrityErrorHandlingMixin, serializers.ModelSerializer
+    RejectUnknownFieldsMixin,
+    AllowedTextMixin,
+    IntegrityErrorHandlingMixin,
+    serializers.ModelSerializer,
 ):
     integrity_error_field = "name"
     integrity_error_message = "A category with this name or slug already exists."

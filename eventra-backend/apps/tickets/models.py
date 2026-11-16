@@ -28,6 +28,7 @@ class Ticket(UUIDBaseModel):
         "bookings.Booking",
         on_delete=models.PROTECT,
         related_name="tickets",
+        db_index=False,
     )
     event_seat = models.ForeignKey(
         "seating.EventSeat",
@@ -51,7 +52,6 @@ class Ticket(UUIDBaseModel):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        indexes = [models.Index(fields=["booking"])]
         constraints = [
             models.UniqueConstraint(
                 fields=["booking", "event_seat"], name="uniq_ticket_booking_seat"

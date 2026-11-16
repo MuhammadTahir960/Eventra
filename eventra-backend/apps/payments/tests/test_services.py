@@ -3,6 +3,7 @@ from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock
 
+import certifi
 import pytest
 import stripe
 from django.db import IntegrityError, connection
@@ -22,10 +23,11 @@ from apps.events.models import Event
 from apps.events.services import EventHasPaidBookingsError, reject_event
 from apps.seating.factories import EventSeatFactory
 from apps.seating.models import EventSeat
+from apps.seating.serializers import serialize_seats_for_ws
 from apps.tickets.factories import TicketFactory
 from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
-from tests.helpers import confirm_paid_in_full, paid_booking, unpaid_booking
+from tests.helpers import confirm_paid_in_full, paid_booking, race, unpaid_booking
 
 from ..factories import PaymentFactory
 from ..models import Payment, Refund, RefundItem
@@ -146,30 +148,13 @@ class TestCreateOrRefreshPaymentIntent:
             MagicMock(return_value=fake_intent),
         )
 
-        results = []
-        errors = []
-        barrier = threading.Barrier(2)
+        payments = race(
+            lambda: create_or_refresh_payment_intent(booking),
+            lambda: create_or_refresh_payment_intent(booking),
+        )
 
-        def attempt():
-            barrier.wait()
-            try:
-                payment = create_or_refresh_payment_intent(booking)
-                results.append(payment.id)
-            except Exception as exc:
-                errors.append(exc)
-            finally:
-                connection.close()
-
-        threads = [threading.Thread(target=attempt) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert errors == []
         assert Payment.objects.filter(booking=booking).count() == 1
-        assert len(results) == 2
-        assert len(set(results)) == 1
+        assert len({payment.id for payment in payments}) == 1
 
 
 def _pending_booking_with_held_seat(user=None, event=None):
@@ -194,7 +179,6 @@ class TestConfirmPaymentFromWebhook:
         monkeypatch.setattr(
             "apps.payments.services._enqueue_confirmation_email", MagicMock()
         )
-        monkeypatch.setattr("apps.payments.services.broadcast_seat_update", MagicMock())
 
         booking, seat, payment = _pending_booking_with_held_seat()
 
@@ -217,7 +201,6 @@ class TestConfirmPaymentFromWebhook:
         monkeypatch.setattr(
             "apps.payments.services._enqueue_confirmation_email", MagicMock()
         )
-        monkeypatch.setattr("apps.payments.services.broadcast_seat_update", MagicMock())
 
         booking, seat, payment = _pending_booking_with_held_seat()
 
@@ -428,6 +411,7 @@ class TestRefundEventBookings:
     def test_no_confirmed_bookings_is_a_safe_no_op(self):
         event = EventFactory(status="approved")
         refund_event_bookings(str(event.id))
+        assert not Refund.objects.exists()
 
 
 # ==================================================
@@ -444,7 +428,6 @@ def stripe_mocks(monkeypatch):
     monkeypatch.setattr(
         "apps.payments.services._enqueue_confirmation_email", MagicMock()
     )
-    monkeypatch.setattr("apps.payments.services.broadcast_seat_update", MagicMock())
     return refund
 
 
@@ -556,7 +539,7 @@ class TestUnfulfillableWebhookReleasesSeats:
         django_capture_on_commit_callbacks,
     ):
         broadcast = MagicMock()
-        monkeypatch.setattr("apps.payments.services.broadcast_seat_update", broadcast)
+        monkeypatch.setattr("apps.seating.services.broadcast_seat_update", broadcast)
         event = EventFactory(status=event_status)
         booking, seat, _ = _pending_booking(event, pi="pi_release")
 
@@ -670,9 +653,6 @@ class TestSweepCancelsPaymentIntent:
         monkeypatch.setattr(
             "apps.payments.services.stripe.PaymentIntent.cancel", cancel
         )
-        monkeypatch.setattr(
-            "apps.seating.services.notify_internal_broadcast", MagicMock()
-        )
         booking, seat, payment = _pending_booking(pi="pi_stale", age_minutes=6)
 
         sweep_expired_pending_bookings()
@@ -766,9 +746,7 @@ class TestCancelPendingBookingsForEvent:
         monkeypatch.setattr(
             "apps.payments.services.stripe.PaymentIntent.cancel", cancel
         )
-        monkeypatch.setattr(
-            "apps.seating.services.notify_internal_broadcast", broadcast
-        )
+        monkeypatch.setattr("apps.seating.services.broadcast_seat_update", broadcast)
         event = EventFactory(status=Event.Status.CANCELLED)
         booking, seat, payment = _pending_booking(event, pi="pi_evt")
 
@@ -781,9 +759,7 @@ class TestCancelPendingBookingsForEvent:
         assert booking.status == Booking.Status.CANCELLED
         assert not booking.held_seats().filter(id=seat.id).exists()
         assert seat.status == EventSeat.Status.AVAILABLE
-        broadcast.assert_called_once_with(
-            event_slug=event.slug, seat_ids=[seat.id], status_label="available"
-        )
+        broadcast.assert_called_once_with(event=event, seats=[seat])
 
     def test_booked_seats_on_the_cancelled_event_stay_frozen(self, monkeypatch):
         monkeypatch.setattr(
@@ -917,9 +893,7 @@ class TestPriceDropRefunds:
 
 
 class TestRefundRetries:
-    def test_a_failed_refund_is_retried_by_the_sweeper(
-        self, monkeypatch, stripe_refunds
-    ):
+    def test_a_failed_refund_is_retried_by_the_sweeper(self, stripe_refunds):
         event = EventFactory(status=Event.Status.COMPLETED)
         paid_booking(event, (TicketTierFactory(event=event), "10.00"))
         stripe_refunds.side_effect = stripe.error.APIConnectionError("down")
@@ -961,6 +935,28 @@ class TestRefundOnRequest:
         assert seat.status == EventSeat.Status.AVAILABLE
         assert "postponed" in mailoutbox[0].body and "$25.00" in mailoutbox[0].body
         TicketFactory(booking=BookingFactory(), event_seat=seat)
+
+    def test_seats_go_out_on_the_seat_map_without_a_query_per_seat(
+        self,
+        stripe_refunds,
+        monkeypatch,
+        django_capture_on_commit_callbacks,
+        django_assert_num_queries,
+    ):
+        event = self._postponed()
+        tier = TicketTierFactory(event=event)
+        booking = paid_booking(event, (tier, "25.00"), (tier, "25.00"), (tier, "25.00"))
+        broadcast = []
+        monkeypatch.setattr(
+            "apps.seating.services.broadcast_seat_update",
+            lambda *, event, seats: broadcast.append(seats),
+        )
+
+        with django_capture_on_commit_callbacks(execute=True):
+            cancel_booking(booking)
+
+        with django_assert_num_queries(0):
+            serialize_seats_for_ws(broadcast[0])
 
     def test_refused_when_not_postponed_or_too_close_to_the_new_start(
         self, stripe_refunds
@@ -1059,3 +1055,25 @@ def test_a_late_duplicate_refund_request_leaves_a_resold_seat_alone(stripe_refun
     seat.refresh_from_db()
     assert seat.status == EventSeat.Status.BOOKED
     assert Refund.objects.count() == 1
+
+
+# ==================================================
+# Stripe's TLS bundle
+# ==================================================
+
+COMPROMISED_EMUDHRA_ROOTS = (
+    "emSign ECC Root CA - G3",
+    "emSign ECC Root CA - C3",
+    "emSign Root CA - C1",
+)
+
+
+def test_stripe_uses_certifi_bundle():
+    assert stripe.ca_bundle_path == certifi.where()
+
+
+def test_stripe_bundle_excludes_compromised_emudhra_roots():
+    with open(stripe.ca_bundle_path, encoding="utf-8") as fh:
+        bundle = fh.read()
+    for root in COMPROMISED_EMUDHRA_ROOTS:
+        assert root not in bundle, root

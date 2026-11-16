@@ -1,5 +1,5 @@
 from django.urls import path
-from rest_framework.routers import DefaultRouter
+from rest_framework.routers import SimpleRouter
 
 from .views import (
     VenueRequestFulfilView,
@@ -8,7 +8,7 @@ from .views import (
     VenueViewSet,
 )
 
-router = DefaultRouter()
+router = SimpleRouter()
 router.register("venues", VenueViewSet, basename="venue")
 
 urlpatterns = [

@@ -21,6 +21,10 @@ def _save_fields(instance, *fields):
     instance.save(update_fields=fields)
 
 
+def _flag(request, name: str) -> bool:
+    return str(request.query_params.get(name, "")).lower() in ("1", "true", "yes")
+
+
 class TrashLookupMixin:
     def get_trash_queryset(self):
         return self.get_queryset().model.all_objects.all()
@@ -52,7 +56,7 @@ class SoftDeleteDestroyMixin(TrashLookupMixin):
         if guard_response is not None:
             return guard_response
 
-        hard = str(request.query_params.get("hard", "")).lower() in ("1", "true", "yes")
+        hard = _flag(request, "hard")
 
         if not hard:
             if not instance.is_active:
@@ -84,8 +88,7 @@ class SoftDeleteRestoreMixin(TrashLookupMixin):
     include_inactive_roles = (Roles.ADMIN,)
 
     def include_inactive(self) -> bool:
-        wanted = str(self.request.query_params.get("include_inactive", "")).lower()
-        return wanted in ("1", "true", "yes") and any(
+        return _flag(self.request, "include_inactive") and any(
             has_role(self.request.user, role) for role in self.include_inactive_roles
         )
 

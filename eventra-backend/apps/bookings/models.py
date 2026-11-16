@@ -35,9 +35,6 @@ class Booking(UUIDBaseModel):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        indexes = [
-            models.Index(fields=["user"]),
-        ]
         ordering = ["-created_at"]
 
     def __str__(self):
@@ -50,6 +47,13 @@ class Booking(UUIDBaseModel):
     def held_seats(self):
         return EventSeat.objects.filter(
             tickets__booking=self, tickets__status="pending"
+        )
+
+    def lock_held_seats(self) -> list:
+        return list(
+            self.held_seats()
+            .select_for_update(of=("self",))
+            .select_related("event", "seat", "ticket_tier")
         )
 
     @property

@@ -7,6 +7,27 @@ from .validators import (
 )
 
 
+class RejectUnknownFieldsMixin:
+    def to_internal_value(self, data):
+        if hasattr(data, "keys"):
+            accepted = {
+                name for name, field in self.fields.items() if not field.read_only
+            }
+            unknown = sorted(set(data.keys()) - accepted)
+            if unknown:
+                raise serializers.ValidationError(
+                    {name: ["This field isn't accepted here."] for name in unknown[:10]}
+                )
+        return super().to_internal_value(data)
+
+
+class StrictCharField(serializers.CharField):
+    def to_internal_value(self, data):
+        if not isinstance(data, str):
+            self.fail("invalid")
+        return super().to_internal_value(data)
+
+
 class AllowedTextMixin:
     def get_fields(self):
         fields = super().get_fields()
