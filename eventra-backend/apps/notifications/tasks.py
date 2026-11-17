@@ -57,7 +57,8 @@ def send_event_running_late_email(event_id, user_id):
 def send_event_cancelled_email(event_id, user_id):
     user = User.objects.filter(id=user_id, is_active=True).first()
     if user is not None:
-        send_event_cancelled_notice(Event.all_objects.get(id=event_id), user)
+        event = Event.all_objects.select_related("venue").get(id=event_id)
+        send_event_cancelled_notice(event, user)
 
 
 @shared_task

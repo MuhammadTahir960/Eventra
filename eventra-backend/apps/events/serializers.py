@@ -1,4 +1,5 @@
-from datetime import timedelta
+from datetime import UTC, timedelta
+from zoneinfo import ZoneInfo
 
 from django.utils import timezone
 from rest_framework import serializers
@@ -14,12 +15,14 @@ from apps.common.serializers import (
 )
 from apps.common.validators import validate_multiline_text
 from apps.payments.services import refund_price_drops
+from apps.venues.models import Venue
 
 from .constants import (
     MAX_EVENT_LEAD_DAYS,
     MAX_EVENT_LENGTH_DAYS,
     MAX_REJECTION_REASON_LENGTH,
     ORGANIZER_MIN_NOTICE_HOURS,
+    WALL_CLOCK_FORMATS,
 )
 from .models import Event, TicketTier, TierSectionMapping
 from .services import (
@@ -34,6 +37,34 @@ def _is_organizer_or_admin_for_event(request, event) -> bool:
     if not (user and user.is_authenticated):
         return False
     return user.role == Roles.ADMIN or event.organizer_id == user.id
+
+
+def wall_clock_field():
+    return serializers.DateTimeField(
+        input_formats=WALL_CLOCK_FORMATS,
+        error_messages={
+            "invalid": "Send the venue's local time without a UTC offset, "
+            "like 2026-11-01T18:30."
+        },
+    )
+
+
+def read_in_time_zone(attrs, fields, time_zone):
+    zone = ZoneInfo(time_zone)
+    for field in fields:
+        if field not in attrs:
+            continue
+        wall_clock = attrs[field].replace(tzinfo=None)
+        moment = wall_clock.replace(tzinfo=zone)
+        try:
+            round_trip = moment.astimezone(UTC).astimezone(zone)
+        except OverflowError as exc:
+            raise serializers.ValidationError({field: "Enter a valid time."}) from exc
+        if round_trip.replace(tzinfo=None) != wall_clock:
+            raise serializers.ValidationError(
+                {field: "This time doesn't exist at the venue: the clocks go forward."}
+            )
+        attrs[field] = moment
 
 
 def validate_schedule(start, end, now):
@@ -60,6 +91,10 @@ class EventSerializer(
     integrity_error_field = "slug"
     integrity_error_message = "An event with a conflicting slug already exists."
 
+    start_datetime = wall_clock_field()
+    end_datetime = wall_clock_field()
+    time_zone = serializers.CharField(read_only=True)
+
     class Meta:
         model = Event
         fields = [
@@ -80,6 +115,7 @@ class EventSerializer(
             "max_tickets_per_buyer",
             "start_datetime",
             "end_datetime",
+            "time_zone",
             "completed_at",
             "postponed_from",
             "is_active",
@@ -141,7 +177,33 @@ class EventSerializer(
     def _current(self, attrs, field):
         return attrs.get(field, getattr(self.instance, field, None))
 
+    def _read_times_at_venue(self, attrs):
+        times = ("start_datetime", "end_datetime")
+        if not any(field in attrs for field in ("venue", *times)):
+            return
+        venue = self._current(attrs, "venue")
+        time_zone = (
+            Venue.all_objects.select_for_update(no_key=True)
+            .values_list("time_zone", flat=True)
+            .get(pk=venue.pk)
+            if venue
+            else "UTC"
+        )
+        if (
+            self.instance is not None
+            and time_zone != self.instance.time_zone
+            and not all(field in attrs for field in times)
+        ):
+            raise serializers.ValidationError(
+                {
+                    "venue": "This venue is in another time zone. Send the new "
+                    "start and end times with it."
+                }
+            )
+        read_in_time_zone(attrs, times, time_zone)
+
     def validate(self, attrs):
+        self._read_times_at_venue(attrs)
         start = self._current(attrs, "start_datetime")
         end = self._current(attrs, "end_datetime")
         now = timezone.now()
@@ -232,10 +294,15 @@ class EventSerializer(
 
 
 class PostponementSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
-    start_datetime = serializers.DateTimeField()
-    end_datetime = serializers.DateTimeField()
+    start_datetime = wall_clock_field()
+    end_datetime = wall_clock_field()
 
     def validate(self, attrs):
+        read_in_time_zone(
+            attrs,
+            ("start_datetime", "end_datetime"),
+            self.context["event"].time_zone,
+        )
         start, end = attrs["start_datetime"], attrs["end_datetime"]
         if start <= self.context["event"].start_datetime:
             raise serializers.ValidationError(
@@ -252,7 +319,11 @@ class RejectionSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
 
 
 class RunningLateSerializer(RejectUnknownFieldsMixin, serializers.Serializer):
-    end_datetime = serializers.DateTimeField()
+    end_datetime = wall_clock_field()
+
+    def validate(self, attrs):
+        read_in_time_zone(attrs, ("end_datetime",), self.context["event"].time_zone)
+        return attrs
 
 
 class PendingEventSerializer(EventSerializer):

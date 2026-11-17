@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from django.core import mail
 from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -19,7 +20,7 @@ from apps.sports.factories import SportFactory, TeamFactory
 from apps.tickets.factories import TicketFactory
 from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory, VenueFactory
-from tests.helpers import auth_client, paid_booking, results
+from tests.helpers import auth_client, paid_booking, results, wall_clock
 
 from ..factories import EventFactory, TicketTierFactory, TierSectionMappingFactory
 from ..models import Event, TicketTier, TierSectionMapping
@@ -37,8 +38,8 @@ def _event_payload(**overrides):
         "description": "Details here.",
         "event_type": Event.EventType.GENERAL,
         "is_seated": True,
-        "start_datetime": start.isoformat(),
-        "end_datetime": (start + timedelta(hours=3)).isoformat(),
+        "start_datetime": wall_clock(start),
+        "end_datetime": wall_clock(start + timedelta(hours=3)),
     }
     payload.update(overrides)
     return payload
@@ -177,6 +178,63 @@ class TestListEvents:
         response = api_client.get(self.url, {"category": str(target_category.id)})
         titles = {e["title"] for e in results(response)}
         assert titles == {"Target"}
+
+    def test_filter_by_country_takes_only_offered_codes(self, api_client):
+        EventFactory(
+            status=Event.Status.APPROVED,
+            title="In Lahore",
+            venue=VenueFactory(country="PK", time_zone="Asia/Karachi"),
+        )
+        EventFactory(status=Event.Status.APPROVED, title="In Nairobi")
+
+        response = api_client.get(self.url, {"country": "PK"})
+        assert [e["title"] for e in results(response)] == ["In Lahore"]
+        assert api_client.get(self.url, {"country": "Pakistan"}).status_code == 400
+
+    def test_locations_list_the_places_with_events_to_browse(self, api_client):
+        lahore = VenueFactory(city="Lahore", country="PK", time_zone="Asia/Karachi")
+        EventFactory(status=Event.Status.APPROVED, venue=lahore)
+        EventFactory(status=Event.Status.APPROVED, venue=lahore)
+        EventFactory(status=Event.Status.COMPLETED)
+        hidden = {"country": "GB", "time_zone": "Europe/London"}
+        EventFactory(
+            status=Event.Status.PENDING_APPROVAL,
+            venue=VenueFactory(city="Leeds", **hidden),
+        )
+        EventFactory(
+            status=Event.Status.CANCELLED, venue=VenueFactory(city="York", **hidden)
+        )
+        EventFactory(
+            status=Event.Status.APPROVED,
+            is_active=False,
+            venue=VenueFactory(city="Bath", **hidden),
+        )
+        now = timezone.now()
+        EventFactory(
+            status=Event.Status.APPROVED,
+            venue=VenueFactory(city="Hull", **hidden),
+            start_datetime=now - timedelta(hours=1),
+            end_datetime=now + timedelta(hours=1),
+        )
+
+        response = api_client.get("/events/locations/")
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data == [
+            {"country": "KE", "city": "Nairobi"},
+            {"country": "PK", "city": "Lahore"},
+        ]
+
+    @pytest.mark.parametrize("url", ["/events/", "/admin/events/pending/"])
+    def test_lists_read_every_events_time_zone_in_one_query(self, admin_client, url):
+        def queries():
+            with CaptureQueriesContext(connection) as captured:
+                assert admin_client.get(url).status_code == status.HTTP_200_OK
+            return len(captured)
+
+        EventFactory(status=Event.Status.PENDING_APPROVAL)
+        one = queries()
+        EventFactory.create_batch(3, status=Event.Status.PENDING_APPROVAL)
+        assert queries() == one
 
     def test_filter_by_city_case_insensitive(self, api_client):
         venue = VenueFactory(city="Nairobi")
@@ -391,7 +449,7 @@ class TestCreateEvent:
         start = timezone.now() + timedelta(days=10)
         response = auth_client(organizer_user).post(
             self.url,
-            _event_payload(end_datetime=(start + timedelta(days=15)).isoformat()),
+            _event_payload(end_datetime=wall_clock(start + timedelta(days=15))),
             format="json",
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
@@ -402,8 +460,8 @@ class TestCreateEvent:
         response = auth_client(admin_user).post(
             self.url,
             _event_payload(
-                start_datetime=start.isoformat(),
-                end_datetime=(start + timedelta(hours=3)).isoformat(),
+                start_datetime=wall_clock(start),
+                end_datetime=wall_clock(start + timedelta(hours=3)),
             ),
             format="json",
         )
@@ -415,8 +473,8 @@ class TestCreateEvent:
     ):
         start = timezone.now() + timedelta(hours=6)
         payload = _event_payload(
-            start_datetime=start.isoformat(),
-            end_datetime=(start + timedelta(hours=3)).isoformat(),
+            start_datetime=wall_clock(start),
+            end_datetime=wall_clock(start + timedelta(hours=3)),
         )
         response = auth_client(organizer_user).post(self.url, payload, format="json")
         assert response.status_code == status.HTTP_400_BAD_REQUEST
@@ -442,8 +500,8 @@ class TestCreateEvent:
         client = auth_client(organizer_user)
         start = timezone.now() + timedelta(days=5)
         payload = _event_payload(
-            start_datetime=start.isoformat(),
-            end_datetime=(start - timedelta(hours=1)).isoformat(),
+            start_datetime=wall_clock(start),
+            end_datetime=wall_clock(start - timedelta(hours=1)),
         )
         response = client.post(self.url, payload, format="json")
         assert response.status_code == status.HTTP_400_BAD_REQUEST
@@ -989,8 +1047,8 @@ class TestApproveRejectEvent:
         organizer_client.patch(
             f"/events/{event.pk}/",
             {
-                "start_datetime": new_start.isoformat(),
-                "end_datetime": new_end.isoformat(),
+                "start_datetime": wall_clock(new_start),
+                "end_datetime": wall_clock(new_end),
             },
             format="json",
         )
@@ -1532,8 +1590,8 @@ def _payload(**overrides):
         "title": "Summer Concert",
         "description": "An evening of music.",
         "event_type": "general",
-        "start_datetime": start.isoformat(),
-        "end_datetime": (start + timedelta(hours=2)).isoformat(),
+        "start_datetime": wall_clock(start),
+        "end_datetime": wall_clock(start + timedelta(hours=2)),
         "venue": str(VenueFactory().id),
         "category": str(CategoryFactory().id),
     }
@@ -1563,8 +1621,8 @@ class TestCreateValidation:
         response = auth_client(admin_user).post(
             "/events/",
             _payload(
-                start_datetime=past.isoformat(),
-                end_datetime=(past + timedelta(hours=2)).isoformat(),
+                start_datetime=wall_clock(past),
+                end_datetime=wall_clock(past + timedelta(hours=2)),
             ),
             format="json",
         )
@@ -1594,8 +1652,8 @@ class TestEditingTerminalAndSeatedEvents:
         response = auth_client(organizer_user).patch(
             f"/events/{event.id}/",
             {
-                "start_datetime": start.isoformat(),
-                "end_datetime": (start + timedelta(hours=2)).isoformat(),
+                "start_datetime": wall_clock(start),
+                "end_datetime": wall_clock(start + timedelta(hours=2)),
             },
             format="json",
         )
@@ -1746,19 +1804,19 @@ class TestRunningLateEndpoint:
         new_end = event.end_datetime + timedelta(hours=1)
         response = auth_client(organizer_user).post(
             f"/events/{event.id}/extend-end/",
-            {"end_datetime": new_end.isoformat()},
+            {"end_datetime": wall_clock(new_end)},
             format="json",
         )
         assert response.status_code == status.HTTP_200_OK
         assert response.data["status"] == Event.Status.APPROVED
         event.refresh_from_db()
-        assert event.end_datetime == new_end
+        assert event.end_datetime == new_end.replace(microsecond=0)
 
     def test_admin_may_extend_any_event(self, organizer_user, admin_user):
         event = self._running(organizer_user)
         response = auth_client(admin_user).post(
             f"/events/{event.id}/extend-end/",
-            {"end_datetime": (event.end_datetime + timedelta(hours=1)).isoformat()},
+            {"end_datetime": wall_clock(event.end_datetime + timedelta(hours=1))},
             format="json",
         )
         assert response.status_code == status.HTTP_200_OK
@@ -1770,7 +1828,7 @@ class TestRunningLateEndpoint:
         other = UserFactory(role=Roles.ORGANIZER)
         response = auth_client(other).post(
             f"/events/{event.id}/extend-end/",
-            {"end_datetime": (event.end_datetime + timedelta(hours=1)).isoformat()},
+            {"end_datetime": wall_clock(event.end_datetime + timedelta(hours=1))},
             format="json",
         )
         assert response.status_code == status.HTTP_404_NOT_FOUND
@@ -1780,7 +1838,7 @@ class TestRunningLateEndpoint:
         other = UserFactory(role=Roles.ORGANIZER)
         response = auth_client(other).post(
             f"/events/{event.id}/extend-end/",
-            {"end_datetime": (event.end_datetime + timedelta(hours=1)).isoformat()},
+            {"end_datetime": wall_clock(event.end_datetime + timedelta(hours=1))},
             format="json",
         )
         assert response.status_code == status.HTTP_403_FORBIDDEN
@@ -1789,7 +1847,7 @@ class TestRunningLateEndpoint:
         event = self._running(organizer_user)
         response = auth_client(organizer_user).post(
             f"/events/{event.id}/extend-end/",
-            {"end_datetime": (event.end_datetime - timedelta(minutes=5)).isoformat()},
+            {"end_datetime": wall_clock(event.end_datetime - timedelta(minutes=5))},
             format="json",
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
@@ -1799,7 +1857,7 @@ class TestRunningLateEndpoint:
         event = EventFactory(status=Event.Status.COMPLETED)
         response = auth_client(admin_user).post(
             f"/events/{event.id}/extend-end/",
-            {"end_datetime": (timezone.now() + timedelta(hours=1)).isoformat()},
+            {"end_datetime": wall_clock(timezone.now() + timedelta(hours=1))},
             format="json",
         )
         assert response.status_code == status.HTTP_409_CONFLICT
@@ -1859,7 +1917,10 @@ class TestPostponementsEndpoint:
         start = event.start_datetime + timedelta(days=days)
         return auth_client(user).post(
             f"/events/{event.id}/postponements/",
-            {"start_datetime": start, "end_datetime": start + timedelta(hours=2)},
+            {
+                "start_datetime": wall_clock(start),
+                "end_datetime": wall_clock(start + timedelta(hours=2)),
+            },
             format="json",
         )
 
@@ -1893,7 +1954,10 @@ class TestPostponementsEndpoint:
         start = event.start_datetime + timedelta(days=7)
         response = auth_client(event.organizer).post(
             f"/events/{event.id}/postponements/",
-            {"start_datetime": start, "end_datetime": start + timedelta(hours=hours)},
+            {
+                "start_datetime": wall_clock(start),
+                "end_datetime": wall_clock(start + timedelta(hours=hours)),
+            },
             format="json",
         )
         assert response.status_code == 400

@@ -4,6 +4,7 @@ import sys
 import threading
 from decimal import Decimal
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 from django.contrib.auth.models import AnonymousUser
 from django.db import connection
@@ -21,6 +22,10 @@ from apps.seating.models import EventSeat
 from apps.tickets.factories import TicketFactory
 from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
+
+
+def wall_clock(moment, time_zone="Africa/Nairobi"):
+    return moment.astimezone(ZoneInfo(time_zone)).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def results(response):

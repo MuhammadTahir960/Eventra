@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -10,6 +10,7 @@ from apps.common.constants import Roles
 from apps.seating.factories import EventSeatFactory
 from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory, VenueFactory
+from tests.helpers import wall_clock
 
 from ..factories import EventFactory, TicketTierFactory
 from ..models import Event
@@ -17,6 +18,7 @@ from ..serializers import (
     EventSerializer,
     TicketTierSerializer,
     TierSectionMappingSerializer,
+    read_in_time_zone,
 )
 
 pytestmark = pytest.mark.django_db
@@ -31,8 +33,8 @@ def _event_payload(**overrides):
         "description": "Details here.",
         "event_type": Event.EventType.GENERAL,
         "is_seated": True,
-        "start_datetime": start,
-        "end_datetime": start + timedelta(hours=3),
+        "start_datetime": wall_clock(start),
+        "end_datetime": wall_clock(start + timedelta(hours=3)),
     }
     payload.update(overrides)
     return payload
@@ -101,7 +103,8 @@ def test_end_datetime_before_start_datetime_rejected():
     start = timezone.now() + timedelta(days=5)
     serializer = EventSerializer(
         data=_event_payload(
-            start_datetime=start, end_datetime=start - timedelta(hours=1)
+            start_datetime=wall_clock(start),
+            end_datetime=wall_clock(start - timedelta(hours=1)),
         ),
         context={"request": _request_for(organizer)},
     )
@@ -371,3 +374,86 @@ def test_tier_names_follow_the_event_title_rule(name, valid):
         data={"name": name, "price": "10.00"}, context={"event": EventFactory()}
     )
     assert serializer.is_valid() is valid
+
+
+# ==================================================
+# Event times are the venue's wall-clock time
+# ==================================================
+
+
+def test_times_are_read_in_the_venues_zone_and_returned_with_it():
+    organizer = UserFactory(role=Roles.ORGANIZER)
+    venue = VenueFactory(country="PK", time_zone="Asia/Karachi")
+    day = (timezone.now() + timedelta(days=10)).date().isoformat()
+    serializer = EventSerializer(
+        data=_event_payload(
+            venue=venue.id,
+            start_datetime=f"{day}T18:30",
+            end_datetime=f"{day}T21:30",
+        ),
+        context={"request": _request_for(organizer)},
+    )
+    assert serializer.is_valid(), serializer.errors
+    event = serializer.save()
+    assert event.start_datetime.astimezone(UTC).strftime("%H:%M") == "13:30"
+    assert serializer.data["time_zone"] == "Asia/Karachi"
+
+
+@pytest.mark.parametrize("suffix", ["Z", "+00:00", "+05:00"])
+def test_a_time_with_a_utc_offset_is_refused(suffix):
+    start = wall_clock(timezone.now() + timedelta(days=10))
+    serializer = EventSerializer(
+        data=_event_payload(start_datetime=start + suffix),
+        context={"request": _request_for(UserFactory(role=Roles.ORGANIZER))},
+    )
+    assert serializer.is_valid() is False
+    assert "without a UTC offset" in serializer.errors["start_datetime"][0]
+
+
+def test_a_time_the_clocks_skip_is_refused_and_a_repeated_one_means_the_first():
+    skipped = {"start_datetime": datetime(2027, 3, 14, 2, 30, tzinfo=UTC)}
+    with pytest.raises(serializers.ValidationError) as error:
+        read_in_time_zone(skipped, ("start_datetime",), "America/New_York")
+    assert "clocks go forward" in error.value.detail["start_datetime"]
+
+    repeated = {"start_datetime": datetime(2027, 11, 7, 1, 30, tzinfo=UTC)}
+    read_in_time_zone(repeated, ("start_datetime",), "America/New_York")
+    assert repeated["start_datetime"].astimezone(UTC).hour == 5
+
+
+@pytest.mark.parametrize(
+    "edge, time_zone",
+    [
+        (datetime(9999, 12, 31, 23, 59, tzinfo=UTC), "America/New_York"),
+        (datetime(1, 1, 1, 0, 0, tzinfo=UTC), "Asia/Karachi"),
+    ],
+)
+def test_a_time_at_the_edge_of_the_calendar_is_refused_not_a_crash(edge, time_zone):
+    with pytest.raises(serializers.ValidationError) as error:
+        read_in_time_zone({"start_datetime": edge}, ("start_datetime",), time_zone)
+    assert "valid time" in error.value.detail["start_datetime"]
+
+
+def test_moving_to_a_venue_in_another_zone_needs_the_new_times():
+    event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+    elsewhere = VenueFactory(country="PK", time_zone="Asia/Karachi")
+    context = {"request": _request_for(event.organizer)}
+
+    venue_only = EventSerializer(
+        event, data={"venue": elsewhere.id}, partial=True, context=context
+    )
+    assert venue_only.is_valid() is False and "venue" in venue_only.errors
+
+    start = event.start_datetime + timedelta(days=1)
+    with_times = EventSerializer(
+        event,
+        data={
+            "venue": elsewhere.id,
+            "start_datetime": wall_clock(start, "Asia/Karachi"),
+            "end_datetime": wall_clock(start + timedelta(hours=2), "Asia/Karachi"),
+        },
+        partial=True,
+        context=context,
+    )
+    assert with_times.is_valid(), with_times.errors
+    assert with_times.validated_data["start_datetime"] == start.replace(microsecond=0)

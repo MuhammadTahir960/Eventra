@@ -337,8 +337,8 @@ def extend_event_end(event: Event, new_end) -> Event:
             )
 
         moved_day = (
-            timezone.localtime(new_end).date()
-            != timezone.localtime(event.end_datetime).date()
+            event.local_time(new_end).date()
+            != event.local_time(event.end_datetime).date()
         )
         event.end_datetime = new_end
         event.save(update_fields=["end_datetime", "updated_at"])

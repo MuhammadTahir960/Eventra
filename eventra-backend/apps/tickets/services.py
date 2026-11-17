@@ -54,7 +54,7 @@ def render_ticket_pdf(ticket: Ticket) -> bytes:
       <body>
         <div class="ticket">
           <h1>{event_title}</h1>
-          <p class="meta">{event.start_datetime:%A, %B %d, %Y — %I:%M %p} UTC</p>
+          <p class="meta">{event.local_time(event.start_datetime):%A, %B %d, %Y — %I:%M %p %Z}</p>
           <p class="meta">{seat_location}</p>
           {f'<p class="meta">Attendee: {attendee_name}</p>' if attendee_name else ""}
           <p class="meta">Status: {status_label}</p>

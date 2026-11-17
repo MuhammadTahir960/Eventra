@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from apps.common.serializers import (
@@ -7,7 +8,9 @@ from apps.common.serializers import (
     StrictCharField,
 )
 from apps.common.validators import validate_multiline_text
+from apps.events.models import Event
 
+from .constants import COUNTRY_TIME_ZONES
 from .models import Seat, Venue, VenueRequest
 
 MAX_ADMIN_NOTES_LENGTH = 2000
@@ -30,6 +33,7 @@ class VenueSerializer(
             "address",
             "city",
             "country",
+            "time_zone",
             "capacity",
             "layout_shape",
             "photo",
@@ -37,8 +41,35 @@ class VenueSerializer(
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+        extra_kwargs = {"time_zone": {"required": False}}
+
+    def _validate_place(self, attrs):
+        country = attrs.get("country", getattr(self.instance, "country", None))
+        zones = COUNTRY_TIME_ZONES.get(country, ())
+        if "country" in attrs and "time_zone" not in attrs and len(zones) == 1:
+            attrs["time_zone"] = zones[0]
+        time_zone = attrs.get("time_zone", getattr(self.instance, "time_zone", ""))
+        try:
+            Venue(country=country, time_zone=time_zone).clean()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict) from exc
+        moved = self.instance is not None and (
+            country != self.instance.country or time_zone != self.instance.time_zone
+        )
+        if not moved:
+            return
+        Venue.all_objects.select_for_update(no_key=True).get(pk=self.instance.pk)
+        if Event.all_objects.filter(venue=self.instance).exists():
+            raise serializers.ValidationError(
+                {
+                    "country": "The country and time zone can't change once "
+                    "the venue has events."
+                }
+            )
 
     def validate(self, attrs):
+        if "country" in attrs or "time_zone" in attrs:
+            self._validate_place(attrs)
         name = attrs.get("name", getattr(self.instance, "name", None))
         city = attrs.get("city", getattr(self.instance, "city", None))
         if name and city:
@@ -122,6 +153,7 @@ class VenueRequestSerializer(
             "requested_by",
             "venue_name",
             "city",
+            "country",
             "notes",
             "status",
             "admin_notes",

@@ -1,5 +1,7 @@
 from django.contrib import admin
 
+from apps.events.models import Event
+
 from .models import Seat, Venue, VenueRequest
 
 
@@ -12,6 +14,11 @@ class VenueAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         return Venue.all_objects.all()
 
+    def get_readonly_fields(self, request, obj=None):
+        if obj is not None and Event.all_objects.filter(venue=obj).exists():
+            return ("country", "time_zone")
+        return ()
+
 
 @admin.register(Seat)
 class SeatAdmin(admin.ModelAdmin):
@@ -23,7 +30,14 @@ class SeatAdmin(admin.ModelAdmin):
 
 @admin.register(VenueRequest)
 class VenueRequestAdmin(admin.ModelAdmin):
-    list_display = ("venue_name", "city", "requested_by", "status", "created_at")
+    list_display = (
+        "venue_name",
+        "city",
+        "country",
+        "requested_by",
+        "status",
+        "created_at",
+    )
     list_filter = ("status",)
     search_fields = ("venue_name", "city", "requested_by__email")
     list_select_related = ("requested_by",)

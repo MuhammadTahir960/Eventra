@@ -93,6 +93,10 @@ def send_payout_settled_email(payout) -> None:
     )
 
 
+def _venue_time(event, moment) -> str:
+    return f"{event.local_time(moment):%Y-%m-%d %H:%M %Z}"
+
+
 def _email_buyer(event, user, notification_type, subject, body) -> None:
     _send_and_record(
         user,
@@ -112,7 +116,7 @@ def send_event_updated_notice(event, user) -> None:
         "An event you booked has been updated",
         f'The organizer of "{event.title}" changed some details, and the changes '
         "have been approved. It now starts on "
-        f"{event.start_datetime:%Y-%m-%d %H:%M} UTC at {event.venue.name}.\n\n"
+        f"{_venue_time(event, event.start_datetime)} at {event.venue.name}.\n\n"
         "Your tickets are still valid. The full details are on the event page in "
         "your Eventra account.",
     )
@@ -125,7 +129,7 @@ def send_event_running_late_notice(event, user) -> None:
         Notification.NotificationType.EVENT_UPDATED,
         "An event you booked is running late",
         f'"{event.title}" is running late and now ends on '
-        f"{event.end_datetime:%Y-%m-%d %H:%M} UTC at {event.venue.name}.\n\n"
+        f"{_venue_time(event, event.end_datetime)} at {event.venue.name}.\n\n"
         "Your tickets are still valid. The full details are on the event page in "
         "your Eventra account.",
     )
@@ -138,7 +142,7 @@ def send_event_postponed_notice(event, user) -> None:
         Notification.NotificationType.EVENT_UPDATED,
         "An event you booked has been postponed",
         f'"{event.title}" has been postponed. It now starts on '
-        f"{event.start_datetime:%Y-%m-%d %H:%M} UTC at {event.venue.name}.\n\n"
+        f"{_venue_time(event, event.start_datetime)} at {event.venue.name}.\n\n"
         "Your tickets are valid for the new date; download them again to see it. "
         "If you can't make it, you can ask for a full refund from your tickets page "
         f"until {REFUND_REQUEST_CUTOFF_HOURS} hours before the new start: "
@@ -180,7 +184,7 @@ def send_event_cancelled_notice(event, user) -> None:
         user,
         Notification.NotificationType.EVENT_CANCELLED,
         "An event you booked has been cancelled",
-        f'"{event.title}" on {event.start_datetime:%Y-%m-%d %H:%M} UTC has been '
+        f'"{event.title}" on {_venue_time(event, event.start_datetime)} has been '
         "cancelled. You'll get a full refund to your original payment method, and "
         "we'll email you again once it's done. You don't need to do anything.",
     )
@@ -224,7 +228,7 @@ def send_event_reminders_batch() -> int:
         event_seat__event__start_datetime__gt=now,
         event_seat__event__start_datetime__lte=now
         + timedelta(hours=REMINDER_WINDOW_HOURS),
-    ).select_related("booking__user", "event_seat__event")
+    ).select_related("booking__user", "event_seat__event__venue")
 
     pairs = {}
     for ticket in tickets:
@@ -250,8 +254,8 @@ def send_event_reminders_batch() -> int:
             _email(
                 user,
                 f"Reminder: {event.title} is coming up",
-                f'"{event.title}" starts on {event.start_datetime:%Y-%m-%d %H:%M} '
-                "UTC. Your e-tickets are in your Eventra account.",
+                f'"{event.title}" starts on {_venue_time(event, event.start_datetime)}. '
+                "Your e-tickets are in your Eventra account.",
             ).send(fail_silently=False)
         except Exception:
             logger.exception("Failed to send reminder for event %s", event_id)

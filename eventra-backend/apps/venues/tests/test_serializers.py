@@ -1,5 +1,8 @@
 import pytest
 
+from apps.events.factories import EventFactory
+
+from ..constants import COUNTRY_CODES, COUNTRY_TIME_ZONES
 from ..factories import SeatFactory, VenueFactory
 from ..serializers import (
     BulkSeatTemplateSerializer,
@@ -16,7 +19,7 @@ def _venue_payload(**overrides):
         "name": "New Arena",
         "address": "123 Main St",
         "city": "Nairobi",
-        "country": "Kenya",
+        "country": "KE",
         "capacity": 500,
     }
     payload.update(overrides)
@@ -303,6 +306,72 @@ def test_professional_venue_names_pass(name):
 )
 def test_unprofessional_venue_names_fail_in_venues_and_requests(name):
     venue = VenueSerializer(data=_venue_payload(name=name))
-    request = VenueRequestSerializer(data={"venue_name": name, "city": "Riverside"})
+    request = VenueRequestSerializer(
+        data={"venue_name": name, "city": "Riverside", "country": "GB"}
+    )
     assert not venue.is_valid() and "name" in venue.errors
     assert not request.is_valid() and "venue_name" in request.errors
+
+
+# ==================================================
+# Country and time zone
+# ==================================================
+
+
+def test_every_offered_country_has_a_time_zone():
+    assert len(COUNTRY_CODES) == len(set(COUNTRY_CODES))
+    assert all(COUNTRY_TIME_ZONES[code] for code in COUNTRY_CODES)
+
+
+def test_a_one_zone_country_fills_in_its_time_zone():
+    serializer = VenueSerializer(data=_venue_payload(country="PK", city="Lahore"))
+    assert serializer.is_valid(), serializer.errors
+    assert serializer.validated_data["time_zone"] == "Asia/Karachi"
+
+
+@pytest.mark.parametrize(
+    "place, field",
+    [
+        ({"country": "Kenya"}, "country"),
+        ({"country": "JP"}, "country"),
+        ({"country": "US"}, "time_zone"),
+        ({"country": "US", "time_zone": "Asia/Karachi"}, "time_zone"),
+        ({"country": "PK", "time_zone": "Mars/Olympus"}, "time_zone"),
+    ],
+)
+def test_country_and_time_zone_come_from_the_allow_lists(place, field):
+    serializer = VenueSerializer(data=_venue_payload(**place))
+    assert serializer.is_valid() is False
+    assert field in serializer.errors
+
+
+def test_a_multi_zone_country_takes_one_of_its_own_zones():
+    serializer = VenueSerializer(
+        data=_venue_payload(country="US", time_zone="America/Chicago")
+    )
+    assert serializer.is_valid(), serializer.errors
+
+
+def test_country_and_time_zone_freeze_once_the_venue_has_an_event():
+    venue = VenueFactory(country="US", time_zone="America/Chicago")
+    move = {"time_zone": "America/New_York"}
+    assert VenueSerializer(venue, data=move, partial=True).is_valid()
+
+    EventFactory(venue=venue, is_active=False)
+    frozen = VenueSerializer(venue, data=move, partial=True)
+    assert frozen.is_valid() is False and "country" in frozen.errors
+    assert VenueSerializer(venue, data={"capacity": 900}, partial=True).is_valid()
+
+
+def test_a_venue_request_needs_an_offered_country():
+    payload = {"venue_name": "The Grand Hall", "city": "Lahore"}
+    assert "country" in _errors(VenueRequestSerializer(data=payload))
+    assert "country" in _errors(
+        VenueRequestSerializer(data={**payload, "country": "Pakistan"})
+    )
+    assert VenueRequestSerializer(data={**payload, "country": "PK"}).is_valid()
+
+
+def _errors(serializer):
+    serializer.is_valid()
+    return serializer.errors
