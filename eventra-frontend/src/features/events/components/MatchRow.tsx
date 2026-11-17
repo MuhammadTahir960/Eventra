@@ -5,17 +5,15 @@ import type { Team } from '@/features/catalog/types'
 import type { EventRefs } from '../lookups'
 import type { EventItem } from '../types'
 import { ImageWithFallback } from '@/components/ImageWithFallback'
+import { formatDate } from '@/lib/format'
 import { initial } from '@/lib/initial'
 
-const timeFormat = new Intl.DateTimeFormat(undefined, {
-  hour: 'numeric',
-  minute: '2-digit',
-})
-const dayFormat = new Intl.DateTimeFormat(undefined, {
+const TIME: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' }
+const DAY: Intl.DateTimeFormatOptions = {
   weekday: 'short',
   day: 'numeric',
   month: 'short',
-})
+}
 
 function TeamName({ team }: { team: Team | undefined }) {
   if (!team)
@@ -56,7 +54,6 @@ export function MatchRow({
   refs: EventRefs
   showDay?: boolean
 }) {
-  const start = new Date(event.start_datetime)
   return (
     <li>
       <Link
@@ -66,10 +63,12 @@ export function MatchRow({
         <time dateTime={event.start_datetime} className="tabular text-sm">
           {showDay && (
             <span className="block text-muted-foreground">
-              {dayFormat.format(start)}
+              {formatDate(event.start_datetime, DAY, event.time_zone)}
             </span>
           )}
-          <span className="font-medium">{timeFormat.format(start)}</span>
+          <span className="font-medium">
+            {formatDate(event.start_datetime, TIME, event.time_zone)}
+          </span>
         </time>
         <span className="flex min-w-0 flex-col gap-1.5 text-[15px] font-medium sm:flex-row sm:items-center sm:gap-3">
           <TeamName team={refs.home} />

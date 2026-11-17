@@ -13,12 +13,13 @@ describe('parseFilters', () => {
   it('reads valid values', () => {
     const filters = parseFilters(
       new URLSearchParams(
-        `q=derby&category=${UUID}&city=Karachi&type=sports_match&when=past&dates=week&page=3`,
+        `q=derby&category=${UUID}&country=PK&city=Karachi&type=sports_match&when=past&dates=week&page=3`,
       ),
     )
     expect(filters).toEqual({
       search: 'derby',
       category: UUID,
+      country: 'PK',
       city: 'Karachi',
       type: 'sports_match',
       when: 'past',
@@ -30,7 +31,7 @@ describe('parseFilters', () => {
   it('drops values that fail the allow-list', () => {
     const filters = parseFilters(
       new URLSearchParams(
-        'category=not-a-uuid&type=hacked&when=x&dates=year&page=-4',
+        'category=not-a-uuid&country=Pakistan&city=Lahore&type=hacked&when=x&dates=year&page=-4',
       ),
     )
     expect(filters).toEqual(DEFAULT_FILTERS)
@@ -51,6 +52,7 @@ describe('toSearchParams', () => {
     const filters = {
       ...DEFAULT_FILTERS,
       search: 'derby',
+      country: 'PK',
       city: 'Lahore',
       when: 'past' as const,
       dates: 'weekend' as const,

@@ -141,7 +141,7 @@ export function TicketPage() {
             dateTime={event.start_datetime}
             className="tabular mt-2 block text-[15px] font-medium text-ember-deep"
           >
-            {formatDateTimeLong(event.start_datetime)}
+            {formatDateTimeLong(event.start_datetime, event.time_zone)}
           </time>
         )}
         {venue && (

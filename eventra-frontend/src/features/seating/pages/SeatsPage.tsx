@@ -256,7 +256,7 @@ export function SeatsPage() {
             {item.title}
             <br />
             <time dateTime={item.start_datetime} className="tabular">
-              {formatDateTime(item.start_datetime)}
+              {formatDateTime(item.start_datetime, item.time_zone)}
             </time>
             {venue && `, ${venue.name}`}
           </p>

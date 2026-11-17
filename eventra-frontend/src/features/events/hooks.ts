@@ -5,7 +5,7 @@ import { apiFetch } from '@/lib/api-client'
 import { isUuid } from '@/lib/ids'
 import type { Page } from '@/lib/pagination'
 import { toApiQuery, startOfHourIso, type EventFilters } from './filters'
-import type { EventItem, TicketTier } from './types'
+import type { EventItem, EventLocation, TicketTier } from './types'
 
 export function useEvents(filters: EventFilters) {
   // Stable for the life of the page so the query key doesn't change each render
@@ -21,6 +21,15 @@ export function useEvents(filters: EventFilters) {
       }),
     // Keep the old results on screen while the next page or filter loads
     placeholderData: keepPreviousData,
+  })
+}
+
+export function useEventLocations() {
+  return useQuery({
+    queryKey: ['events', 'locations'],
+    queryFn: ({ signal }) =>
+      apiFetch<EventLocation[]>('/events/locations/', { signal }),
+    staleTime: 5 * 60_000,
   })
 }
 

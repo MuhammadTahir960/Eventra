@@ -6,7 +6,7 @@ import type { EventItem } from '../types'
 export function PostponedFrom({
   event,
 }: {
-  event: Pick<EventItem, 'postponed_from'>
+  event: Pick<EventItem, 'postponed_from' | 'time_zone'>
 }) {
   if (!event.postponed_from) return null
   return (
@@ -16,7 +16,7 @@ export function PostponedFrom({
         Was{' '}
         <del>
           <time dateTime={event.postponed_from}>
-            {formatDateTime(event.postponed_from)}
+            {formatDateTime(event.postponed_from, event.time_zone)}
           </time>
         </del>
       </span>

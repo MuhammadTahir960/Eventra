@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
+import { apiFetch } from '@/lib/api-client'
+import { countryName } from '@/lib/format'
 import { fetchAllPages } from '@/lib/pagination'
-import type { Category, League, Team, Venue } from './types'
+import type { Category, Country, League, Team, Venue } from './types'
 
 // Reference data changes rarely, so keep it fresh for 5 minutes
 const REFERENCE_STALE_MS = 5 * 60_000
@@ -17,6 +19,19 @@ export function useVenues() {
     queryFn: ({ signal }) => fetchAllPages<Venue>('/venues/', {}, signal),
     staleTime: REFERENCE_STALE_MS,
     select: (venues) => ({ list: venues, byId: toMap(venues) }),
+  })
+}
+
+// The list only changes with a deploy
+export function useCountries() {
+  return useQuery({
+    queryKey: ['catalog', 'countries'],
+    queryFn: ({ signal }) => apiFetch<Country[]>('/countries/', { signal }),
+    staleTime: Infinity,
+    select: (countries) =>
+      countries
+        .map((country) => ({ ...country, name: countryName(country.code) }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
   })
 }
 

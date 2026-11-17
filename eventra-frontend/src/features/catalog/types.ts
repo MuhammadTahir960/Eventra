@@ -6,7 +6,10 @@ export interface Venue {
   name: string
   address: string
   city: string
+  // ISO 3166 code, e.g. "PK"; show it with countryName()
   country: string
+  // IANA zone, e.g. "Asia/Karachi"
+  time_zone: string
   capacity: number
   // Drives the shape of the bird's-eye seat map. Treated as a plain string
   // here; the seating feature validates it and falls back to an oval.
@@ -14,6 +17,12 @@ export interface Venue {
   photo: string | null
   created_at: string
   updated_at: string
+}
+
+// GET /countries/: the countries a venue can be in
+export interface Country {
+  code: string
+  time_zones: string[]
 }
 
 export interface Category {

@@ -35,8 +35,8 @@ function initialValues(event: EventItem): Values {
     title: event.title,
     description: event.description,
     category: event.category ?? '',
-    start: toLocalInput(event.start_datetime),
-    end: toLocalInput(event.end_datetime),
+    start: toLocalInput(event.start_datetime, event.time_zone),
+    end: toLocalInput(event.end_datetime, event.time_zone),
     maxTickets: String(event.max_tickets_per_buyer),
   }
 }
@@ -50,10 +50,10 @@ function diff(event: EventItem, values: Values): EventPatch {
     patch.description = values.description.trim()
   if (values.category !== (event.category ?? ''))
     patch.category = values.category
-  if (values.start !== toLocalInput(event.start_datetime))
-    patch.start_datetime = new Date(values.start).toISOString()
-  if (values.end !== toLocalInput(event.end_datetime))
-    patch.end_datetime = new Date(values.end).toISOString()
+  if (values.start !== toLocalInput(event.start_datetime, event.time_zone))
+    patch.start_datetime = values.start
+  if (values.end !== toLocalInput(event.end_datetime, event.time_zone))
+    patch.end_datetime = values.end
   if (Number(values.maxTickets) !== event.max_tickets_per_buyer)
     patch.max_tickets_per_buyer = Number(values.maxTickets)
   return patch
@@ -189,6 +189,9 @@ function EditForm({ event }: { event: EventItem }) {
             />
           )}
         </FormField>
+        <p className="text-sm text-muted-foreground sm:col-span-2">
+          Times are local to the venue ({event.time_zone}).
+        </p>
       </div>
 
       <FormField
