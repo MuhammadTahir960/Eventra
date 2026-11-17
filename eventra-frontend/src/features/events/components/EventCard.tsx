@@ -32,7 +32,7 @@ export function EventCard({
             dateTime={event.start_datetime}
             className="tabular text-[13px] font-medium text-ember-deep"
           >
-            {formatDateTime(event.start_datetime)}
+            {formatDateTime(event.start_datetime, event.time_zone)}
           </time>
           <PostponedFrom event={event} />
           {event.status !== 'approved' && (

@@ -1,6 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock
+from zoneinfo import ZoneInfo
 
 import pytest
 from django.db import IntegrityError
@@ -458,8 +459,10 @@ def test_running_late_emails_holders_only_when_the_day_changes(
 ):
     task = MagicMock()
     monkeypatch.setattr("apps.notifications.tasks.send_event_running_late_email", task)
-    midnight = (timezone.now() + timedelta(hours=27)).replace(
-        hour=0, minute=0, second=0, microsecond=0
+    midnight = (
+        (timezone.now() + timedelta(hours=27))
+        .astimezone(ZoneInfo("Africa/Nairobi"))
+        .replace(hour=0, minute=0, second=0, microsecond=0)
     )
     event = EventFactory(
         status=Event.Status.APPROVED,

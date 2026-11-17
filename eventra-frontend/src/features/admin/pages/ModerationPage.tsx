@@ -43,7 +43,7 @@ function PendingEvent({
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <p className="tabular text-[13px] font-medium text-ember-deep">
-            {formatDateTimeLong(event.start_datetime)}
+            {formatDateTimeLong(event.start_datetime, event.time_zone)}
           </p>
           <h2 className="mt-1 font-display text-[30px] leading-tight">
             <Link

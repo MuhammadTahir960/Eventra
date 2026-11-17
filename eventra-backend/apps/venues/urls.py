@@ -2,6 +2,7 @@ from django.urls import path
 from rest_framework.routers import SimpleRouter
 
 from .views import (
+    CountryListView,
     VenueRequestFulfilView,
     VenueRequestListCreateView,
     VenueRequestRejectView,
@@ -12,6 +13,7 @@ router = SimpleRouter()
 router.register("venues", VenueViewSet, basename="venue")
 
 urlpatterns = [
+    path("countries/", CountryListView.as_view(), name="country-list"),
     path(
         "venues/requests/",
         VenueRequestListCreateView.as_view(),

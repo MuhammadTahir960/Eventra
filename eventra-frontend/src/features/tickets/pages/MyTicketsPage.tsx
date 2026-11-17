@@ -283,7 +283,10 @@ export function MyTicketsPage() {
                           dateTime={order.event.start_datetime}
                           className="tabular text-[13px] font-medium text-ember-deep"
                         >
-                          {formatDateTimeLong(order.event.start_datetime)}
+                          {formatDateTimeLong(
+                            order.event.start_datetime,
+                            order.event.time_zone,
+                          )}
                         </time>
                         <PostponedFrom event={order.event} />
                       </span>

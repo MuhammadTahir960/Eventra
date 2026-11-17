@@ -10,7 +10,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { apiFetch, errorMessage, firstFieldErrors } from '@/lib/api-client'
-import { formatDateTime } from '@/lib/format'
+import { CountrySelect } from '@/features/catalog/CountrySelect'
+import { countryName, formatDateTime } from '@/lib/format'
 import {
   VENUE_REQUEST_STATUS,
   useCreateVenueRequest,
@@ -22,9 +23,11 @@ import { toast } from 'sonner'
 import { TableFrame } from '@/components/TableFrame'
 import { LoadingBlock } from '@/components/LoadingBlock'
 
+const BLANK_REQUEST = { venue_name: '', city: '', country: '', notes: '' }
+
 function RequestForm() {
   const create = useCreateVenueRequest()
-  const [values, setValues] = useState({ venue_name: '', city: '', notes: '' })
+  const [values, setValues] = useState(BLANK_REQUEST)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [sent, setSent] = useState(false)
 
@@ -34,6 +37,7 @@ function RequestForm() {
     if (values.venue_name.trim().length < 2)
       clientErrors.venue_name = 'Enter the venue name.'
     if (!values.city.trim()) clientErrors.city = 'Enter the city.'
+    if (!values.country) clientErrors.country = 'Choose the country.'
     setErrors(clientErrors)
     setSent(false)
     if (Object.keys(clientErrors).length > 0) return
@@ -42,11 +46,12 @@ function RequestForm() {
       {
         venue_name: values.venue_name.trim(),
         city: values.city.trim(),
+        country: values.country,
         notes: values.notes.trim(),
       },
       {
         onSuccess: () => {
-          setValues({ venue_name: '', city: '', notes: '' })
+          setValues(BLANK_REQUEST)
           setSent(true)
         },
         onError: (caught) => setErrors(firstFieldErrors(caught)),
@@ -100,6 +105,17 @@ function RequestForm() {
               maxLength={100}
               value={values.city}
               onChange={(e) => setValues({ ...values, city: e.target.value })}
+            />
+          )}
+        </FormField>
+        <FormField id="vr-country" label="Country" error={errors.country}>
+          {(control) => (
+            <CountrySelect
+              {...control}
+              value={values.country}
+              onChange={(e) =>
+                setValues({ ...values, country: e.target.value })
+              }
             />
           )}
         </FormField>
@@ -265,7 +281,7 @@ export function VenueRequestsPage({ scope }: { scope: 'organizer' | 'admin' }) {
                   <td className="min-w-48">
                     <span className="font-medium">{request.venue_name}</span>
                     <span className="block text-[13px] text-muted-foreground">
-                      {request.city}, sent{' '}
+                      {request.city}, {countryName(request.country)}, sent{' '}
                       <span className="tabular">
                         {formatDateTime(request.created_at)}
                       </span>

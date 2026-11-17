@@ -8,7 +8,7 @@ import { ButtonLink } from '@/components/ui/button-link'
 import { useAuth } from '@/features/auth/auth-store'
 import { useLeagues } from '@/features/catalog/hooks'
 import { ApiError, errorMessage } from '@/lib/api-client'
-import { formatDateTimeLong, formatMoney } from '@/lib/format'
+import { countryName, formatDateTimeLong, formatMoney } from '@/lib/format'
 import { isUuid } from '@/lib/ids'
 import { toCents } from '@/lib/money'
 import { EventMedia } from '../components/EventMedia'
@@ -112,7 +112,7 @@ export function EventDetailPage() {
                 dateTime={item.start_datetime}
                 className="tabular font-medium text-ember-deep"
               >
-                {formatDateTimeLong(item.start_datetime)}
+                {formatDateTimeLong(item.start_datetime, item.time_zone)}
               </time>
               <PostponedFrom event={item} />
               {item.status !== 'approved' && (
@@ -154,12 +154,12 @@ export function EventDetailPage() {
               <h2 className="text-sm font-medium">When</h2>
               <p className="mt-1 text-[15px] text-muted-foreground">
                 <time dateTime={item.start_datetime}>
-                  {formatDateTimeLong(item.start_datetime)}
+                  {formatDateTimeLong(item.start_datetime, item.time_zone)}
                 </time>
                 <br />
                 Ends{' '}
                 <time dateTime={item.end_datetime}>
-                  {formatDateTimeLong(item.end_datetime)}
+                  {formatDateTimeLong(item.end_datetime, item.time_zone)}
                 </time>
               </p>
             </div>
@@ -169,7 +169,7 @@ export function EventDetailPage() {
                 <p className="mt-1 text-[15px] text-muted-foreground">
                   {venue.name}
                   <br />
-                  {venue.address}, {venue.city}, {venue.country}
+                  {venue.address}, {venue.city}, {countryName(venue.country)}
                 </p>
               </div>
             )}

@@ -1,18 +1,22 @@
 import uuid
+from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from apps.categories.factories import CategoryFactory
 from apps.common.constants import Roles
 from apps.events.factories import EventFactory, TicketTierFactory
 from apps.seating.factories import EventSeatFactory
 from apps.users.factories import UserFactory
 from apps.venues.factories import VenueRequestFactory
 from apps.venues.services import DuplicateSeatError
-from tests.helpers import auth_client, results
+from tests.helpers import auth_client, race, results, wall_clock
 
+from ..constants import COUNTRY_CODES
 from ..factories import SeatFactory, VenueFactory
 from ..models import Venue, VenueRequest
 
@@ -29,7 +33,7 @@ def _venue_payload(**overrides):
         "name": "New Arena",
         "address": "123 Main St",
         "city": "Nairobi",
-        "country": "Kenya",
+        "country": "KE",
         "capacity": 500,
     }
     payload.update(overrides)
@@ -432,7 +436,12 @@ def test_venue_request_notes_are_length_capped():
     organizer_user = UserFactory(role=Roles.ORGANIZER)
     response = auth_client(organizer_user).post(
         "/venues/requests/",
-        {"venue_name": "Arena", "city": "Karachi", "notes": "x" * 2001},
+        {
+            "venue_name": "Arena",
+            "city": "Karachi",
+            "country": "PK",
+            "notes": "x" * 2001,
+        },
         format="json",
     )
     assert response.status_code == 400
@@ -447,7 +456,7 @@ def test_venue_request_submissions_are_throttled(settings):
     codes = [
         client.post(
             "/venues/requests/",
-            {"venue_name": f"Arena {i}", "city": "Karachi"},
+            {"venue_name": f"Arena {i}", "city": "Karachi", "country": "PK"},
             format="json",
         ).status_code
         for i in range(12)
@@ -563,6 +572,7 @@ class TestCreateVenueRequest:
         payload = {
             "venue_name": "The Grand Hall",
             "city": "Karachi",
+            "country": "PK",
             "notes": "500-seat capacity",
         }
         response = client.post(self.url, payload)
@@ -577,7 +587,7 @@ class TestCreateVenueRequest:
         self, organizer_user
     ):
         client = auth_client(organizer_user)
-        payload = {"venue_name": "Same Venue", "city": "Karachi"}
+        payload = {"venue_name": "Same Venue", "city": "Karachi", "country": "PK"}
         first = client.post(self.url, payload)
         second = client.post(self.url, payload)
         assert first.status_code == status.HTTP_201_CREATED
@@ -587,11 +597,15 @@ class TestCreateVenueRequest:
     @pytest.mark.parametrize("role", [Roles.ADMIN, Roles.ATTENDEE])
     def test_only_organizers_can_create(self, role):
         client = auth_client(UserFactory(role=role))
-        response = client.post(self.url, {"venue_name": "X", "city": "Y"})
+        response = client.post(
+            self.url, {"venue_name": "X", "city": "Y", "country": "PK"}
+        )
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_anonymous_cannot_create(self, api_client):
-        response = api_client.post(self.url, {"venue_name": "X", "city": "Y"})
+        response = api_client.post(
+            self.url, {"venue_name": "X", "city": "Y", "country": "PK"}
+        )
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
     def test_requested_by_cannot_be_spoofed(self, organizer_user, other_organizer):
@@ -601,6 +615,7 @@ class TestCreateVenueRequest:
             {
                 "venue_name": "X",
                 "city": "Y",
+                "country": "PK",
                 "requested_by": str(other_organizer.pk),
             },
         )
@@ -730,3 +745,52 @@ class TestFulfilVenueRequest:
         venue_request = VenueRequestFactory()
         response = auth_client(organizer_user).post(self.url(venue_request))
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+def test_countries_are_public_and_list_each_countrys_time_zones(api_client):
+    response = api_client.get("/countries/")
+    assert response.status_code == status.HTTP_200_OK
+    assert "max-age=86400" in response["Cache-Control"]
+    countries = {row["code"]: row["time_zones"] for row in response.data}
+    assert set(countries) == set(COUNTRY_CODES)
+    assert countries["PK"] == ["Asia/Karachi"]
+    assert "America/Chicago" in countries["US"]
+    assert "JP" not in countries
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_zone_move_racing_an_event_being_created_never_leaves_the_wrong_time():
+    admin = UserFactory(role=Roles.ADMIN)
+    organizer = UserFactory(role=Roles.ORGANIZER)
+    category = CategoryFactory()
+    start = timezone.now() + timedelta(days=10)
+    typed = wall_clock(start, "Australia/Sydney")
+
+    for _ in range(8):
+        venue = VenueFactory(country="AU", time_zone="Australia/Sydney")
+        moved, created = race(
+            lambda venue=venue: auth_client(admin).patch(
+                f"/venues/{venue.id}/", {"time_zone": "Australia/Perth"}, format="json"
+            ),
+            lambda venue=venue: auth_client(organizer).post(
+                "/events/",
+                {
+                    "venue": str(venue.id),
+                    "category": str(category.id),
+                    "title": "Harbour Night",
+                    "description": "Details here.",
+                    "event_type": "general",
+                    "is_seated": True,
+                    "start_datetime": typed,
+                    "end_datetime": wall_clock(
+                        start + timedelta(hours=2), "Australia/Sydney"
+                    ),
+                },
+                format="json",
+            ),
+        )
+        assert created.status_code == status.HTTP_201_CREATED
+        venue.refresh_from_db()
+        event = venue.events.get()
+        assert wall_clock(event.start_datetime, venue.time_zone) == typed
+        assert moved.status_code in (status.HTTP_200_OK, status.HTTP_400_BAD_REQUEST)

@@ -1,4 +1,7 @@
 import django_filters
+from django.db import transaction
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_control
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.decorators import action
@@ -11,6 +14,7 @@ from apps.common.mixins import SoftDeleteDestroyMixin, SoftDeleteRestoreMixin
 from apps.common.permissions import IsAdmin, IsAdminForWrite, IsOrganizer, has_role
 from apps.events.services import find_blocking_upcoming_event
 
+from .constants import COUNTRIES
 from .models import Venue, VenueRequest
 from .serializers import (
     BulkSeatTemplateSerializer,
@@ -29,6 +33,14 @@ from .services import (
     fulfil_venue_request,
     reject_venue_request,
 )
+
+
+class CountryListView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    @method_decorator(cache_control(public=True, max_age=86400))
+    def get(self, request):
+        return Response(COUNTRIES)
 
 
 class VenueFilterSet(django_filters.FilterSet):
@@ -66,6 +78,10 @@ class VenueViewSet(
         if self.include_inactive():
             return Venue.all_objects.all()
         return Venue.objects.all()
+
+    @transaction.atomic
+    def update(self, request, *args, **kwargs):
+        return super().update(request, *args, **kwargs)
 
     def perform_restore_guard(self, instance):
         if Venue.objects.filter(

@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils'
 import { EventCard, EventCardSkeleton } from '../components/EventCard'
 import { EventFiltersBar } from '../components/EventFiltersBar'
 import { parseFilters, toSearchParams, type EventFilters } from '../filters'
-import { useEvents } from '../hooks'
+import { useEventLocations, useEvents } from '../hooks'
 import { bySoonest, useEventLookups } from '../lookups'
 import { usePageTitle } from '@/lib/use-page-title'
 
@@ -20,13 +20,8 @@ export function EventsPage() {
 
   const events = useEvents(filters)
   const results = events.data?.results
-  const { resolve, venues, categories } = useEventLookups(results)
-
-  const cities = useMemo(
-    () =>
-      [...new Set((venues.data?.list ?? []).map((venue) => venue.city))].sort(),
-    [venues.data],
-  )
+  const { resolve, categories } = useEventLookups(results)
+  const locations = useEventLocations()
 
   // Upcoming reads soonest first; past keeps the API's newest-first order
   const ordered = useMemo(() => {
@@ -58,7 +53,7 @@ export function EventsPage() {
       <EventFiltersBar
         filters={filters}
         categories={categories.data?.list ?? []}
-        cities={cities}
+        locations={locations.data ?? []}
         autoFocusSearch={params.get('focus') === 'search'}
         onChange={updateFilters}
       />

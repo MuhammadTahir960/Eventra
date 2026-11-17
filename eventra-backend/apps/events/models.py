@@ -1,4 +1,5 @@
 import uuid
+from zoneinfo import ZoneInfo
 
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVector
@@ -121,6 +122,13 @@ class Event(SoftDeleteModel):
             slug = f"{base}-{uuid.uuid4().hex[:6]}"
             if not Event.all_objects.filter(slug=slug).exists():
                 return slug
+
+    @property
+    def time_zone(self) -> str:
+        return self.venue.time_zone if self.venue_id else "UTC"
+
+    def local_time(self, moment):
+        return moment.astimezone(ZoneInfo(self.time_zone))
 
     def save(self, *args, **kwargs):
         is_new = self._state.adding

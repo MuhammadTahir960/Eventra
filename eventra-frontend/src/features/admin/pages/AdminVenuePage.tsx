@@ -7,12 +7,14 @@ import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
-import { useVenues } from '@/features/catalog/hooks'
+import { CountrySelect } from '@/features/catalog/CountrySelect'
+import { useCountries, useVenues } from '@/features/catalog/hooks'
 import type { Venue } from '@/features/catalog/types'
 import { VenueMapPreview } from '@/features/seating/components/VenueMapPreview'
 import { useVenueTemplate } from '@/features/seating/hooks'
 import type { LayoutSeatInput } from '@/features/seating/layout/layout'
 import { apiFetch, errorMessage, firstFieldErrors } from '@/lib/api-client'
+import { countryName } from '@/lib/format'
 import { isUuid } from '@/lib/ids'
 import {
   buildTemplate,
@@ -42,9 +44,14 @@ function DetailsForm({ venue }: { venue: Venue | undefined }) {
     address: venue?.address ?? '',
     city: venue?.city ?? '',
     country: venue?.country ?? '',
+    time_zone: venue?.time_zone ?? '',
     capacity: venue ? String(venue.capacity) : '',
     layout_shape: venue?.layout_shape ?? 'oval',
   })
+  const countries = useCountries()
+  const zonesOf = (code: string) =>
+    countries.data?.find((country) => country.code === code)?.time_zones ?? []
+  const zones = zonesOf(values.country)
   const [photo, setPhoto] = useState<File | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -84,7 +91,8 @@ function DetailsForm({ venue }: { venue: Venue | undefined }) {
       clientErrors.name = 'Enter the venue name.'
     if (!values.address.trim()) clientErrors.address = 'Enter the address.'
     if (!values.city.trim()) clientErrors.city = 'Enter the city.'
-    if (!values.country.trim()) clientErrors.country = 'Enter the country.'
+    if (!values.country) clientErrors.country = 'Choose the country.'
+    if (!values.time_zone) clientErrors.time_zone = 'Choose the time zone.'
     const capacity = Number(values.capacity)
     if (!Number.isInteger(capacity) || capacity < 1)
       clientErrors.capacity = 'Enter a whole number of seats.'
@@ -127,8 +135,47 @@ function DetailsForm({ venue }: { venue: Venue | undefined }) {
         {text('address', 'Address', 255)}
         <div className="grid gap-5 sm:grid-cols-2">
           {text('city', 'City', 100)}
-          {text('country', 'Country', 100)}
+          <FormField id="venue-country" label="Country" error={errors.country}>
+            {(control) => (
+              <CountrySelect
+                {...control}
+                value={values.country}
+                onChange={(e) => {
+                  const next = zonesOf(e.target.value)
+                  setValues({
+                    ...values,
+                    country: e.target.value,
+                    time_zone: next.length === 1 ? next[0] : '',
+                  })
+                }}
+              />
+            )}
+          </FormField>
         </div>
+        <FormField
+          id="venue-time-zone"
+          label="Time zone"
+          hint="Event times at this venue are entered and shown in it. It can't change once the venue has events."
+          error={errors.time_zone}
+        >
+          {(control) => (
+            <NativeSelect
+              {...control}
+              value={values.time_zone}
+              disabled={zones.length < 2}
+              onChange={(e) =>
+                setValues({ ...values, time_zone: e.target.value })
+              }
+            >
+              <option value="">Select a time zone</option>
+              {zones.map((zone) => (
+                <option key={zone} value={zone}>
+                  {zone.replaceAll('_', ' ')}
+                </option>
+              ))}
+            </NativeSelect>
+          )}
+        </FormField>
         <div className="grid gap-5 sm:grid-cols-2">
           <FormField
             id="venue-capacity"
@@ -466,7 +513,9 @@ export function AdminVenuePage() {
       <PageHeader
         size="md"
         title={venue ? venue.name : 'Add venue'}
-        description={venue ? `${venue.city}, ${venue.country}` : undefined}
+        description={
+          venue ? `${venue.city}, ${countryName(venue.country)}` : undefined
+        }
       />
       {/* Keyed by id, not updated_at: a save must not remount the form and drop its "saved" notice */}
       <DetailsForm key={venue?.id ?? 'new'} venue={venue} />

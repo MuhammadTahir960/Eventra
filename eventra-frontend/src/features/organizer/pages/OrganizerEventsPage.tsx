@@ -43,7 +43,7 @@ export function RunningLateButton({ event }: { event: EventItem }) {
       open={open}
       onOpenChange={(next) => {
         setOpen(next)
-        if (next) setEnd(toLocalInput(event.end_datetime))
+        if (next) setEnd(toLocalInput(event.end_datetime, event.time_zone))
         else runLate.reset()
         setMissing(false)
       }}
@@ -66,7 +66,7 @@ export function RunningLateButton({ event }: { event: EventItem }) {
       pending={runLate.isPending}
       onConfirm={() => {
         if (!end) return setMissing(true)
-        runLate.mutate(new Date(end).toISOString(), {
+        runLate.mutate(end, {
           onSuccess: () => {
             setOpen(false)
             toast.success('End time updated')
@@ -84,7 +84,7 @@ export function RunningLateButton({ event }: { event: EventItem }) {
             {...control}
             type="datetime-local"
             value={end}
-            min={toLocalInput(event.end_datetime)}
+            min={toLocalInput(event.end_datetime, event.time_zone)}
             onChange={(e) => {
               setEnd(e.target.value)
               setMissing(false)
@@ -92,6 +92,9 @@ export function RunningLateButton({ event }: { event: EventItem }) {
           />
         )}
       </FormField>
+      <p className="mt-2 text-sm text-muted-foreground">
+        Times are local to the venue ({event.time_zone}).
+      </p>
       {runLate.isError && !fieldError && (
         <Notice tone="error" className="mt-3">
           {errorMessage(runLate.error, 'The end time could not be changed.')}
@@ -118,8 +121,8 @@ export function PostponeButton({ event }: { event: EventItem }) {
       onOpenChange={(next) => {
         setOpen(next)
         if (next) {
-          setStart(toLocalInput(event.start_datetime))
-          setEnd(toLocalInput(event.end_datetime))
+          setStart(toLocalInput(event.start_datetime, event.time_zone))
+          setEnd(toLocalInput(event.end_datetime, event.time_zone))
         } else postpone.reset()
         setMissing(false)
       }}
@@ -143,8 +146,8 @@ export function PostponeButton({ event }: { event: EventItem }) {
         if (!start || !end) return setMissing(true)
         postpone.mutate(
           {
-            start_datetime: new Date(start).toISOString(),
-            end_datetime: new Date(end).toISOString(),
+            start_datetime: start,
+            end_datetime: end,
           },
           {
             onSuccess: () => {
@@ -168,7 +171,7 @@ export function PostponeButton({ event }: { event: EventItem }) {
               {...control}
               type="datetime-local"
               value={start}
-              min={toLocalInput(event.start_datetime)}
+              min={toLocalInput(event.start_datetime, event.time_zone)}
               onChange={(e) => {
                 setStart(e.target.value)
                 setMissing(false)
@@ -194,6 +197,9 @@ export function PostponeButton({ event }: { event: EventItem }) {
             />
           )}
         </FormField>
+        <p className="text-sm text-muted-foreground">
+          Times are local to the venue ({event.time_zone}).
+        </p>
       </div>
       {postpone.isError && !startError && !endError && (
         <Notice tone="error" className="mt-3">

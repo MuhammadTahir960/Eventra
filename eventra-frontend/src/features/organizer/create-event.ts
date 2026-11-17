@@ -253,8 +253,9 @@ export async function submitEvent(
             : { event_type: 'general' }),
           is_seated: true,
           max_tickets_per_buyer: Number(draft.maxTickets),
-          start_datetime: new Date(draft.start).toISOString(),
-          end_datetime: new Date(draft.end).toISOString(),
+          // wall-clock time at the venue; the server reads it in the venue's zone
+          start_datetime: draft.start,
+          end_datetime: draft.end,
         },
       })
       progress.eventId = created.id

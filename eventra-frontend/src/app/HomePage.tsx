@@ -131,7 +131,10 @@ export function HomePage() {
                   dateTime={featured.start_datetime}
                   className="tabular font-medium text-ember-deep"
                 >
-                  {formatDateTimeLong(featured.start_datetime)}
+                  {formatDateTimeLong(
+                    featured.start_datetime,
+                    featured.time_zone,
+                  )}
                 </time>
                 {resolve(featured).venue && (
                   <span className="text-muted-foreground">

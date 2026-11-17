@@ -10,19 +10,21 @@ import { DEFAULT_FILTERS } from '../constants'
 import { useEvents } from '../hooks'
 import { bySoonest, useEventLookups } from '../lookups'
 import type { EventItem } from '../types'
+import { formatDate } from '@/lib/format'
 import { usePageTitle } from '@/lib/use-page-title'
 
-const dayHeading = new Intl.DateTimeFormat(undefined, {
+const DAY_HEADING: Intl.DateTimeFormatOptions = {
   weekday: 'long',
   day: 'numeric',
   month: 'long',
-})
+}
 
-// Fixtures grouped by local calendar day, like a printed programme
+// Fixtures grouped by the calendar day at their venue, like a printed
+// programme. The heading text is the group's key.
 function groupByDay(events: EventItem[]): [string, EventItem[]][] {
   const groups = new Map<string, EventItem[]>()
   for (const item of events) {
-    const key = new Date(item.start_datetime).toDateString()
+    const key = formatDate(item.start_datetime, DAY_HEADING, item.time_zone)
     groups.set(key, [...(groups.get(key) ?? []), item])
   }
   return [...groups.entries()]
@@ -78,10 +80,8 @@ export function SportsPage() {
       ) : (
         <>
           {days.map(([key, items]) => (
-            <section key={key} aria-label={dayHeading.format(new Date(key))}>
-              <h2 className="pb-2 text-sm font-medium">
-                {dayHeading.format(new Date(key))}
-              </h2>
+            <section key={key} aria-label={key}>
+              <h2 className="pb-2 text-sm font-medium">{key}</h2>
               <ul className="border-t border-ink">
                 {items.map((item) => (
                   <MatchRow key={item.id} event={item} refs={resolve(item)} />

@@ -12,7 +12,8 @@ class VenueFactory(DjangoModelFactory):
     name = factory.Sequence(lambda n: f"Venue {n}")
     address = factory.Faker("street_address")
     city = "Nairobi"
-    country = "Kenya"
+    country = "KE"
+    time_zone = "Africa/Nairobi"
     capacity = 100
     is_active = True
 
@@ -34,5 +35,6 @@ class VenueRequestFactory(DjangoModelFactory):
     requested_by = factory.SubFactory(UserFactory, role="organizer")
     venue_name = factory.Sequence(lambda n: f"Requested Venue {n}")
     city = "Nairobi"
+    country = "KE"
     notes = ""
     status = VenueRequest.Status.PENDING

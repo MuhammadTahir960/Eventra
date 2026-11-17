@@ -16,4 +16,5 @@ qrcode==8.2
 redis==8.1.0
 requests==2.34.2
 stripe==15.6.1
+tzdata==2026.4
 weasyprint==70.0

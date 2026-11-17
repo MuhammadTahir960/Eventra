@@ -19,6 +19,7 @@ import { VenueMapPreview } from '@/features/seating/components/VenueMapPreview'
 import { useVenueTemplate } from '@/features/seating/hooks'
 import { summarizeSections } from '@/features/seating/layout/summary'
 import { ApiError, errorMessage, firstFieldErrors } from '@/lib/api-client'
+import { countryName, nowAt, toLocalInput } from '@/lib/format'
 import { isUuid } from '@/lib/ids'
 import { TierEditor } from '../components/TierEditor'
 import {
@@ -73,12 +74,6 @@ const SERVER_FIELD: Record<string, string> = {
   away_team: 'away_team',
 }
 
-// "2026-10-12T18:30" in the viewer's local time, for the picker's minimum
-function localInputValue(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
-}
-
 function blankDraft(): EventDraft {
   return {
     categoryId: '',
@@ -107,6 +102,10 @@ export function CreateEventPage() {
   const requested = params.get('venue')
   const venue = isUuid(requested) ? venues.data?.byId.get(requested) : undefined
   const template = useVenueTemplate(venue?.id)
+  // The pickers' minimum: now, on the venue's clock
+  const venueNow = venue
+    ? toLocalInput(new Date().toISOString(), venue.time_zone)
+    : undefined
 
   const [draft, setDraft] = useState<EventDraft>(blankDraft)
   const [activeKey, setActiveKey] = useState(() => draft.tiers[0].key)
@@ -265,7 +264,7 @@ export function CreateEventPage() {
     const found = validateDraft(
       draft,
       sectionNames,
-      new Date(),
+      venue ? nowAt(venue.time_zone) : new Date(),
       isAdmin ? 0 : 24,
     )
     setErrors(found)
@@ -369,7 +368,7 @@ export function CreateEventPage() {
                 {venue.name}
               </h2>
               <p className="text-sm text-muted-foreground">
-                {venue.address}, {venue.city}, {venue.country}
+                {venue.address}, {venue.city}, {countryName(venue.country)}
               </p>
               {template.isSuccess && seatCount > 0 && (
                 <p className="mt-1 text-sm">
@@ -653,7 +652,7 @@ export function CreateEventPage() {
                         {...control}
                         type="datetime-local"
                         value={draft.start}
-                        min={localInputValue(new Date())}
+                        min={venueNow}
                         disabled={locked}
                         onChange={(event) =>
                           patch({ start: event.target.value })
@@ -667,13 +666,18 @@ export function CreateEventPage() {
                         {...control}
                         type="datetime-local"
                         value={draft.end}
-                        min={draft.start || localInputValue(new Date())}
+                        min={draft.start || venueNow}
                         disabled={locked}
                         onChange={(event) => patch({ end: event.target.value })}
                       />
                     )}
                   </FormField>
                 </div>
+                {venue && (
+                  <p className="text-sm text-muted-foreground">
+                    Times are local to the venue ({venue.time_zone}).
+                  </p>
+                )}
               </div>
 
               <TierEditor

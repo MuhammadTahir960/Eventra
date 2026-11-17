@@ -15,7 +15,7 @@ from apps.seating.models import EventSeat
 from apps.tickets.factories import TicketFactory
 from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
-from apps.venues.factories import SeatFactory
+from apps.venues.factories import SeatFactory, VenueFactory
 from tests.helpers import paid_booking
 
 from ..models import Notification
@@ -54,6 +54,21 @@ class TestEventBuyerNotices:
         notification = Notification.objects.get(event=event)
         assert notification.type == Notification.NotificationType.EVENT_UPDATED
         assert notification.status == Notification.Status.SENT
+
+    def test_notices_give_the_start_in_the_venues_local_time(self):
+        start = (timezone.now() + timedelta(days=5)).replace(
+            hour=13, minute=0, second=0, microsecond=0
+        )
+        event = EventFactory(
+            status="approved",
+            venue=VenueFactory(country="PK", time_zone="Asia/Karachi"),
+            start_datetime=start,
+            end_datetime=start + timedelta(hours=2),
+        )
+
+        send_event_updated_notice(event, UserFactory())
+
+        assert f"{start:%Y-%m-%d} 18:00 PKT" in mail.outbox[0].body
 
     def test_cancelled_notice_promises_a_refund(self):
         event = EventFactory(status="cancelled", title="Jazz Night")

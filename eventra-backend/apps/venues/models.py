@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.validators import (
     MaxValueValidator,
     MinLengthValidator,
@@ -14,6 +15,10 @@ from apps.common.validators import (
     validate_image_upload_size,
     validate_proper_name,
 )
+
+from .constants import COUNTRY_CODES, COUNTRY_TIME_ZONES
+
+COUNTRY_CHOICES = [(code, code) for code in COUNTRY_CODES]
 
 
 class Venue(SoftDeleteModel):
@@ -31,7 +36,8 @@ class Venue(SoftDeleteModel):
     city = models.CharField(
         max_length=100, db_index=True, validators=[validate_proper_name]
     )
-    country = models.CharField(max_length=100, validators=[validate_proper_name])
+    country = models.CharField(max_length=2, choices=COUNTRY_CHOICES)
+    time_zone = models.CharField(max_length=64)
     capacity = models.PositiveIntegerField(
         validators=[MinValueValidator(1), MaxValueValidator(150_000)]
     )
@@ -59,6 +65,12 @@ class Venue(SoftDeleteModel):
 
     def __str__(self) -> str:
         return f"{self.name} — ({self.city}, {self.country})"
+
+    def clean(self):
+        if self.time_zone not in COUNTRY_TIME_ZONES.get(self.country, ()):
+            raise ValidationError(
+                {"time_zone": "Choose a time zone in the venue's country."}
+            )
 
 
 class Seat(UUIDBaseModel):
@@ -95,6 +107,7 @@ class VenueRequest(UUIDBaseModel):
     )
     venue_name = models.CharField(max_length=200, validators=[validate_display_name])
     city = models.CharField(max_length=100, validators=[validate_proper_name])
+    country = models.CharField(max_length=2, choices=COUNTRY_CHOICES)
     notes = models.TextField(blank=True, default="")
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.PENDING
@@ -108,4 +121,4 @@ class VenueRequest(UUIDBaseModel):
         ordering = ["created_at"]
 
     def __str__(self) -> str:
-        return f"{self.venue_name} ({self.city}) — {self.status}"
+        return f"{self.venue_name} ({self.city}, {self.country}) — {self.status}"

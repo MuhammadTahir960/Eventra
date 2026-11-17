@@ -12,6 +12,9 @@ export type EventDates = '' | 'weekend' | 'week' | 'month'
 export interface EventFilters {
   search: string
   category: string
+  // ISO country code; `city` is only used together with it, because the same
+  // city name exists in several countries
+  country: string
   city: string
   type: EventType | ''
   when: EventWhen
@@ -26,11 +29,16 @@ export function parseFilters(params: URLSearchParams): EventFilters {
   const category = params.get('category') ?? ''
   const page = Number(params.get('page'))
   const dates = params.get('dates') ?? ''
+  const country = params.get('country') ?? ''
+  const hasCountry = /^[A-Z]{2}$/.test(country)
 
   return {
     search: (params.get('q') ?? '').slice(0, MAX_TEXT_LENGTH),
     category: isUuid(category) ? category : '',
-    city: (params.get('city') ?? '').slice(0, MAX_TEXT_LENGTH),
+    country: hasCountry ? country : '',
+    city: hasCountry
+      ? (params.get('city') ?? '').slice(0, MAX_TEXT_LENGTH)
+      : '',
     type: type === 'general' || type === 'sports_match' ? type : '',
     when: params.get('when') === 'past' ? 'past' : 'upcoming',
     dates: DATE_PRESETS.includes(dates) ? (dates as EventDates) : '',
@@ -43,7 +51,8 @@ export function toSearchParams(filters: EventFilters): URLSearchParams {
   const params = new URLSearchParams()
   if (filters.search) params.set('q', filters.search)
   if (filters.category) params.set('category', filters.category)
-  if (filters.city) params.set('city', filters.city)
+  if (filters.country) params.set('country', filters.country)
+  if (filters.country && filters.city) params.set('city', filters.city)
   if (filters.type) params.set('type', filters.type)
   if (filters.when !== 'upcoming') params.set('when', filters.when)
   if (filters.dates) params.set('dates', filters.dates)
@@ -56,6 +65,7 @@ export function toApiQuery(filters: EventFilters, nowIso: string) {
   return {
     search: filters.search.trim(),
     category: filters.category,
+    country: filters.country,
     city: filters.city,
     event_type: filters.type,
     page: filters.page,

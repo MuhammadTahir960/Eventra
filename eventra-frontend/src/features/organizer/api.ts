@@ -295,6 +295,7 @@ export interface VenueRequest {
   requested_by: string
   venue_name: string
   city: string
+  country: string
   notes: string
   status: VenueRequestStatus
   admin_notes: string
@@ -323,8 +324,9 @@ export function useVenueRequests() {
 export function useCreateVenueRequest() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (body: Pick<VenueRequest, 'venue_name' | 'city' | 'notes'>) =>
-      apiFetch<VenueRequest>('/venues/requests/', { method: 'POST', body }),
+    mutationFn: (
+      body: Pick<VenueRequest, 'venue_name' | 'city' | 'country' | 'notes'>,
+    ) => apiFetch<VenueRequest>('/venues/requests/', { method: 'POST', body }),
     onSuccess: () =>
       void client.invalidateQueries({ queryKey: ['venue-requests'] }),
   })

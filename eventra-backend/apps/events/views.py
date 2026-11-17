@@ -1,7 +1,8 @@
 import django_filters
 from django.contrib.postgres.search import SearchQuery, SearchVector
 from django.db import transaction
-from django.db.models import Exists, OuterRef
+from django.db.models import Exists, OuterRef, Q
+from django.utils import timezone
 from rest_framework import generics, permissions, status, views, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotAuthenticated, PermissionDenied
@@ -18,6 +19,7 @@ from apps.common.permissions import (
     has_role,
 )
 from apps.payments.tasks import refund_event_bookings_task, retry_event_refunds_task
+from apps.venues.models import COUNTRY_CHOICES
 
 from .models import EVENT_SEARCH_CONFIG, Event, TicketTier
 from .serializers import (
@@ -61,6 +63,9 @@ class EventFilterSet(django_filters.FilterSet):
     city = django_filters.CharFilter(
         field_name="venue__city", lookup_expr="iexact", max_length=100
     )
+    country = django_filters.ChoiceFilter(
+        field_name="venue__country", choices=COUNTRY_CHOICES
+    )
     status = django_filters.ChoiceFilter(choices=Event.Status.choices)
     date_from = django_filters.DateTimeFilter(
         field_name="start_datetime", lookup_expr="gte"
@@ -79,6 +84,7 @@ class EventFilterSet(django_filters.FilterSet):
             "event_type",
             "category",
             "city",
+            "country",
             "status",
             "date_from",
             "date_to",
@@ -164,7 +170,7 @@ class EventViewSet(
         return visible_events_for_user(user).order_by("-start_datetime", "id")
 
     def get_permissions(self):
-        if self.action in ("list", "retrieve"):
+        if self.action in ("list", "retrieve", "locations"):
             return [permissions.AllowAny()]
         if self.action == "create":
             return [permissions.IsAuthenticated(), (IsOrganizer | IsAdmin)()]
@@ -179,6 +185,10 @@ class EventViewSet(
         ):
             return [permissions.IsAuthenticated(), IsOwnerOrAdmin()]
         return [perm() for perm in self.permission_classes]
+
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
@@ -211,6 +221,22 @@ class EventViewSet(
         except DuplicateEventSlugError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         return None
+
+    @action(detail=False, methods=["get"], filterset_class=None, pagination_class=None)
+    def locations(self, request):
+        places = (
+            visible_events_for_user(None)
+            .filter(
+                Q(status=Event.Status.COMPLETED) | Q(start_datetime__gt=timezone.now()),
+                venue__isnull=False,
+            )
+            .values_list("venue__country", "venue__city")
+            .distinct()
+            .order_by("venue__country", "venue__city")
+        )
+        return Response(
+            [{"country": country, "city": city} for country, city in places]
+        )
 
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
@@ -246,7 +272,7 @@ class EventViewSet(
     @action(detail=True, methods=["post"], url_path="extend-end")
     def extend_end(self, request, pk=None):
         event = self.get_object()
-        serializer = RunningLateSerializer(data=request.data)
+        serializer = RunningLateSerializer(data=request.data, context={"event": event})
         serializer.is_valid(raise_exception=True)
 
         try:
@@ -361,6 +387,7 @@ class EventPendingListView(generics.ListAPIView):
     def get_queryset(self):
         return (
             Event.objects.filter(status=Event.Status.PENDING_APPROVAL)
+            .select_related("venue")
             .annotate(has_paid_bookings=Exists(paid_bookings(OuterRef("pk"))))
             .order_by("created_at")
         )

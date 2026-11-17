@@ -2,14 +2,16 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { ArrowDown01Icon, Search01Icon } from '@hugeicons/core-free-icons'
 import type { FormEvent, ReactNode } from 'react'
 import type { Category } from '@/features/catalog/types'
+import { countryName } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { type EventDates, type EventFilters, type EventWhen } from '../filters'
 import { DEFAULT_FILTERS } from '../constants'
+import type { EventLocation } from '../types'
 
 interface EventFiltersBarProps {
   filters: EventFilters
   categories: Category[]
-  cities: string[]
+  locations: EventLocation[]
   autoFocusSearch?: boolean
   // Called with only the fields that changed; the page resets to 1
   onChange: (changes: Partial<EventFilters>) => void
@@ -69,7 +71,7 @@ function PillSelect({
 export function EventFiltersBar({
   filters,
   categories,
-  cities,
+  locations,
   autoFocusSearch = false,
   onChange,
 }: EventFiltersBarProps) {
@@ -79,10 +81,21 @@ export function EventFiltersBar({
     onChange({ search: typeof value === 'string' ? value.trim() : '' })
   }
 
+  // Cities grouped under their country, countries by name
+  const citiesByCountry = new Map<string, string[]>()
+  for (const place of locations)
+    citiesByCountry.set(place.country, [
+      ...(citiesByCountry.get(place.country) ?? []),
+      place.city,
+    ])
+  const countries = [...citiesByCountry].sort((a, b) =>
+    countryName(a[0]).localeCompare(countryName(b[0])),
+  )
+
   const hasFilters =
     filters.search ||
     filters.category ||
-    filters.city ||
+    filters.country ||
     filters.type ||
     filters.dates
 
@@ -173,16 +186,29 @@ export function EventFiltersBar({
         )}
 
         <PillSelect
-          id="filter-city"
-          label="City"
-          value={filters.city}
-          onChange={(city) => onChange({ city })}
+          id="filter-location"
+          label="Location"
+          value={
+            filters.city
+              ? `${filters.country}:${filters.city}`
+              : filters.country
+          }
+          onChange={(place) => {
+            // "PK" is a whole country, "PK:Lahore" one city in it
+            const [country, ...city] = place.split(':')
+            onChange({ country, city: city.join(':') })
+          }}
         >
-          <option value="">All cities</option>
-          {cities.map((city) => (
-            <option key={city} value={city}>
-              {city}
-            </option>
+          <option value="">Anywhere</option>
+          {countries.map(([code, cities]) => (
+            <optgroup key={code} label={countryName(code)}>
+              <option value={code}>All of {countryName(code)}</option>
+              {cities.map((city) => (
+                <option key={city} value={`${code}:${city}`}>
+                  {city}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </PillSelect>
 
@@ -205,6 +231,7 @@ export function EventFiltersBar({
               onChange({
                 search: DEFAULT_FILTERS.search,
                 category: DEFAULT_FILTERS.category,
+                country: DEFAULT_FILTERS.country,
                 city: DEFAULT_FILTERS.city,
                 type: DEFAULT_FILTERS.type,
                 dates: DEFAULT_FILTERS.dates,

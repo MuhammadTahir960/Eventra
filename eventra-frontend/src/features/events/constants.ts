@@ -5,6 +5,7 @@ export const DATE_PRESETS: readonly string[] = ['weekend', 'week', 'month']
 export const DEFAULT_FILTERS: EventFilters = {
   search: '',
   category: '',
+  country: '',
   city: '',
   type: '',
   when: 'upcoming',

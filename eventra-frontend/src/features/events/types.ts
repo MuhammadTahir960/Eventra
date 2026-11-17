@@ -23,8 +23,10 @@ export interface EventItem {
   rejection_reason?: string
   is_seated: boolean
   max_tickets_per_buyer: number
+  // Instants (UTC). Shown, and written, as the wall-clock time in `time_zone`
   start_datetime: string
   end_datetime: string
+  time_zone: string
   // Set when the event is marked completed; payouts open 24h later
   completed_at: string | null
   // The first start date, kept when the event is postponed; null otherwise
@@ -32,6 +34,12 @@ export interface EventItem {
   is_active: boolean
   created_at: string
   updated_at: string
+}
+
+// GET /events/locations/: a place that has events on the public lists
+export interface EventLocation {
+  country: string
+  city: string
 }
 
 // GET /events/{id}/ticket-tiers/ returns a plain array (not paginated)

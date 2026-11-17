@@ -48,7 +48,12 @@ def test_same_name_and_city_allowed_when_original_is_soft_deleted():
 )
 def test_name_needs_two_characters_and_capacity_at_least_one(name, capacity, valid):
     venue = Venue(
-        name=name, address="1 St", city="Nairobi", country="Kenya", capacity=capacity
+        name=name,
+        address="1 St",
+        city="Nairobi",
+        country="KE",
+        time_zone="Africa/Nairobi",
+        capacity=capacity,
     )
     if valid:
         venue.full_clean()
@@ -80,11 +85,11 @@ def test_all_objects_manager_includes_inactive_venues():
 
 
 def test_str_includes_name_city_and_country():
-    venue = VenueFactory(name="Kasarani Stadium", city="Nairobi", country="Kenya")
+    venue = VenueFactory(name="Kasarani Stadium", city="Nairobi", country="KE")
     text = str(venue)
     assert "Kasarani Stadium" in text
     assert "Nairobi" in text
-    assert "Kenya" in text
+    assert "KE" in text
 
 
 def test_default_ordering_is_by_name():
