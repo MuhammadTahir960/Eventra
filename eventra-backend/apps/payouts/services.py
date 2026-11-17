@@ -183,11 +183,8 @@ def pay_out_event(event: Event) -> OrganizerPayout:
             raise PayoutNotAvailableError(
                 "Refunds for this event are still being processed."
             )
-        available_at = payout_available_at(event)
-        if timezone.now() < available_at:
-            raise PayoutNotAvailableError(
-                f"Payout becomes available at {available_at:%Y-%m-%d %H:%M} UTC."
-            )
+        if timezone.now() < payout_available_at(event):
+            raise PayoutNotAvailableError("This payout isn't available yet.")
 
         payout, _ = create_payout(event)
         _start_settling(payout)

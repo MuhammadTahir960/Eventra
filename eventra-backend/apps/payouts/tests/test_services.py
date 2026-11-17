@@ -269,7 +269,7 @@ class TestPayOutEvent:
     def test_refused_before_the_wait_is_over(self):
         event = self._completed(hours_ago=PAYOUT_WAIT_HOURS - 1)
 
-        with pytest.raises(PayoutNotAvailableError, match="available at"):
+        with pytest.raises(PayoutNotAvailableError, match="isn.t available yet"):
             pay_out_event(event)
         assert not OrganizerPayout.objects.filter(event=event).exists()
 
