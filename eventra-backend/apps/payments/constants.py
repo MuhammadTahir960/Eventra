@@ -1,7 +1,5 @@
 from .models import Refund
 
-CURRENCY = "usd"
-
 UNFULFILLABLE_EVENT_STATUSES = ("cancelled", "completed", "rejected")
 
 ORPHANED_PAYMENT_GRACE_MINUTES = 5

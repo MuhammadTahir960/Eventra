@@ -27,6 +27,7 @@ from apps.seating.serializers import serialize_seats_for_ws
 from apps.tickets.factories import TicketFactory
 from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
+from apps.venues.factories import VenueFactory
 from tests.helpers import confirm_paid_in_full, paid_booking, race, unpaid_booking
 
 from ..factories import PaymentFactory
@@ -89,6 +90,19 @@ class TestCreateOrRefreshPaymentIntent:
         assert kwargs["idempotency_key"] == f"payment-intent-{booking.id}"
         assert kwargs["metadata"] == {"booking_id": str(booking.id)}
         assert kwargs["payment_method_types"] == ["card"]
+
+    def test_charges_in_the_events_currency(self, monkeypatch):
+        event = EventFactory(venue=VenueFactory(country="PK", time_zone="Asia/Karachi"))
+        booking = unpaid_booking("1500.00", event=event)
+        mock_create = MagicMock(return_value=MagicMock(id="pi_pkr", client_secret="s"))
+        monkeypatch.setattr(
+            "apps.payments.services.stripe.PaymentIntent.create", mock_create
+        )
+
+        create_or_refresh_payment_intent(booking)
+
+        assert mock_create.call_args.kwargs["currency"] == "pkr"
+        assert mock_create.call_args.kwargs["amount"] == 150000
 
     def test_local_short_circuit_skips_a_second_stripe_call(self, monkeypatch):
         booking = unpaid_booking("10.00")
@@ -346,7 +360,7 @@ class TestRefundBooking:
         assert refund.status == Refund.Status.SUCCEEDED
         assert stripe_refunds.call_args.kwargs["amount"] == 5000
         assert stripe_refunds.call_args.kwargs["idempotency_key"] == refund.key
-        assert len(mailoutbox) == 1 and "$50.00" in mailoutbox[0].body
+        assert len(mailoutbox) == 1 and "USD 50.00" in mailoutbox[0].body
 
     def test_returns_only_what_earlier_refunds_left(self, stripe_refunds):
         event = EventFactory(status=Event.Status.COMPLETED)
@@ -825,7 +839,7 @@ class TestPartialRefundOfAnAbandonedEvent:
         assert refund.status == Refund.Status.SUCCEEDED
         assert stripe_refunds.call_args.kwargs["amount"] == 2667
         assert stripe_refunds.call_args.kwargs["idempotency_key"] == refund.key
-        assert len(mailoutbox) == 1 and "$26.67" in mailoutbox[0].body
+        assert len(mailoutbox) == 1 and "USD 26.67" in mailoutbox[0].body
 
     def test_only_once_only_when_completed_and_only_before_payout(self, stripe_refunds):
         event = EventFactory(status=Event.Status.COMPLETED)
@@ -933,7 +947,7 @@ class TestRefundOnRequest:
         seat.refresh_from_db()
         assert booking.status == Booking.Status.REFUNDED
         assert seat.status == EventSeat.Status.AVAILABLE
-        assert "postponed" in mailoutbox[0].body and "$25.00" in mailoutbox[0].body
+        assert "postponed" in mailoutbox[0].body and "USD 25.00" in mailoutbox[0].body
         TicketFactory(booking=BookingFactory(), event_seat=seat)
 
     def test_seats_go_out_on_the_seat_map_without_a_query_per_seat(
