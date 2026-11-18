@@ -23,6 +23,10 @@ export interface Venue {
 export interface Country {
   code: string
   time_zones: string[]
+  currency: string
+  // A paid ticket's price range in that currency, as decimal strings
+  min_price: string
+  max_price: string
 }
 
 export interface Category {

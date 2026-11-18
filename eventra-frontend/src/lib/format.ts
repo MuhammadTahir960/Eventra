@@ -1,15 +1,41 @@
-// The backend sends prices as decimal strings ("45.00"). USD only.
-const money = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-})
+// Building an Intl formatter is slow, so each one is made once
+const formatters = new Map<string, Intl.NumberFormat | Intl.DateTimeFormat>()
 
-export function formatMoney(value: string | number): string {
-  const amount = typeof value === 'string' ? Number(value) : value
-  return Number.isFinite(amount) ? money.format(amount) : '—'
+function cached<T extends Intl.NumberFormat | Intl.DateTimeFormat>(
+  key: string,
+  make: () => T,
+): T {
+  let formatter = formatters.get(key) as T | undefined
+  if (!formatter) {
+    formatter = make()
+    formatters.set(key, formatter)
+  }
+  return formatter
 }
 
-const dateFormatters = new Map<string, Intl.DateTimeFormat>()
+// Prices are decimal strings ("45.00") in the event's currency ("pkr"), which
+// the API sends next to them
+export function formatMoney(
+  value: string | number,
+  currency: string | null | undefined,
+): string {
+  const amount = typeof value === 'string' ? Number(value) : value
+  if (!Number.isFinite(amount)) return '—'
+  if (!currency) return amount.toFixed(2)
+  const code = currency.toUpperCase()
+  const formatter = cached(
+    code,
+    () =>
+      new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: code,
+        // Prices always carry cents, like the API's (Intl drops them for some currencies)
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }),
+  )
+  return formatter.format(amount)
+}
 
 // Event times pass the venue's `timeZone`, so everyone sees the time at the
 // venue. Without one (sign-up dates, payouts) it is the viewer's own zone.
@@ -18,12 +44,10 @@ export function formatDate(
   options: Intl.DateTimeFormatOptions,
   timeZone?: string,
 ): string {
-  const key = JSON.stringify([options, timeZone])
-  let formatter = dateFormatters.get(key)
-  if (!formatter) {
-    formatter = new Intl.DateTimeFormat(undefined, { ...options, timeZone })
-    dateFormatters.set(key, formatter)
-  }
+  const formatter = cached(
+    JSON.stringify([options, timeZone]),
+    () => new Intl.DateTimeFormat(undefined, { ...options, timeZone }),
+  )
   return formatter.format(new Date(iso))
 }
 
@@ -68,10 +92,10 @@ const WALL_CLOCK: Intl.DateTimeFormatOptions = {
 // <input type="datetime-local"> and what the API takes for event times
 export function toLocalInput(iso: string, timeZone: string): string {
   const parts: Record<string, string> = {}
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    ...WALL_CLOCK,
-    timeZone,
-  })
+  const formatter = cached(
+    `wall-clock ${timeZone}`,
+    () => new Intl.DateTimeFormat('en-US', { ...WALL_CLOCK, timeZone }),
+  )
   for (const part of formatter.formatToParts(new Date(iso)))
     parts[part.type] = part.value
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`

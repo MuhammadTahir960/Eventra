@@ -29,6 +29,7 @@ export interface Booking {
   id: string
   status: 'pending' | 'confirmed' | 'cancelled' | 'refunded'
   total_amount: string
+  currency: string | null
   source_hold_group_id: string
   created_at: string
   updated_at: string

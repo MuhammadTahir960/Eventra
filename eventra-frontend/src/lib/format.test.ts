@@ -9,13 +9,19 @@ import {
 } from './format'
 
 describe('formatMoney', () => {
-  it('formats decimal strings from the API as USD', () => {
-    expect(formatMoney('45.00')).toBe('$45.00')
-    expect(formatMoney('1234.5')).toBe('$1,234.50')
+  it("formats decimal strings from the API in the event's currency", () => {
+    expect(formatMoney('45.00', 'usd')).toBe('$45.00')
+    expect(formatMoney('1234.5', 'usd')).toBe('$1,234.50')
+    expect(formatMoney('1500', 'pkr')).toBe('PKR\u00a01,500.00')
+    expect(formatMoney('200000000', 'idr')).toBe('IDR\u00a0200,000,000.00')
   })
 
   it('shows a dash for values that are not numbers', () => {
-    expect(formatMoney('abc')).toBe('—')
+    expect(formatMoney('abc', 'usd')).toBe('—')
+  })
+
+  it('shows the bare amount when the currency is unknown', () => {
+    expect(formatMoney('45', null)).toBe('45.00')
   })
 })
 
