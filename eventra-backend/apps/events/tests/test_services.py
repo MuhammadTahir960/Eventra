@@ -17,7 +17,6 @@ from apps.seating.models import EventSeat
 from apps.tickets.factories import TicketFactory
 from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
-from apps.venues.factories import VenueFactory
 from tests.helpers import confirmed_booking_with_ticket, paid_booking
 
 from ..constants import MAX_EVENT_LENGTH_DAYS, RUNNING_LATE_OPENS_HOURS
@@ -195,43 +194,6 @@ def test_ensure_can_restore_event_blocks_active_slug_collision():
 
 
 def test_find_blocking_upcoming_event_true_for_upcoming_approved_event():
-    venue = VenueFactory()
-    EventFactory(
-        venue=venue,
-        status=Event.Status.APPROVED,
-        start_datetime=timezone.now() + timedelta(days=1),
-    )
-    assert find_blocking_upcoming_event(venue_id=venue.id) is True
-
-
-@pytest.mark.parametrize(
-    "status",
-    [Event.Status.PENDING_APPROVAL, Event.Status.REJECTED, Event.Status.CANCELLED],
-)
-def test_find_blocking_upcoming_event_false_for_non_blocking_statuses(status):
-    venue = VenueFactory()
-    EventFactory(
-        venue=venue, status=status, start_datetime=timezone.now() + timedelta(days=1)
-    )
-    assert find_blocking_upcoming_event(venue_id=venue.id) is False
-
-
-def test_find_blocking_upcoming_event_false_for_past_event():
-    venue = VenueFactory()
-    EventFactory(
-        venue=venue,
-        status=Event.Status.COMPLETED,
-        start_datetime=timezone.now() - timedelta(days=10),
-        end_datetime=timezone.now() - timedelta(days=9),
-    )
-    assert find_blocking_upcoming_event(venue_id=venue.id) is False
-
-
-def test_find_blocking_upcoming_event_false_with_no_ids_given():
-    assert find_blocking_upcoming_event() is False
-
-
-def test_find_blocking_upcoming_event_scopes_to_category_independently():
     category = CategoryFactory()
     EventFactory(
         category=category,
@@ -239,10 +201,32 @@ def test_find_blocking_upcoming_event_scopes_to_category_independently():
         start_datetime=timezone.now() + timedelta(days=1),
     )
     assert find_blocking_upcoming_event(category_id=category.id) is True
-    assert (
-        find_blocking_upcoming_event(venue_id=None, category_id=CategoryFactory().id)
-        is False
+    assert find_blocking_upcoming_event(category_id=CategoryFactory().id) is False
+
+
+@pytest.mark.parametrize(
+    "status",
+    [Event.Status.PENDING_APPROVAL, Event.Status.REJECTED, Event.Status.CANCELLED],
+)
+def test_find_blocking_upcoming_event_false_for_non_blocking_statuses(status):
+    category = CategoryFactory()
+    EventFactory(
+        category=category,
+        status=status,
+        start_datetime=timezone.now() + timedelta(days=1),
     )
+    assert find_blocking_upcoming_event(category_id=category.id) is False
+
+
+def test_find_blocking_upcoming_event_false_for_past_event():
+    category = CategoryFactory()
+    EventFactory(
+        category=category,
+        status=Event.Status.COMPLETED,
+        start_datetime=timezone.now() - timedelta(days=10),
+        end_datetime=timezone.now() - timedelta(days=9),
+    )
+    assert find_blocking_upcoming_event(category_id=category.id) is False
 
 
 # ---- complete_past_events ----
@@ -461,7 +445,7 @@ def test_running_late_emails_holders_only_when_the_day_changes(
     monkeypatch.setattr("apps.notifications.tasks.send_event_running_late_email", task)
     midnight = (
         (timezone.now() + timedelta(hours=27))
-        .astimezone(ZoneInfo("Africa/Nairobi"))
+        .astimezone(ZoneInfo("America/Guayaquil"))
         .replace(hour=0, minute=0, second=0, microsecond=0)
     )
     event = EventFactory(
