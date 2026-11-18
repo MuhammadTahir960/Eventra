@@ -5,6 +5,8 @@ from unittest.mock import MagicMock
 
 import pytest
 import stripe
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -14,6 +16,7 @@ from apps.payments.models import Payment
 from apps.seating.factories import EventSeatFactory, SeatHoldFactory
 from apps.seating.models import EventSeat
 from apps.users.factories import UserFactory
+from apps.venues.factories import VenueFactory
 from tests.helpers import auth_client, paid_booking, unpaid_booking
 
 from ..factories import BookingFactory
@@ -99,6 +102,26 @@ class TestBookingListEndpoint:
         client = APIClient()
         response = client.get("/bookings/")
         assert response.status_code == 401
+
+    def test_lists_each_bookings_currency_in_a_fixed_number_of_queries(self):
+        buyer = UserFactory()
+        client = auth_client(buyer)
+        rupees = EventFactory(
+            venue=VenueFactory(country="PK", time_zone="Asia/Karachi")
+        )
+
+        def queries():
+            with CaptureQueriesContext(connection) as captured:
+                response = client.get("/bookings/")
+            return response, len(captured)
+
+        paid_booking(rupees, (TicketTierFactory(event=rupees), "500.00"), user=buyer)
+        response, one = queries()
+        assert response.data["results"][0]["currency"] == "pkr"
+        for _ in range(3):
+            event = EventFactory()
+            paid_booking(event, (TicketTierFactory(event=event), "10.00"), user=buyer)
+        assert queries()[1] == one
 
 
 class TestBookingDetailOwnership:

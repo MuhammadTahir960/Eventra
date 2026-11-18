@@ -58,5 +58,5 @@ class Booking(UUIDBaseModel):
 
     @property
     def event(self):
-        ticket = self.tickets.select_related("event_seat__event").first()
+        ticket = next(iter(self.tickets.all()), None)
         return ticket.event_seat.event if ticket else None
