@@ -30,7 +30,10 @@ class Event(SoftDeleteModel):
         "users.User", on_delete=models.PROTECT, related_name="organized_events"
     )
     venue = models.ForeignKey(
-        "venues.Venue", on_delete=models.SET_NULL, null=True, related_name="events"
+        "venues.Venue",
+        on_delete=models.PROTECT,
+        null=True,
+        related_name="events",
     )
     category = models.ForeignKey(
         "categories.Category",
@@ -127,6 +130,10 @@ class Event(SoftDeleteModel):
     def time_zone(self) -> str:
         return self.venue.time_zone if self.venue_id else "UTC"
 
+    @property
+    def currency(self) -> str | None:
+        return self.venue.currency if self.venue_id else None
+
     def local_time(self, moment):
         return moment.astimezone(ZoneInfo(self.time_zone))
 
@@ -147,7 +154,7 @@ class TicketTier(UUIDBaseModel):
     )
     name = models.CharField(max_length=100, validators=[validate_display_name])
     price = models.DecimalField(
-        max_digits=10, decimal_places=2, validators=[validate_ticket_price]
+        max_digits=18, decimal_places=2, validators=[MinValueValidator(0)]
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -155,7 +162,11 @@ class TicketTier(UUIDBaseModel):
         ordering = ["price"]
 
     def __str__(self) -> str:
-        return f"{self.name} — {self.event.title} (${self.price})"
+        return f"{self.name} — {self.event.title} ({self.price})"
+
+    def clean(self):
+        if self.event_id and self.price is not None:
+            validate_ticket_price(self.price, self.event.currency, "price")
 
 
 class TierSectionMapping(UUIDBaseModel):
