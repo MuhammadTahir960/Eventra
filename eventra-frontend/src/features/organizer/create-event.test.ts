@@ -35,15 +35,18 @@ function makeDraft(overrides: Partial<EventDraft> = {}): EventDraft {
   }
 }
 
+const USD = { currency: 'usd', min_price: '0.50', max_price: '10000' }
+
 describe('validateDraft', () => {
   it('accepts a complete draft', () => {
-    expect(validateDraft(makeDraft(), ['North', 'South'], NOW)).toEqual({})
+    expect(validateDraft(makeDraft(), ['North', 'South'], USD, NOW)).toEqual({})
   })
 
   it('requires the basic fields', () => {
     const errors = validateDraft(
       makeDraft({ title: ' ', categoryId: '', description: '' }),
       ['North', 'South'],
+      USD,
       NOW,
     )
     expect(errors).toHaveProperty('title')
@@ -53,10 +56,11 @@ describe('validateDraft', () => {
 
   it('limits length, lead time and (for organizers) notice', () => {
     const at = (iso: string) =>
-      validateDraft(makeDraft(), ['North', 'South'], new Date(iso))
+      validateDraft(makeDraft(), ['North', 'South'], USD, new Date(iso))
     const tooLong = validateDraft(
       makeDraft({ end: '2026-11-20T18:00' }),
       ['North', 'South'],
+      USD,
       NOW,
     )
     expect(tooLong.end).toMatch(/14 days/)
@@ -65,10 +69,10 @@ describe('validateDraft', () => {
       new Date('2026-11-01T18:00').getTime() - 6 * 60 * 60 * 1000,
     )
     expect(
-      validateDraft(makeDraft(), ['North', 'South'], soon, 24).start,
+      validateDraft(makeDraft(), ['North', 'South'], USD, soon, 24).start,
     ).toMatch(/24 hours/)
     expect(
-      validateDraft(makeDraft(), ['North', 'South'], soon, 0).start,
+      validateDraft(makeDraft(), ['North', 'South'], USD, soon, 0).start,
     ).toBeUndefined()
   })
 
@@ -76,6 +80,7 @@ describe('validateDraft', () => {
     const errors = validateDraft(
       makeDraft({ start: '2026-10-01T18:00', end: '2026-09-30T18:00' }),
       ['North', 'South'],
+      USD,
       NOW,
     )
     expect(errors.start).toMatch(/future/)
@@ -86,22 +91,40 @@ describe('validateDraft', () => {
     ['0', true],
     ['0.00', true],
     ['0.50', true],
+    ['10000', true],
+    ['10000.01', false],
     ['0.49', false],
     ['0.01', false],
     ['-5', false],
     ['abc', false],
     ['1.234', false],
     ['', false],
-  ])('the price %j is valid: %s (free, or at least 0.50)', (price, valid) => {
-    const errors = validateDraft(
-      makeDraft({
-        tiers: [{ key: 'a', name: 'VIP', price }],
-        assignments: { North: 'a', South: 'a' },
-      }),
-      ['North', 'South'],
-      NOW,
-    )
-    expect('tier-a-price' in errors).toBe(!valid)
+  ])(
+    'the price %j is valid in USD: %s (free, or 0.50 to 10,000)',
+    (price, valid) => {
+      const errors = validateDraft(
+        makeDraft({
+          tiers: [{ key: 'a', name: 'VIP', price }],
+          assignments: { North: 'a', South: 'a' },
+        }),
+        ['North', 'South'],
+        USD,
+        NOW,
+      )
+      expect('tier-a-price' in errors).toBe(!valid)
+    },
+  )
+
+  it("checks prices against the venue's own currency", () => {
+    const draft = makeDraft({
+      tiers: [{ key: 'a', name: 'VIP', price: '200' }],
+      assignments: { North: 'a', South: 'a' },
+    })
+    const PKR = { currency: 'pkr', min_price: '300', max_price: '3000000' }
+    expect(
+      validateDraft(draft, ['North', 'South'], PKR, NOW)['tier-a-price'],
+    ).toBe('Enter 0 for free, or from 300 to 3,000,000 PKR.')
+    expect(validateDraft(draft, ['North', 'South'], USD, NOW)).toEqual({})
   })
 
   it.each(['0', '51', '2.5', 'ten', ''])(
@@ -110,6 +133,7 @@ describe('validateDraft', () => {
       const errors = validateDraft(
         makeDraft({ maxTickets }),
         ['North', 'South'],
+        USD,
         NOW,
       )
       expect(errors.maxTickets).toMatch(/1 to 50/)
@@ -125,6 +149,7 @@ describe('validateDraft', () => {
         ],
       }),
       ['North', 'South'],
+      USD,
       NOW,
     )
     expect(errors).toHaveProperty('tier-b-name')
@@ -134,6 +159,7 @@ describe('validateDraft', () => {
     const errors = validateDraft(
       makeDraft({ assignments: { North: 'a' } }),
       ['North', 'South'],
+      USD,
       NOW,
     )
     expect(errors.sections).toMatch(/South/)
@@ -143,6 +169,7 @@ describe('validateDraft', () => {
     const errors = validateDraft(
       makeDraft({ assignments: { North: 'a', South: 'a' } }),
       ['North', 'South'],
+      USD,
       NOW,
     )
     expect(errors).toHaveProperty('tier-b-name')
@@ -152,11 +179,13 @@ describe('validateDraft', () => {
     const at = validateDraft(
       makeDraft({ title: 'A'.repeat(100) }),
       ['North', 'South'],
+      USD,
       NOW,
     )
     const over = validateDraft(
       makeDraft({ title: 'A'.repeat(101) }),
       ['North', 'South'],
+      USD,
       NOW,
     )
     expect(at).not.toHaveProperty('title')
@@ -167,6 +196,7 @@ describe('validateDraft', () => {
     const missing = validateDraft(
       makeDraft({ match: { leagueId: '', homeTeamId: '', awayTeamId: '' } }),
       ['North', 'South'],
+      USD,
       NOW,
     )
     expect(missing).toHaveProperty('home_team')
@@ -177,6 +207,7 @@ describe('validateDraft', () => {
         match: { leagueId: '', homeTeamId: 't1', awayTeamId: 't1' },
       }),
       ['North', 'South'],
+      USD,
       NOW,
     )
     expect(same.away_team).toBe('Pick two different teams.')
@@ -186,6 +217,7 @@ describe('validateDraft', () => {
     const errors = validateDraft(
       makeDraft({ tiers: [], assignments: {} }),
       ['North'],
+      USD,
       NOW,
     )
     expect(errors).toHaveProperty('tiers')
