@@ -13,7 +13,7 @@ from apps.common.serializers import (
     RejectUnknownFieldsMixin,
     StrictCharField,
 )
-from apps.common.validators import validate_multiline_text
+from apps.common.validators import validate_multiline_text, validate_ticket_price
 from apps.payments.services import refund_price_drops
 from apps.venues.models import Venue
 
@@ -94,6 +94,7 @@ class EventSerializer(
     start_datetime = wall_clock_field()
     end_datetime = wall_clock_field()
     time_zone = serializers.CharField(read_only=True)
+    currency = serializers.CharField(read_only=True, allow_null=True)
 
     class Meta:
         model = Event
@@ -116,6 +117,7 @@ class EventSerializer(
             "start_datetime",
             "end_datetime",
             "time_zone",
+            "currency",
             "completed_at",
             "postponed_from",
             "is_active",
@@ -177,6 +179,17 @@ class EventSerializer(
     def _current(self, attrs, field):
         return attrs.get(field, getattr(self.instance, field, None))
 
+    def _validate_venue_currency(self, attrs):
+        venue = attrs.get("venue")
+        if (
+            self.instance is not None
+            and venue is not None
+            and venue.currency != self.instance.currency
+        ):
+            raise serializers.ValidationError(
+                {"venue": "This venue uses another currency."}
+            )
+
     def _read_times_at_venue(self, attrs):
         times = ("start_datetime", "end_datetime")
         if not any(field in attrs for field in ("venue", *times)):
@@ -203,6 +216,7 @@ class EventSerializer(
         read_in_time_zone(attrs, times, time_zone)
 
     def validate(self, attrs):
+        self._validate_venue_currency(attrs)
         self._read_times_at_venue(attrs)
         start = self._current(attrs, "start_datetime")
         end = self._current(attrs, "end_datetime")
@@ -343,6 +357,10 @@ class TicketTierSerializer(
         model = TicketTier
         fields = ["id", "event", "name", "price", "created_at"]
         read_only_fields = ["id", "event", "created_at"]
+
+    def validate_price(self, value):
+        validate_ticket_price(value, self.context["event"].currency)
+        return abs(value)
 
     def create(self, validated_data):
         validated_data["event"] = self.context["event"]

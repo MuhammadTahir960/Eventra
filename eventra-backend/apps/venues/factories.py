@@ -11,9 +11,9 @@ class VenueFactory(DjangoModelFactory):
 
     name = factory.Sequence(lambda n: f"Venue {n}")
     address = factory.Faker("street_address")
-    city = "Nairobi"
-    country = "KE"
-    time_zone = "Africa/Nairobi"
+    city = "Guayaquil"
+    country = "EC"
+    time_zone = "America/Guayaquil"
     capacity = 100
     is_active = True
 
