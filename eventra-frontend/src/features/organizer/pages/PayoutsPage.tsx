@@ -55,7 +55,7 @@ function RetryButton({ payout }: { payout: Payout }) {
         </Button>
       }
       title="Retry this payout?"
-      description={`Tries again to pay ${formatMoney(payout.net_amount)} for "${payout.event_title}" to the organizer.`}
+      description={`Tries again to pay ${formatMoney(payout.net_amount, payout.currency)} for "${payout.event_title}" to the organizer.`}
       confirmLabel="Retry payout"
       pending={settle.isPending}
       onConfirm={() => settle.mutate()}
@@ -86,7 +86,7 @@ function PayOutButton({ row }: { row: AwaitingPayout }) {
         </Button>
       }
       title="Pay out this event?"
-      description={`Pays ${formatMoney(row.net_amount)} for "${row.event_title}" to ${row.organizer_name}. After this the event can no longer be voided.`}
+      description={`Pays ${formatMoney(row.net_amount, row.currency)} for "${row.event_title}" to ${row.organizer_name}. After this the event can no longer be voided.`}
       confirmLabel="Pay out"
       pending={payOut.isPending}
       onConfirm={() =>
@@ -150,9 +150,12 @@ function RefundPartButton({ row }: { row: AwaitingPayout }) {
                 result.refunds === 1
                   ? '1 buyer is'
                   : `${result.refunds} buyers are`
-              toast.success(`Refunding ${formatMoney(result.amount)}`, {
-                description: `${buyers} being refunded and emailed.`,
-              })
+              toast.success(
+                `Refunding ${formatMoney(result.amount, row.currency)}`,
+                {
+                  description: `${buyers} being refunded and emailed.`,
+                },
+              )
             },
           },
         )
@@ -225,7 +228,7 @@ function AwaitingPayouts({ scope }: { scope: 'organizer' | 'admin' }) {
                 </span>
               </td>
               <td className="num font-semibold">
-                {formatMoney(row.net_amount)}
+                {formatMoney(row.net_amount, row.currency)}
               </td>
               <td>
                 <div className="flex items-center justify-end gap-2">
@@ -324,12 +327,14 @@ export function PayoutsPage({ scope }: { scope: 'organizer' | 'admin' }) {
                         : `Created ${formatDateTime(payout.created_at)}`}
                     </span>
                   </td>
-                  <td className="num">{formatMoney(payout.gross_revenue)}</td>
+                  <td className="num">
+                    {formatMoney(payout.gross_revenue, payout.currency)}
+                  </td>
                   <td className="num text-muted-foreground">
-                    {formatMoney(payout.platform_fee)}
+                    {formatMoney(payout.platform_fee, payout.currency)}
                   </td>
                   <td className="num font-semibold">
-                    {formatMoney(payout.net_amount)}
+                    {formatMoney(payout.net_amount, payout.currency)}
                   </td>
                   <td>
                     <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
