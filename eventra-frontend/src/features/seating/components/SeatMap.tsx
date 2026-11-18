@@ -45,6 +45,7 @@ interface SeatMapProps {
   disabled?: boolean
   // What sits in the middle of the venue
   fieldLabel?: string
+  currency?: string | null
 }
 
 const tierShade = (index: number) => TIER_SHADES[index % TIER_SHADES.length]
@@ -113,6 +114,7 @@ export function SeatMap({
   onToggle,
   disabled = false,
   fieldLabel = 'Stage',
+  currency,
 }: SeatMapProps) {
   const resolved: VenueShape = isVenueShape(shape) ? shape : 'oval'
 
@@ -228,7 +230,7 @@ export function SeatMap({
   const tabStop = focusId && positions.has(focusId) ? focusId : navigation.first
 
   function describe(seat: EventSeat, state: DisplayState): string {
-    return `Section ${seat.section}, row ${seat.row_label}, seat ${seat.seat_number}, ${seat.tier_name}, ${formatMoney(seat.price)}, ${STATE_TEXT[state]}`
+    return `Section ${seat.section}, row ${seat.row_label}, seat ${seat.seat_number}, ${seat.tier_name}, ${formatMoney(seat.price, currency)}, ${STATE_TEXT[state]}`
   }
 
   function stateOf(seat: EventSeat): DisplayState {
@@ -483,7 +485,9 @@ export function SeatMap({
                 style={{ background: tierShade(index) }}
               />
               <span className="text-foreground">{tier.name}</span>{' '}
-              <span className="tabular">{formatMoney(tier.price)}</span>
+              <span className="tabular">
+                {formatMoney(tier.price, currency)}
+              </span>
             </li>
           ))}
         </ul>

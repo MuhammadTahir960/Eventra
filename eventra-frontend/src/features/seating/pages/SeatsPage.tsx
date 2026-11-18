@@ -295,6 +295,7 @@ export function SeatsPage() {
                 onToggle={toggle}
                 disabled={pending}
                 fieldLabel={fieldLabel}
+                currency={event.data?.currency}
               />
             )}
           </section>
@@ -305,7 +306,7 @@ export function SeatsPage() {
               aria-label="Your selection"
               stub={
                 <div className="flex flex-col gap-4">
-                  <TotalRow total={total} />
+                  <TotalRow total={total} currency={event.data?.currency} />
                   <Button
                     size="lg"
                     className="w-full"
@@ -362,7 +363,7 @@ export function SeatsPage() {
                         </span>
                       </span>
                       <span className="tabular text-sm font-medium">
-                        {formatMoney(seat.price)}
+                        {formatMoney(seat.price, event.data?.currency)}
                       </span>
                       <button
                         type="button"
@@ -389,7 +390,9 @@ export function SeatsPage() {
             <span className="block text-muted-foreground">
               {cart.length} {cart.length === 1 ? 'seat' : 'seats'}
             </span>
-            <span className="tabular font-semibold">{formatMoney(total)}</span>
+            <span className="tabular font-semibold">
+              {formatMoney(total, event.data?.currency)}
+            </span>
           </div>
           <Button
             size="lg"
