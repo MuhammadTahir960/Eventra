@@ -10,6 +10,7 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 import {
   useCategories,
+  useCountries,
   useLeagues,
   useTeams,
   useVenues,
@@ -91,6 +92,7 @@ export function CreateEventPage() {
   usePageTitle('Create event')
   const [params, setParams] = useSearchParams()
   const venues = useVenues()
+  const countries = useCountries()
   const categories = useCategories()
   // Sports fixtures are curated centrally: only admins may create them
   const isAdmin = useAuth().user?.role === 'admin'
@@ -264,6 +266,7 @@ export function CreateEventPage() {
     const found = validateDraft(
       draft,
       sectionNames,
+      countries.data?.find((country) => country.code === venue?.country),
       venue ? nowAt(venue.time_zone) : new Date(),
       isAdmin ? 0 : 24,
     )

@@ -18,7 +18,7 @@ def settle_payout(payout_id) -> None:
     max_retries=3,
 )
 def send_payout_settled_notification(payout_id) -> None:
-    payout = OrganizerPayout.objects.select_related("event__organizer").get(
-        id=payout_id
-    )
+    payout = OrganizerPayout.objects.select_related(
+        "event__organizer", "event__venue"
+    ).get(id=payout_id)
     send_payout_settled_email(payout)

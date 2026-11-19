@@ -13,7 +13,6 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.bookings.factories import BookingFactory
 from apps.bookings.models import Booking
-from apps.payments.constants import CURRENCY
 from apps.payments.factories import PaymentFactory
 from apps.payments.models import Payment, Refund
 from apps.payments.services import _to_cents, confirm_payment_from_webhook
@@ -24,7 +23,7 @@ from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
 
 
-def wall_clock(moment, time_zone="Africa/Nairobi"):
+def wall_clock(moment, time_zone="America/Guayaquil"):
     return moment.astimezone(ZoneInfo(time_zone)).strftime("%Y-%m-%dT%H:%M:%S")
 
 
@@ -111,7 +110,9 @@ def confirm_paid_in_full(payment_intent_id):
     )
     cents = _to_cents(payment.booking.total_amount) if payment else 0
     return confirm_payment_from_webhook(
-        payment_intent_id, amount_received=cents, currency=CURRENCY
+        payment_intent_id,
+        amount_received=cents,
+        currency=payment.booking.event.currency if payment else "",
     )
 
 

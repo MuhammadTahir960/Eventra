@@ -1,11 +1,11 @@
 import { apiFetch, ApiError } from '@/lib/api-client'
+import type { Country } from '@/features/catalog/types'
 import type { EventItem, TicketTier } from '@/features/events/types'
 import { HOUR_MS } from '@/lib/constants'
 import {
   MAX_LEAD_DAYS,
   MAX_LENGTH_DAYS,
   MAX_TICKETS_PER_BUYER,
-  MIN_PAID_PRICE,
   PRICE_PATTERN,
 } from './constants'
 
@@ -63,10 +63,13 @@ export function isDisplayName(value: string): boolean {
   )
 }
 
+// `limits`: the venue's currency and its paid price range (from /countries/).
 // `noticeHours`: organizers need 24h so an admin can review the event in time
 export function validateDraft(
   draft: EventDraft,
   venueSections: string[],
+  // Undefined while /countries/ loads: the server still checks the price
+  limits: Pick<Country, 'currency' | 'min_price' | 'max_price'> | undefined,
   now: Date = new Date(),
   noticeHours = 0,
 ): DraftErrors {
@@ -136,12 +139,14 @@ export function validateDraft(
     seenNames.add(name.toLowerCase())
 
     const price = Number(tier.price)
-    if (
-      !PRICE_PATTERN.test(tier.price.trim()) ||
-      (price !== 0 && price < MIN_PAID_PRICE)
-    ) {
-      errors[`tier-${tier.key}-price`] =
-        `Enter 0 for free, or at least ${MIN_PAID_PRICE.toFixed(2)}.`
+    if (!PRICE_PATTERN.test(tier.price.trim())) {
+      errors[`tier-${tier.key}-price`] = 'Enter a price, like 25 or 25.50.'
+    } else if (limits && price !== 0) {
+      const lowest = Number(limits.min_price)
+      const highest = Number(limits.max_price)
+      if (price < lowest || price > highest)
+        errors[`tier-${tier.key}-price`] =
+          `Enter 0 for free, or from ${lowest.toLocaleString('en-US')} to ${highest.toLocaleString('en-US')} ${limits.currency.toUpperCase()}.`
     }
   }
 

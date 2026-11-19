@@ -1,12 +1,15 @@
 import re
 from datetime import timedelta
+from decimal import Decimal
 
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.db.models import ProtectedError
 from django.utils import timezone
 
 from apps.categories.factories import CategoryFactory
+from apps.seating.factories import EventSeatFactory
 from apps.venues.factories import VenueFactory
 
 from ..factories import EventFactory, TicketTierFactory, TierSectionMappingFactory
@@ -150,13 +153,11 @@ def test_all_objects_includes_inactive_events():
 # ==================================================
 
 
-def test_hard_deleting_venue_sets_event_venue_to_null():
+def test_a_venue_with_events_cant_be_hard_deleted():
     venue = VenueFactory()
-    event = EventFactory(venue=venue)
-    venue.delete()
-    event.refresh_from_db()
-    assert event.venue_id is None
-    assert Event.all_objects.filter(id=event.id).exists()
+    EventFactory(venue=venue, status=Event.Status.CANCELLED, is_active=False)
+    with pytest.raises(ProtectedError):
+        venue.delete()
 
 
 def test_hard_deleting_category_sets_event_category_to_null():
@@ -214,3 +215,17 @@ def test_duplicate_section_for_same_event_rejected_at_db_level():
 def test_same_section_label_allowed_across_different_events():
     TierSectionMappingFactory(section="A")
     TierSectionMappingFactory(section="A")
+
+
+def test_django_admin_checks_tier_and_seat_prices_against_the_currency():
+    event = EventFactory(venue=VenueFactory(country="PK", time_zone="Asia/Karachi"))
+    with pytest.raises(ValidationError) as tier_error:
+        TicketTier(event=event, name="VIP", price=Decimal("50.00")).full_clean()
+    assert "price" in tier_error.value.message_dict
+    TicketTier(event=event, name="VIP", price=Decimal("500.00")).full_clean()
+
+    seat = EventSeatFactory(event=event, ticket_tier=TicketTierFactory(event=event))
+    seat.price_override = Decimal("50.00")
+    with pytest.raises(ValidationError) as seat_error:
+        seat.full_clean()
+    assert "price_override" in seat_error.value.message_dict

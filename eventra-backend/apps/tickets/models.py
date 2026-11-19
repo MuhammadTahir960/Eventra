@@ -41,7 +41,7 @@ class Ticket(UUIDBaseModel):
         default=_generate_ticket_code,
         editable=False,
     )
-    price = models.DecimalField(max_digits=10, decimal_places=2)
+    price = models.DecimalField(max_digits=18, decimal_places=2)
     status = models.CharField(
         max_length=20,
         choices=Status.choices,

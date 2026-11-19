@@ -37,6 +37,7 @@ describe('SeatMap', () => {
       <SeatMap
         seats={makeSeats()}
         shape="oval"
+        currency="usd"
         selected={new Set()}
         onToggle={() => {}}
       />,
@@ -55,6 +56,7 @@ describe('SeatMap', () => {
       <SeatMap
         seats={makeSeats()}
         shape="oval"
+        currency="usd"
         selected={new Set()}
         onToggle={onToggle}
       />,
@@ -68,6 +70,7 @@ describe('SeatMap', () => {
       <SeatMap
         seats={makeSeats()}
         shape="oval"
+        currency="usd"
         selected={new Set(['VIP-A2'])}
         onToggle={() => {}}
       />,
@@ -85,6 +88,7 @@ describe('SeatMap', () => {
           id === 'VIP-A1' ? 'held' : id === 'VIP-A2' ? 'booked' : 'available',
         )}
         shape="oval"
+        currency="usd"
         selected={new Set()}
         onToggle={onToggle}
       />,
@@ -108,6 +112,7 @@ describe('SeatMap', () => {
       <SeatMap
         seats={makeSeats()}
         shape="oval"
+        currency="usd"
         selected={new Set()}
         onToggle={onToggle}
         disabled
@@ -123,6 +128,7 @@ describe('SeatMap', () => {
       <SeatMap
         seats={makeSeats()}
         shape="oval"
+        currency="usd"
         selected={new Set()}
         onToggle={onToggle}
       />,
@@ -138,6 +144,7 @@ describe('SeatMap', () => {
       <SeatMap
         seats={makeSeats()}
         shape="oval"
+        currency="usd"
         selected={new Set()}
         onToggle={() => {}}
       />,
@@ -169,6 +176,7 @@ describe('SeatMap', () => {
       <SeatMap
         seats={makeSeats()}
         shape="oval"
+        currency="usd"
         selected={new Set()}
         onToggle={() => {}}
       />,
@@ -185,6 +193,7 @@ describe('SeatMap', () => {
       <SeatMap
         seats={makeSeats()}
         shape="oval"
+        currency="usd"
         selected={new Set()}
         onToggle={() => {}}
       />,

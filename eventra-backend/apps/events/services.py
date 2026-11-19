@@ -274,22 +274,18 @@ def get_visible_event_by_slug_or_404(user, slug) -> Event:
     return get_object_or_404(visible_events_for_user(user), slug=slug)
 
 
-def find_blocking_upcoming_event(*, venue_id=None, category_id=None) -> bool:
-    if not venue_id and not category_id:
-        return False
-
-    qs = Event.objects.filter(start_datetime__gt=timezone.now()).exclude(
-        status__in=[
-            Event.Status.PENDING_APPROVAL,
-            Event.Status.REJECTED,
-            Event.Status.CANCELLED,
-        ]
+def find_blocking_upcoming_event(*, category_id) -> bool:
+    return (
+        Event.objects.filter(category_id=category_id, start_datetime__gt=timezone.now())
+        .exclude(
+            status__in=[
+                Event.Status.PENDING_APPROVAL,
+                Event.Status.REJECTED,
+                Event.Status.CANCELLED,
+            ]
+        )
+        .exists()
     )
-    if venue_id:
-        qs = qs.filter(venue_id=venue_id)
-    if category_id:
-        qs = qs.filter(category_id=category_id)
-    return qs.exists()
 
 
 def complete_past_events() -> int:

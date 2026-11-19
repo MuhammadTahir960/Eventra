@@ -27,6 +27,8 @@ export interface EventItem {
   start_datetime: string
   end_datetime: string
   time_zone: string
+  // ISO 4217, lower case ("pkr"); from the venue's country
+  currency: string | null
   // Set when the event is marked completed; payouts open 24h later
   completed_at: string | null
   // The first start date, kept when the event is postponed; null otherwise

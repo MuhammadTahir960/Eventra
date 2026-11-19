@@ -97,11 +97,13 @@ function TestCardHint() {
 function PaymentForm({
   bookingId,
   amount,
+  currency,
   expired,
   onPaid,
 }: {
   bookingId: string
   amount: string
+  currency: string | null
   expired: boolean
   onPaid: () => void
 }) {
@@ -145,7 +147,9 @@ function PaymentForm({
         disabled={!stripe || paying || expired}
       >
         <SwapLabel>
-          {paying ? 'Processing payment…' : `Pay ${formatMoney(amount)}`}
+          {paying
+            ? 'Processing payment…'
+            : `Pay ${formatMoney(amount, currency)}`}
         </SwapLabel>
       </Button>
     </form>
@@ -155,15 +159,17 @@ function PaymentForm({
 function OrderSummary({
   context,
   total,
+  currency,
 }: {
   context: CheckoutContext | null
   total: string
+  currency: string | null
 }) {
   return (
     <TicketStub
       as="section"
       aria-label="Order summary"
-      stub={<TotalRow total={total} />}
+      stub={<TotalRow total={total} currency={currency} />}
     >
       <h2 className="text-lg font-semibold tracking-tight">Order summary</h2>
       {context ? (
@@ -182,7 +188,7 @@ function OrderSummary({
                   </span>
                 </span>
                 <span className="tabular font-medium">
-                  {formatMoney(seat.price)}
+                  {formatMoney(seat.price, currency)}
                 </span>
               </li>
             ))}
@@ -314,6 +320,7 @@ export function CheckoutPage() {
           eventTitle={context?.eventTitle ?? null}
           seats={context?.seats ?? []}
           total={order.total_amount}
+          currency={order.currency}
           orderId={order.id}
           paidAt={new Date(paidAt ?? order.updated_at)}
           onPrinted={() => setPrinted(true)}
@@ -419,6 +426,7 @@ export function CheckoutPage() {
                     <PaymentForm
                       bookingId={order.id}
                       amount={order.total_amount}
+                      currency={order.currency}
                       expired={expired}
                       onPaid={() => setPaidAt(Date.now())}
                     />
@@ -430,7 +438,11 @@ export function CheckoutPage() {
         </section>
 
         <aside className="lg:sticky lg:top-24 lg:self-start">
-          <OrderSummary context={context} total={order.total_amount} />
+          <OrderSummary
+            context={context}
+            total={order.total_amount}
+            currency={order.currency}
+          />
         </aside>
       </div>
     </div>

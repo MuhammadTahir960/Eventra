@@ -14,8 +14,8 @@ class OrganizerPayout(UUIDBaseModel):
         "events.Event", on_delete=models.PROTECT, related_name="payout"
     )
 
-    gross_revenue = models.DecimalField(max_digits=10, decimal_places=2)
-    platform_fee = models.DecimalField(max_digits=10, decimal_places=2)
+    gross_revenue = models.DecimalField(max_digits=18, decimal_places=2)
+    platform_fee = models.DecimalField(max_digits=18, decimal_places=2)
 
     status = models.CharField(
         max_length=20,

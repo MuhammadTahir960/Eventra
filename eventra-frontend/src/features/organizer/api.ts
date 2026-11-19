@@ -169,8 +169,9 @@ export function useDeleteForever() {
 // ---------- sales ----------
 
 export interface EventSales {
+  currency: string
   tickets_sold: number
-  // Decimal strings, USD
+  // Decimal strings in `currency`
   gross_revenue: string
   tickets: {
     ticket_id: string
@@ -200,7 +201,8 @@ export interface Payout {
   id: string
   event_id: string
   event_title: string
-  // Decimal strings, USD
+  currency: string
+  // Decimal strings in `currency`
   gross_revenue: string
   platform_fee: string
   net_amount: string
@@ -239,7 +241,8 @@ export interface AwaitingPayout {
   payout_available_at: string
   // True once the 24-hour wait after completion is over
   eligible: boolean
-  // Decimal strings, USD
+  currency: string
+  // Decimal strings in `currency`
   gross_revenue: string
   platform_fee: string
   net_amount: string

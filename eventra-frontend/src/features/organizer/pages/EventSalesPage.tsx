@@ -76,11 +76,14 @@ export function EventSalesPage() {
             />
             <Stat
               label="Gross sales"
-              value={formatMoney(data!.gross_revenue)}
+              value={formatMoney(data!.gross_revenue, data!.currency)}
             />
             <Stat
               label="Your share after the 10% fee"
-              value={formatMoney(netAfterFee(data!.gross_revenue))}
+              value={formatMoney(
+                netAfterFee(data!.gross_revenue),
+                data!.currency,
+              )}
             />
           </div>
           <p className="-mt-4 text-[13px] text-muted-foreground">
@@ -115,10 +118,11 @@ export function EventSalesPage() {
                       </StatusBadge>
                     </td>
                     <td className="num">
-                      {formatMoney(ticket.amount)}
+                      {formatMoney(ticket.amount, data!.currency)}
                       {toCents(ticket.refunded) > 0 && (
                         <span className="block text-[12.5px] text-muted-foreground">
-                          {formatMoney(ticket.refunded)} refunded
+                          {formatMoney(ticket.refunded, data!.currency)}{' '}
+                          refunded
                         </span>
                       )}
                     </td>

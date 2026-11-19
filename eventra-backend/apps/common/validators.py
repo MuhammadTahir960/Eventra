@@ -5,9 +5,9 @@ from django.core.exceptions import ValidationError
 
 from .constants import (
     ALLOWED_IMAGE_FORMATS,
+    CURRENCY_PRICE_LIMITS,
     MAX_IMAGE_PIXELS,
     MAX_IMAGE_UPLOAD_SIZE_MB,
-    MIN_PAID_TICKET_PRICE,
     NAME_PUNCTUATION,
     REPEATED_PUNCTUATION,
     TEXT_ERROR,
@@ -16,11 +16,14 @@ from .constants import (
 )
 
 
-def validate_ticket_price(value) -> None:
-    if value != 0 and not value >= MIN_PAID_TICKET_PRICE:
-        raise ValidationError(
-            f"A ticket is free (0.00) or costs at least {MIN_PAID_TICKET_PRICE}."
+def validate_ticket_price(value, currency, field=None) -> None:
+    lowest, highest = CURRENCY_PRICE_LIMITS[currency]
+    if value != 0 and not lowest <= value <= highest:
+        message = (
+            f"A ticket is free (0.00) or costs from {lowest:,} to {highest:,} "
+            f"{currency.upper()}."
         )
+        raise ValidationError({field: message} if field else message)
 
 
 def validate_image_upload_size(file) -> None:

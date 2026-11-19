@@ -1,3 +1,4 @@
+from django.core.validators import MinValueValidator
 from django.db import models
 
 from apps.common.models import UUIDBaseModel
@@ -26,11 +27,11 @@ class EventSeat(UUIDBaseModel):
         max_length=20, choices=Status.choices, default=Status.AVAILABLE
     )
     price_override = models.DecimalField(
-        max_digits=10,
+        max_digits=18,
         decimal_places=2,
         null=True,
         blank=True,
-        validators=[validate_ticket_price],
+        validators=[MinValueValidator(0)],
     )
 
     class Meta:
@@ -44,6 +45,12 @@ class EventSeat(UUIDBaseModel):
 
     def __str__(self) -> str:
         return f"{self.event.title} — {self.seat} ({self.status})"
+
+    def clean(self):
+        if self.event_id and self.price_override is not None:
+            validate_ticket_price(
+                self.price_override, self.event.currency, "price_override"
+            )
 
     @property
     def price(self):

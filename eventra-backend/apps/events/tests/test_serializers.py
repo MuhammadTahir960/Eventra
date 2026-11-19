@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
@@ -225,26 +226,71 @@ def test_create_ticket_tier_assigns_event_from_context():
 
 
 @pytest.mark.parametrize(
-    "price, valid",
+    "country, time_zone, price, valid",
     [
-        ("-5.00", False),
-        ("-0.01", False),
-        ("0.01", False),
-        ("0.49", False),
-        ("0.00", True),
-        ("0.50", True),
-        ("100.00", True),
+        ("EC", "America/Guayaquil", "0.00", True),
+        ("EC", "America/Guayaquil", "0.49", False),
+        ("EC", "America/Guayaquil", "0.50", True),
+        ("EC", "America/Guayaquil", "10000.00", True),
+        ("EC", "America/Guayaquil", "10000.01", False),
+        ("PK", "Asia/Karachi", "299.99", False),
+        ("PK", "Asia/Karachi", "300.00", True),
+        ("PK", "Asia/Karachi", "3000000.00", True),
+        ("PK", "Asia/Karachi", "3000000.01", False),
+        ("ID", "Asia/Jakarta", "200000000.00", True),
+        ("ID", "Asia/Jakarta", "200000000.01", False),
     ],
 )
-def test_a_tier_is_free_or_costs_at_least_fifty_cents(price, valid):
+def test_a_tier_is_free_or_within_its_currencys_limits(
+    country, time_zone, price, valid
+):
+    event = EventFactory(venue=VenueFactory(country=country, time_zone=time_zone))
     serializer = TicketTierSerializer(
-        data={"name": "VIP", "price": price}, context={"event": EventFactory()}
+        data={"name": "VIP", "price": price}, context={"event": event}
     )
     assert serializer.is_valid() is valid
     if not valid:
-        assert serializer.errors["price"] == [
-            "A ticket is free (0.00) or costs at least 0.50."
-        ]
+        assert "A ticket is free (0.00) or costs from" in serializer.errors["price"][0]
+    else:
+        assert serializer.save().price == Decimal(price)
+
+
+def test_a_negative_zero_price_is_free_and_comes_back_as_zero():
+    serializer = TicketTierSerializer(
+        data={"name": "VIP", "price": "-0.00"}, context={"event": EventFactory()}
+    )
+    assert serializer.is_valid(), serializer.errors
+    serializer.save()
+    assert serializer.data["price"] == "0.00"
+
+
+@pytest.mark.parametrize("price", ["-0.01", "-5.00"])
+def test_a_negative_tier_price_is_refused(price):
+    serializer = TicketTierSerializer(
+        data={"name": "VIP", "price": price}, context={"event": EventFactory()}
+    )
+    assert serializer.is_valid() is False and "price" in serializer.errors
+
+
+def test_events_report_their_venues_currency_and_cant_move_to_another():
+    event = EventFactory(status=Event.Status.PENDING_APPROVAL)
+    context = {"request": _request_for(event.organizer)}
+    assert EventSerializer(event, context=context).data["currency"] == "usd"
+
+    rupees = VenueFactory(country="PK", time_zone="Asia/Karachi")
+    start = event.start_datetime + timedelta(days=1)
+    moved = EventSerializer(
+        event,
+        data={
+            "venue": rupees.id,
+            "start_datetime": wall_clock(start, "Asia/Karachi"),
+            "end_datetime": wall_clock(start + timedelta(hours=2), "Asia/Karachi"),
+        },
+        partial=True,
+        context=context,
+    )
+    assert moved.is_valid() is False
+    assert moved.errors["venue"] == ["This venue uses another currency."]
 
 
 def test_client_supplied_event_field_is_refused_on_create():
@@ -436,7 +482,7 @@ def test_a_time_at_the_edge_of_the_calendar_is_refused_not_a_crash(edge, time_zo
 
 def test_moving_to_a_venue_in_another_zone_needs_the_new_times():
     event = EventFactory(status=Event.Status.PENDING_APPROVAL)
-    elsewhere = VenueFactory(country="PK", time_zone="Asia/Karachi")
+    elsewhere = VenueFactory(country="US", time_zone="America/Chicago")
     context = {"request": _request_for(event.organizer)}
 
     venue_only = EventSerializer(
@@ -449,8 +495,8 @@ def test_moving_to_a_venue_in_another_zone_needs_the_new_times():
         event,
         data={
             "venue": elsewhere.id,
-            "start_datetime": wall_clock(start, "Asia/Karachi"),
-            "end_datetime": wall_clock(start + timedelta(hours=2), "Asia/Karachi"),
+            "start_datetime": wall_clock(start, "America/Chicago"),
+            "end_datetime": wall_clock(start + timedelta(hours=2), "America/Chicago"),
         },
         partial=True,
         context=context,

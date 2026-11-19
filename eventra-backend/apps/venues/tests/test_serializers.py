@@ -1,8 +1,9 @@
 import pytest
 
+from apps.common.constants import CURRENCY_PRICE_LIMITS
 from apps.events.factories import EventFactory
 
-from ..constants import COUNTRY_CODES, COUNTRY_TIME_ZONES
+from ..constants import COUNTRY_CODES, COUNTRY_CURRENCIES, COUNTRY_TIME_ZONES
 from ..factories import SeatFactory, VenueFactory
 from ..serializers import (
     BulkSeatTemplateSerializer,
@@ -318,9 +319,13 @@ def test_unprofessional_venue_names_fail_in_venues_and_requests(name):
 # ==================================================
 
 
-def test_every_offered_country_has_a_time_zone():
+def test_every_offered_country_has_a_time_zone_and_a_priced_currency():
     assert len(COUNTRY_CODES) == len(set(COUNTRY_CODES))
     assert all(COUNTRY_TIME_ZONES[code] for code in COUNTRY_CODES)
+    currencies = set(COUNTRY_CURRENCIES.values())
+    assert currencies == set(CURRENCY_PRICE_LIMITS)
+    for lowest, highest in CURRENCY_PRICE_LIMITS.values():
+        assert 0 < lowest < highest and highest * 10 * 100 < 10**12
 
 
 def test_a_one_zone_country_fills_in_its_time_zone():

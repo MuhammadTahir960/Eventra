@@ -88,6 +88,7 @@ def get_event_sales(event: Event) -> dict:
         )
 
     return {
+        "currency": event.currency,
         "tickets_sold": len(entries),
         "gross_revenue": gross_revenue,
         "tickets": entries,

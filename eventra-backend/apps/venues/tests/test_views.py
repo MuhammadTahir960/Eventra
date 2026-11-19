@@ -541,6 +541,17 @@ class TestVenueLayoutShape:
 
 
 class TestProtectedHardDelete:
+    def test_a_venue_that_ever_had_an_event_is_kept_for_its_money_records(self):
+        admin_user = UserFactory(role=Roles.ADMIN)
+        venue = VenueFactory()
+        EventFactory(venue=venue, status="completed", completed_at=timezone.now())
+
+        response = auth_client(admin_user).delete(f"/venues/{venue.id}/?hard=true")
+
+        assert response.status_code == 409
+        assert "can't be deleted forever" in response.data["detail"]
+        assert Venue.all_objects.filter(id=venue.id).exists()
+
     def test_hard_deleting_a_venue_with_event_history_is_a_409(self):
         admin_user = UserFactory(role=Roles.ADMIN)
         venue = VenueFactory()
@@ -756,6 +767,9 @@ def test_countries_are_public_and_list_each_countrys_time_zones(api_client):
     assert countries["PK"] == ["Asia/Karachi"]
     assert "America/Chicago" in countries["US"]
     assert "JP" not in countries
+    pakistan = next(row for row in response.data if row["code"] == "PK")
+    assert pakistan["currency"] == "pkr"
+    assert (pakistan["min_price"], pakistan["max_price"]) == ("300", "3000000")
 
 
 @pytest.mark.django_db(transaction=True)

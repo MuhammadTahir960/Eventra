@@ -62,6 +62,7 @@ export function ReceiptPrinter({
   eventTitle,
   seats,
   total,
+  currency,
   orderId,
   paidAt,
   onPrinted,
@@ -72,6 +73,7 @@ export function ReceiptPrinter({
   eventTitle: string | null
   seats: EventSeat[]
   total: string
+  currency: string | null
   orderId: string
   paidAt: Date
   onPrinted: () => void
@@ -133,15 +135,15 @@ export function ReceiptPrinter({
               <Row
                 key={seat.id}
                 label={`${seat.section} ${seat.row_label}${seat.seat_number}`}
-                value={formatMoney(seat.price)}
+                value={formatMoney(seat.price, currency)}
               />
             ))}
-            <Row label="Booking fees" value={formatMoney(0)} />
+            <Row label="Booking fees" value={formatMoney(0, currency)} />
           </div>
           <div className="my-3 border-t border-dashed border-hairline-strong" />
           <Row
             label={free ? 'Total' : 'Total paid'}
-            value={formatMoney(total)}
+            value={formatMoney(total, currency)}
             strong
           />
           <div className="mt-3 flex flex-col gap-0.5 text-muted-foreground">

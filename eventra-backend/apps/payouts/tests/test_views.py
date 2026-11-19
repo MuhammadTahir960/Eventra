@@ -61,6 +61,7 @@ class TestOrganizerEventSalesView:
 
         assert response.status_code == status.HTTP_200_OK
         assert response.data["tickets_sold"] == 1
+        assert response.data["currency"] == "usd"
         assert Decimal(response.data["gross_revenue"]) == Decimal("40.00")
         assert len(response.data["tickets"]) == 1
         assert response.data["tickets"][0]["status"] == "confirmed"

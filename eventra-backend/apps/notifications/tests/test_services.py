@@ -168,7 +168,7 @@ class TestSendRefundNotice:
         [sent] = mail.outbox
         assert sent.to == [refund.booking.user.email]
         assert sent.subject == "Your booking has been refunded"
-        assert "$80.00" in sent.body and "Jazz Night" in sent.body
+        assert "USD 80.00" in sent.body and "Jazz Night" in sent.body
         assert "cancelled" in sent.body
         notification = Notification.objects.get(user=refund.booking.user)
         assert notification.type == Notification.NotificationType.EVENT_CANCELLED_REFUND
@@ -182,7 +182,7 @@ class TestSendRefundNotice:
 
         [sent] = mail.outbox
         assert sent.subject == "Part of your booking has been refunded"
-        assert "$30.00" in sent.body and "still valid" in sent.body
+        assert "USD 30.00" in sent.body and "still valid" in sent.body
         notification = Notification.objects.get(user=refund.booking.user)
         assert notification.type == Notification.NotificationType.PARTIAL_REFUND
 

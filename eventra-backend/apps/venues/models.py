@@ -16,7 +16,7 @@ from apps.common.validators import (
     validate_proper_name,
 )
 
-from .constants import COUNTRY_CODES, COUNTRY_TIME_ZONES
+from .constants import COUNTRY_CODES, COUNTRY_CURRENCIES, COUNTRY_TIME_ZONES
 
 COUNTRY_CHOICES = [(code, code) for code in COUNTRY_CODES]
 
@@ -65,6 +65,10 @@ class Venue(SoftDeleteModel):
 
     def __str__(self) -> str:
         return f"{self.name} — ({self.city}, {self.country})"
+
+    @property
+    def currency(self) -> str:
+        return COUNTRY_CURRENCIES[self.country]
 
     def clean(self):
         if self.time_zone not in COUNTRY_TIME_ZONES.get(self.country, ()):

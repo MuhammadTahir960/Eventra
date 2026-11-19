@@ -1,3 +1,4 @@
+from django.db.models import Prefetch
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -8,6 +9,7 @@ from apps.payments.services import (
     PaymentGatewayError,
     cancel_booking,
 )
+from apps.tickets.models import Ticket
 
 from .models import Booking
 from .serializers import BookingSerializer, HoldIdSerializer
@@ -21,13 +23,17 @@ from .services import (
     create_booking_from_hold,
 )
 
+BOOKING_TICKETS = Prefetch(
+    "tickets", queryset=Ticket.objects.select_related("event_seat__event__venue")
+)
+
 
 class BookingListCreateView(generics.ListCreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         return Booking.objects.filter(user=self.request.user).prefetch_related(
-            "tickets"
+            BOOKING_TICKETS
         )
 
     def get_serializer_class(self):
@@ -64,7 +70,9 @@ class BookingDetailView(generics.RetrieveAPIView):
     lookup_url_kwarg = "id"
 
     def get_queryset(self):
-        return Booking.objects.filter(user=self.request.user)
+        return Booking.objects.filter(user=self.request.user).prefetch_related(
+            BOOKING_TICKETS
+        )
 
 
 class BookingCheckoutView(APIView):

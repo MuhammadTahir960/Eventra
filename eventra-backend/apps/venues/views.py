@@ -12,7 +12,6 @@ from rest_framework.views import APIView
 from apps.common.constants import Roles
 from apps.common.mixins import SoftDeleteDestroyMixin, SoftDeleteRestoreMixin
 from apps.common.permissions import IsAdmin, IsAdminForWrite, IsOrganizer, has_role
-from apps.events.services import find_blocking_upcoming_event
 
 from .constants import COUNTRIES
 from .models import Venue, VenueRequest
@@ -73,6 +72,9 @@ class VenueViewSet(
     filter_backends = [DjangoFilterBackend]
     filterset_class = VenueFilterSet
     http_method_names = ["get", "post", "patch", "delete"]
+    hard_delete_blocked_message = (
+        "This venue has events, so it can't be deleted forever. It stays in the trash."
+    )
 
     def get_queryset(self):
         if self.include_inactive():
@@ -91,19 +93,6 @@ class VenueViewSet(
                 {
                     "detail": (
                         "Cannot restore: an active venue with this name already exists in this city"
-                    )
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-        return None
-
-    def perform_hard_delete_guard(self, instance):
-        if find_blocking_upcoming_event(venue_id=instance.pk):
-            return Response(
-                {
-                    "detail": (
-                        "Cannot hard-delete: this venue is referenced by one "
-                        "or more upcoming, non-cancelled events."
                     )
                 },
                 status=status.HTTP_409_CONFLICT,

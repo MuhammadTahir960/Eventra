@@ -229,7 +229,7 @@ export function EventDetailPage() {
                   >
                     <span className="text-[15px]">{tier.name}</span>
                     <span className="tabular font-semibold">
-                      {formatMoney(tier.price)}
+                      {formatMoney(tier.price, item.currency)}
                     </span>
                   </li>
                 ))}
@@ -247,7 +247,7 @@ export function EventDetailPage() {
               <>
                 <span className="text-muted-foreground">From </span>
                 <span className="tabular font-semibold">
-                  {formatMoney(from)}
+                  {formatMoney(from, item.currency)}
                 </span>
               </>
             )}

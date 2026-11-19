@@ -39,7 +39,7 @@ class OrganizerPayoutListView(generics.ListAPIView):
     def get_queryset(self):
         return OrganizerPayout.objects.filter(
             event__organizer_id=self.request.user.id
-        ).select_related("event")
+        ).select_related("event__venue")
 
 
 class AdminPayoutListView(generics.ListAPIView):
@@ -48,7 +48,7 @@ class AdminPayoutListView(generics.ListAPIView):
     filterset_fields = ["status"]
 
     def get_queryset(self):
-        return OrganizerPayout.objects.select_related("event").all()
+        return OrganizerPayout.objects.select_related("event__venue").all()
 
 
 class AdminPayoutSettleView(APIView):

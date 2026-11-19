@@ -82,13 +82,18 @@ def send_booking_confirmation_email(booking) -> None:
     )
 
 
+def _money(amount, currency) -> str:
+    return f"{currency.upper()} {amount:,.2f}"
+
+
 def send_payout_settled_email(payout) -> None:
     title = payout.event.title
     _send_and_record(
         payout.event.organizer,
         Notification.NotificationType.PAYOUT_SETTLED,
         "Your Eventra payout has been settled",
-        f'Your payout for "{title}" has been settled: net amount ${payout.net_amount}.',
+        f'Your payout for "{title}" has been settled: net amount '
+        f"{_money(payout.net_amount, payout.event.currency)}.",
         record=f"Payout settled: {title}",
     )
 
@@ -151,7 +156,7 @@ def send_event_postponed_notice(event, user) -> None:
 
 
 def send_refund_notice(refund) -> None:
-    items = list(refund.items.select_related("ticket__event_seat__event"))
+    items = list(refund.items.select_related("ticket__event_seat__event__venue"))
     event = items[0].ticket.event_seat.event
     amount = sum(item.amount for item in items)
     full = refund.reason in Refund.FULL_REASONS
@@ -168,7 +173,8 @@ def send_refund_notice(refund) -> None:
             if full
             else "Part of your booking has been refunded"
         ),
-        f'We\'ve refunded ${amount} of your booking for "{event.title}" to your card '
+        f"We've refunded {_money(amount, event.currency)} of your booking for "
+        f'"{event.title}" to your card '
         f"because {REFUND_REASONS[refund.reason]}. "
         + (
             "Your tickets have been cancelled."

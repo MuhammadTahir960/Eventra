@@ -173,7 +173,7 @@ function PendingEvent({
             >
               {tier.name}{' '}
               <span className="tabular font-medium">
-                {formatMoney(tier.price)}
+                {formatMoney(tier.price, event.currency)}
               </span>
             </li>
           ))}

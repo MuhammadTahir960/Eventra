@@ -20,7 +20,6 @@ from apps.tickets.models import Ticket
 from apps.tickets.tasks import generate_ticket_pdf
 
 from .constants import (
-    CURRENCY,
     ORPHANED_PAYMENT_GRACE_MINUTES,
     REFUND_MAX_ATTEMPTS,
     REFUND_REQUEST_CUTOFF_HOURS,
@@ -63,7 +62,7 @@ def create_or_refresh_payment_intent(booking):
     try:
         intent = stripe.PaymentIntent.create(
             amount=_to_cents(booking.total_amount),
-            currency=CURRENCY,
+            currency=booking.event.currency,
             payment_method_types=["card"],
             metadata={"booking_id": str(booking.id)},
             idempotency_key=f"payment-intent-{booking.id}",
@@ -159,7 +158,8 @@ def confirm_payment_from_webhook(
             else None
         )
         expected = _to_cents(booking.total_amount)
-        paid_in_full = amount_received == expected and currency == CURRENCY
+        expected_currency = booking.event.currency
+        paid_in_full = amount_received == expected and currency == expected_currency
         if not paid_in_full:
             logger.error(
                 "PaymentIntent %s paid %s %s for booking %s, which costs %s %s: refunding",
@@ -168,7 +168,7 @@ def confirm_payment_from_webhook(
                 currency,
                 booking.id,
                 expected,
-                CURRENCY,
+                expected_currency,
             )
         fulfillable = (
             booking.status == Booking.Status.PENDING

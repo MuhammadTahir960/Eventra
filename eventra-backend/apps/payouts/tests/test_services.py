@@ -103,6 +103,7 @@ class TestGetEventSales:
         sales = get_event_sales(event)
 
         assert sales == {
+            "currency": "usd",
             "tickets_sold": 0,
             "gross_revenue": Decimal("0.00"),
             "tickets": [],

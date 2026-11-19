@@ -73,8 +73,6 @@ class EventFilterSet(django_filters.FilterSet):
     date_to = django_filters.DateTimeFilter(
         field_name="start_datetime", lookup_expr="lte"
     )
-    min_price = django_filters.NumberFilter(method="filter_noop")
-    max_price = django_filters.NumberFilter(method="filter_noop")
     search = django_filters.CharFilter(method="filter_search", max_length=100)
     is_active = django_filters.BooleanFilter()
 
@@ -88,25 +86,9 @@ class EventFilterSet(django_filters.FilterSet):
             "status",
             "date_from",
             "date_to",
-            "min_price",
-            "max_price",
             "search",
             "is_active",
         ]
-
-    def filter_noop(self, queryset, name, value):
-        return queryset
-
-    def filter_queryset(self, queryset):
-        queryset = super().filter_queryset(queryset)
-        bounds = {}
-        if self.form.cleaned_data.get("min_price") is not None:
-            bounds["ticket_tiers__price__gte"] = self.form.cleaned_data["min_price"]
-        if self.form.cleaned_data.get("max_price") is not None:
-            bounds["ticket_tiers__price__lte"] = self.form.cleaned_data["max_price"]
-        if bounds:
-            queryset = queryset.filter(**bounds).distinct()
-        return queryset
 
     def filter_search(self, queryset, name, value):
         return queryset.annotate(

@@ -220,7 +220,7 @@ class TestListEvents:
         response = api_client.get("/events/locations/")
         assert response.status_code == status.HTTP_200_OK
         assert response.data == [
-            {"country": "KE", "city": "Nairobi"},
+            {"country": "EC", "city": "Guayaquil"},
             {"country": "PK", "city": "Lahore"},
         ]
 
@@ -273,20 +273,6 @@ class TestListEvents:
         )
         titles = {e["title"] for e in results(response)}
         assert titles == {"Near"}
-
-    def test_filter_by_min_max_price(self, api_client):
-        cheap = EventFactory(status=Event.Status.APPROVED, title="Cheap")
-        TicketTierFactory(event=cheap, price="10.00")
-        pricey = EventFactory(status=Event.Status.APPROVED, title="Pricey")
-        TicketTierFactory(event=pricey, price="500.00")
-
-        response = api_client.get(self.url, {"min_price": "100"})
-        titles = {e["title"] for e in results(response)}
-        assert titles == {"Pricey"}
-
-        response = api_client.get(self.url, {"max_price": "100"})
-        titles = {e["title"] for e in results(response)}
-        assert titles == {"Cheap"}
 
     def test_filter_by_search_matches_title_and_description(self, api_client):
         EventFactory(
@@ -1732,21 +1718,6 @@ class TestHardDelete:
         event = EventFactory(organizer=organizer_user, status=Event.Status.CANCELLED)
         response = auth_client(organizer_user).delete(f"/events/{event.id}/?hard=true")
         assert response.status_code == 204
-
-
-class TestPriceFilter:
-    def test_min_and_max_must_match_the_same_tier(self, admin_user):
-        event = EventFactory(status=Event.Status.APPROVED)
-        TicketTierFactory(event=event, price=Decimal("10.00"))
-        TicketTierFactory(event=event, price=Decimal("100.00"))
-
-        response = APIClient().get("/events/?min_price=50&max_price=60")
-        ids = [row["id"] for row in response.json()["results"]]
-        assert str(event.id) not in ids
-
-        response = APIClient().get("/events/?min_price=5&max_price=20")
-        ids = [row["id"] for row in response.json()["results"]]
-        assert ids.count(str(event.id)) == 1
 
 
 class TestRejectInputHandling:
