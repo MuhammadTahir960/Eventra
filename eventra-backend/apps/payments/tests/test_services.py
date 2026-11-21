@@ -3,7 +3,6 @@ from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock
 
-import certifi
 import pytest
 import stripe
 from django.db import IntegrityError, connection
@@ -89,7 +88,8 @@ class TestCreateOrRefreshPaymentIntent:
         _, kwargs = mock_create.call_args
         assert kwargs["idempotency_key"] == f"payment-intent-{booking.id}"
         assert kwargs["metadata"] == {"booking_id": str(booking.id)}
-        assert kwargs["payment_method_types"] == ["card"]
+        assert kwargs["allowed_payment_method_types"] == ["card"]
+        assert "payment_method_types" not in kwargs
 
     def test_charges_in_the_events_currency(self, monkeypatch):
         event = EventFactory(venue=VenueFactory(country="PK", time_zone="Asia/Karachi"))
@@ -1082,8 +1082,8 @@ COMPROMISED_EMUDHRA_ROOTS = (
 )
 
 
-def test_stripe_uses_certifi_bundle():
-    assert stripe.ca_bundle_path == certifi.where()
+def test_stripe_uses_its_own_bundled_ca_list():
+    assert stripe.ca_bundle_path.endswith("stripe/data/ca-certificates.crt")
 
 
 def test_stripe_bundle_excludes_compromised_emudhra_roots():
