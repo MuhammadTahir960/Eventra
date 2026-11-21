@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16
+    image: postgres:16.16
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
@@ -17,7 +17,7 @@ services:
       retries: 5
 
   redis:
-    image: redis:7
+    image: redis:7.4.12
     restart: unless-stopped
     command: redis-server --requirepass "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"
     environment:
@@ -43,7 +43,7 @@ services:
     expose:
       - "8000"
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.dev
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -56,7 +56,7 @@ services:
         condition: service_healthy
 
   nginx:
-    image: nginx:1.30
+    image: nginx:1.30.7
     restart: unless-stopped
     ports:
       - "80:80"
@@ -79,7 +79,7 @@ services:
     volumes:
       - ./eventra-backend:/app
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.dev
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -104,7 +104,7 @@ services:
     volumes:
       - ./eventra-backend:/app
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.dev
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
