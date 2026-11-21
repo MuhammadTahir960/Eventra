@@ -104,10 +104,10 @@ export function CreateEventPage() {
   const requested = params.get('venue')
   const venue = isUuid(requested) ? venues.data?.byId.get(requested) : undefined
   const template = useVenueTemplate(venue?.id)
-  // The pickers' minimum: now, on the venue's clock
-  const venueNow = venue
-    ? toLocalInput(new Date().toISOString(), venue.time_zone)
-    : undefined
+  // The pickers' minimum: when the page opened, on the venue's clock (the
+  // submit check uses the real time)
+  const [openedAt] = useState(() => new Date().toISOString())
+  const venueNow = venue ? toLocalInput(openedAt, venue.time_zone) : undefined
 
   const [draft, setDraft] = useState<EventDraft>(blankDraft)
   const [activeKey, setActiveKey] = useState(() => draft.tiers[0].key)
@@ -118,6 +118,11 @@ export function CreateEventPage() {
   const progress = useRef<CreateProgress>(emptyProgress())
   // True once the event exists on the server; the form is then locked
   const [created, setCreated] = useState(false)
+  // Shown on the "Event created" screen; the progress ref is only for retries
+  const [createdEvent, setCreatedEvent] = useState<{
+    id: string
+    live: boolean
+  } | null>(null)
 
   const sections = useMemo(
     () => (template.data ? summarizeSections(template.data) : []),
@@ -228,6 +233,9 @@ export function CreateEventPage() {
     try {
       await submitEvent({ venueId: venue.id, draft }, progress.current)
       setCreated(true)
+      const { eventId, eventStatus } = progress.current
+      if (eventId)
+        setCreatedEvent({ id: eventId, live: eventStatus === 'approved' })
       setPhase('done')
     } catch (caught) {
       setPhase('idle')
@@ -286,6 +294,7 @@ export function CreateEventPage() {
     setErrors({})
     setFailure(null)
     setCreated(false)
+    setCreatedEvent(null)
     setPhase('idle')
   }
 
@@ -294,8 +303,8 @@ export function CreateEventPage() {
     message,
   }))
 
-  if (phase === 'done' && progress.current.eventId) {
-    const live = progress.current.eventStatus === 'approved'
+  if (phase === 'done' && createdEvent) {
+    const live = createdEvent.live
     return (
       <section className="flex max-w-xl flex-col gap-4">
         <h1 className="font-display text-[clamp(2rem,4vw,2.5rem)] leading-tight">
@@ -307,11 +316,7 @@ export function CreateEventPage() {
             : 'Your event was submitted for admin approval. It goes on sale once approved.'}
         </Notice>
         <div className="flex flex-wrap gap-3">
-          <ButtonLink
-            variant="ink"
-            size="lg"
-            to={`/events/${progress.current.eventId}`}
-          >
+          <ButtonLink variant="ink" size="lg" to={`/events/${createdEvent.id}`}>
             View event
           </ButtonLink>
           <Button variant="outline" size="lg" onClick={startAnother}>

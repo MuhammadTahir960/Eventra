@@ -53,16 +53,20 @@ function DetailsForm({ venue }: { venue: Venue | undefined }) {
     countries.data?.find((country) => country.code === code)?.time_zones ?? []
   const zones = zonesOf(values.country)
   const [photo, setPhoto] = useState<File | null>(null)
-  const [preview, setPreview] = useState<string | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [saved, setSaved] = useState(false)
 
-  useEffect(() => {
-    if (!photo) return setPreview(null)
-    const url = URL.createObjectURL(photo)
-    setPreview(url)
-    return () => URL.revokeObjectURL(url)
-  }, [photo])
+  // One preview URL per chosen file, released when the file changes or the form closes
+  const preview = useMemo(
+    () => (photo ? URL.createObjectURL(photo) : null),
+    [photo],
+  )
+  useEffect(
+    () => () => {
+      if (preview) URL.revokeObjectURL(preview)
+    },
+    [preview],
+  )
 
   const save = useMutation({
     mutationFn: () => {
