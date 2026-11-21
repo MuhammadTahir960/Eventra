@@ -3,8 +3,10 @@ line-length = 100
 exclude = ["**/migrations/**"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "B", "DJ", "I", "C4", "SIM"]
+select = ["E", "F", "W", "B", "DJ", "I", "C4", "SIM", "S"]
 
 [tool.ruff.lint.per-file-ignores]
 "config/settings/dev.py" = ["F403", "F405"]
 "config/settings/prod.py" = ["F403", "F405"]
+"apps/**/tests/**" = ["S101", "S105", "S106", "S110"]
+"tests/**" = ["S101", "S603"]
