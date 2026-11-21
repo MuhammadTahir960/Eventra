@@ -1,0 +1,5 @@
+# Findings the image scan skips, each with the reason.
+
+# setuptools 70.3.0 path traversal in setuptools.package_index. Not installed:
+# Trivy reads it from pip's vendored parts list.
+CVE-2025-47273
