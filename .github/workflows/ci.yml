@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: "17 5 * * 1"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,38 +23,25 @@ jobs:
       run:
         working-directory: eventra-backend
 
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: eventra_test
-          POSTGRES_USER: eventra_test
-          POSTGRES_PASSWORD: eventra_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     env:
-      SECRET_KEY: ci-test-secret-key
-      DEBUG: "True"
+      ENV_FILE: .github/ci.env
+      POSTGRES_DB: eventra_test
+      POSTGRES_USER: eventra_test
+      POSTGRES_PASSWORD: eventra_test
+      REDIS_PASSWORD: ci-redis-password
       DATABASE_URL: postgres://eventra_test:eventra_test@localhost:5432/eventra_test
       REDIS_URL: redis://:ci-redis-password@localhost:6379/0
-      STRIPE_SECRET_KEY: sk_test_ci_dummy_key_for_settings_boot
-      STRIPE_PUBLISHABLE_KEY: pk_test_ci_dummy_key_for_settings_boot
-      STRIPE_WEBHOOK_SECRET: whsec_ci_dummy_key_for_settings_boot
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-      - name: Start Redis with a password
+      - name: Load the CI settings
         working-directory: .
-        run: |
-          docker run -d --name redis -p 6379:6379 redis:7 redis-server --requirepass ci-redis-password
-          until docker exec -e REDISCLI_AUTH=ci-redis-password redis redis-cli ping | grep -q PONG; do sleep 1; done
+        run: grep -vE '^[[:space:]]*(#|$)' .github/ci.env >> "$GITHUB_ENV"
+
+      - name: Start Postgres and Redis from docker-compose.yml
+        working-directory: .
+        run: docker compose up -d --wait postgres redis
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -87,26 +76,85 @@ jobs:
       - name: Run tests
         run: pytest
 
-  nginx-config:
+  stack:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 25
+    env:
+      # Pinned by digest: Trivy's GitHub Action was hijacked in March 2026.
+      # shortcut: Dependabot doesn't update this pin, bump it by hand with each Trivy release
+      TRIVY: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+      ENV_FILE: .github/ci.env
+      POSTGRES_DB: eventra
+      POSTGRES_USER: eventra
+      POSTGRES_PASSWORD: ci-postgres-password
+      REDIS_PASSWORD: ci-redis-password
+      NGINX: http://localhost
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-      - name: Install nginx
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y nginx-light
+      - name: Start the whole stack
+        run: docker compose up -d --build --wait --wait-timeout 300
 
-      - name: Stub the "web" upstream hostname for this CI job only
-        run: echo "127.0.0.1 web" | sudo tee -a /etc/hosts
-
-      - name: Syntax-check nginx.conf (nginx -t)
+      - name: Smoke-test through nginx and the workers
         run: |
-          sudo cp nginx/nginx.conf /etc/nginx/conf.d/eventra-syntax-check.conf
-          sudo rm -f /etc/nginx/sites-enabled/default
-          sudo nginx -t
-          sudo rm -f /etc/nginx/conf.d/eventra-syntax-check.conf
+          expect() {
+            # "|| true": a refused connection (nginx down) reports as 000, not a bare exit
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${@:3}" "$NGINX$2" || true)
+            [ "$code" = "$1" ] || { echo "GET $2: expected $1, got $code"; exit 1; }
+            echo "GET $2: $code"
+          }
+          expect 200 /healthz/
+          expect 200 /countries/
+          expect 200 /events/
+          expect 200 /events/locations/
+          expect 401 /bookings/
+          expect 200 /django-admin/login/
+          expect 200 /static/admin/css/base.css
+          # The seat map's WebSocket upgrades through nginx (then closes: no ticket)
+          expect 101 /ws/seats/no-such-event/ -H "Connection: Upgrade" -H "Upgrade: websocket" \
+            -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+            -H "Origin: http://localhost:5173"
+          # The worker has no health check, so give it up to a minute to connect
+          for attempt in 1 2 3 4 5 6; do
+            docker compose exec -T celery-worker celery -A config inspect ping --timeout 10 && break
+            [ "$attempt" -lt 6 ] || exit 1
+          done
+
+      - name: Save the images the stack ran with
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir scan
+          for service in web postgres redis nginx; do
+            image="$(docker inspect --format '{{.Image}}' "$(docker compose ps -q "$service")")"
+            docker save -o "scan/$service.tar" "$image"
+          done
+
+      - name: Scan with Trivy (fails on fixable high and critical CVEs in our image)
+        if: ${{ !cancelled() }}
+        run: |
+          status=0
+          for archive in scan/*.tar; do
+            name="$(basename "$archive" .tar)"
+            # The skipped jars are Debian's gettext package in the nginx image, already
+            # scanned as an OS package; scanning them again needs Trivy's large Java DB
+            docker run --rm -v "$PWD/scan:/scan" -v trivy-cache:/root/.cache \
+              -v "$PWD/.trivyignore:/.trivyignore:ro" "$TRIVY" \
+              image --quiet --scanners vuln --ignorefile /.trivyignore \
+              --skip-dirs /usr/share/java,/usr/share/maven-repo \
+              --input "/scan/$name.tar" --severity HIGH,CRITICAL \
+              --format json --output "/scan/$name.json"
+            fixable=$(jq '[.Results[]?.Vulnerabilities[]? | select(.FixedVersion)] | length' "scan/$name.json")
+            echo "== $name: $fixable fixable"
+            jq -r '.Results[]?.Vulnerabilities[]?
+              | "\(.Severity)\t\(.VulnerabilityID)\t\(.PkgName) \(.InstalledVersion) -> \(.FixedVersion // "no fix yet")"' \
+              "scan/$name.json"
+            if [ "$name" = web ] && [ "$fixable" -gt 0 ]; then status=1; fi
+          done
+          exit "$status"
+
+      - name: Show the logs if it failed
+        if: failure()
+        run: docker compose logs --no-color --tail 80
 
   frontend:
     runs-on: ubuntu-latest
@@ -141,3 +189,6 @@ jobs:
 
       - name: Vitest
         run: npm run test
+
+      - name: Type check and production build
+        run: npm run build

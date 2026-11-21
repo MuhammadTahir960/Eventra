@@ -15,7 +15,7 @@ class UserFactory(DjangoModelFactory):
     role = Roles.ATTENDEE
     gender = User.Gender.OTHER
     is_active = True
-    password = factory.PostGenerationMethodCall("set_password", "testpass123")
+    password = "testpass123"  # noqa: S105 (test users only; create_user() hashes it)
 
     @classmethod
     def _create(cls, model_class, *args, **kwargs):

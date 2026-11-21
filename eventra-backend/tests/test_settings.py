@@ -1,7 +1,9 @@
 import textwrap
 
 import pytest
+from django.conf import settings
 
+from config.celery import app as celery_app
 from tests.helpers import PROD_ENV, run_with_settings
 
 # ==================================================
@@ -164,3 +166,37 @@ def test_healthz_is_not_redirected_public_paths_are_and_only_json_is_served():
     assert localhost_public == "400"
     assert web_public == "400"
     assert html_ask == "application/json"
+
+
+def test_production_settings_pass_djangos_deployment_checks():
+    code = (
+        "import django; django.setup(); "
+        "from django.core.management import call_command; "
+        "call_command('check', deploy=True, fail_level='WARNING')"
+    )
+    result = run_with_settings("config.settings.prod", PROD_ENV, code=code)
+    assert result.returncode == 0, result.stderr
+
+
+def test_production_sends_mail_over_smtp_with_the_email_env_variables():
+    code = (
+        "import django; django.setup(); "
+        "from django.core.mail import mailers; m = mailers.default; "
+        "print(type(m).__module__, m.host, m.port, m.username, m.use_tls)"
+    )
+    env = {**PROD_ENV, "EMAIL_PORT": "2525", "EMAIL_HOST_USER": "mailer"}
+    result = run_with_settings("config.settings.prod", env, code=code)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == [
+        "django.core.mail.backends.smtp",
+        "smtp.example.com",
+        "2525",
+        "mailer",
+        "True",
+    ]
+
+
+def test_every_task_in_the_beat_schedule_is_a_registered_celery_task():
+    celery_app.loader.import_default_modules()
+    scheduled = {entry["task"] for entry in settings.CELERY_BEAT_SCHEDULE.values()}
+    assert scheduled - set(celery_app.tasks) == set()

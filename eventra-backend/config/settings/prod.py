@@ -69,9 +69,8 @@ if not CORS_ALLOWED_ORIGINS:
         "(it also gates WebSocket origins)."
     )
 
-if not EMAIL_HOST:
+if not MAILERS["default"]["OPTIONS"]["host"]:
     raise ImproperlyConfigured("EMAIL_HOST must be set in production.")
-EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 
 INSTALLED_APPS = [*INSTALLED_APPS, "storages"]
 

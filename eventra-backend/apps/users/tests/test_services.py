@@ -60,12 +60,6 @@ from ..services import (
 )
 from ..tokens import generate_password_reset_token, generate_verification_token
 
-
-@pytest.fixture(autouse=True)
-def use_locmem_email_backend(settings):
-    settings.EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
-
-
 # ==================================================
 # send_verification_email
 # ==================================================

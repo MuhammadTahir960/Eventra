@@ -25,11 +25,6 @@ from ..views import AdminUserListView
 pytestmark = pytest.mark.django_db
 
 
-@pytest.fixture(autouse=True)
-def use_locmem_email_backend(settings):
-    settings.EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
-
-
 @pytest.fixture
 def api_client():
     return APIClient()

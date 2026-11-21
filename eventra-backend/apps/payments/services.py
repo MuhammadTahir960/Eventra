@@ -4,7 +4,6 @@ from collections import defaultdict
 from datetime import timedelta
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 
-import certifi
 import stripe
 from django.conf import settings
 from django.db import IntegrityError, transaction
@@ -30,9 +29,6 @@ from .constants import (
 from .models import Payment, Refund, RefundItem
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
-# stripe-python's bundled CA list still trusts the compromised eMudhra roots
-# (CVE-2026-111943); switch back to the default once stripe-python ships an updated bundle
-stripe.ca_bundle_path = certifi.where()
 
 
 logger = logging.getLogger(__name__)
@@ -63,7 +59,7 @@ def create_or_refresh_payment_intent(booking):
         intent = stripe.PaymentIntent.create(
             amount=_to_cents(booking.total_amount),
             currency=booking.event.currency,
-            payment_method_types=["card"],
+            allowed_payment_method_types=["card"],
             metadata={"booking_id": str(booking.id)},
             idempotency_key=f"payment-intent-{booking.id}",
         )
