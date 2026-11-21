@@ -99,7 +99,7 @@ jobs:
         run: |
           expect() {
             # "|| true": a refused connection (nginx down) reports as 000, not a bare exit
-            code=$(curl -s -o /dev/null -w "%{http_code}" "$NGINX$2" || true)
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${@:3}" "$NGINX$2" || true)
             [ "$code" = "$1" ] || { echo "GET $2: expected $1, got $code"; exit 1; }
             echo "GET $2: $code"
           }
@@ -110,6 +110,10 @@ jobs:
           expect 401 /bookings/
           expect 200 /django-admin/login/
           expect 200 /static/admin/css/base.css
+          # The seat map's WebSocket upgrades through nginx (then closes: no ticket)
+          expect 101 /ws/seats/no-such-event/ -H "Connection: Upgrade" -H "Upgrade: websocket" \
+            -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+            -H "Origin: http://localhost:5173"
           # The worker has no health check, so give it up to a minute to connect
           for attempt in 1 2 3 4 5 6; do
             docker compose exec -T celery-worker celery -A config inspect ping --timeout 10 && break
