@@ -1,7 +1,9 @@
 import textwrap
 
 import pytest
+from django.conf import settings
 
+from config.celery import app as celery_app
 from tests.helpers import PROD_ENV, run_with_settings
 
 # ==================================================
@@ -192,3 +194,9 @@ def test_production_sends_mail_over_smtp_with_the_email_env_variables():
         "mailer",
         "True",
     ]
+
+
+def test_every_task_in_the_beat_schedule_is_a_registered_celery_task():
+    celery_app.loader.import_default_modules()
+    scheduled = {entry["task"] for entry in settings.CELERY_BEAT_SCHEDULE.values()}
+    assert scheduled - set(celery_app.tasks) == set()
