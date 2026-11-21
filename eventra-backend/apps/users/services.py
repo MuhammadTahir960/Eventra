@@ -44,7 +44,7 @@ _WS_TICKET_KEY_PREFIX = "ws_ticket:"
 def send_verification_email(user: User) -> None:
     """
     Builds the verification link and sends it through Django's configured
-    EMAIL_BACKEND. In dev this is the console backend — the "email" just
+    MAILERS. In dev this is the console backend — the "email" just
     prints to your terminal, no real SMTP involved.
     """
     token = generate_verification_token(user.id)
