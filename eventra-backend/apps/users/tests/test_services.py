@@ -67,7 +67,7 @@ from ..tokens import generate_password_reset_token, generate_verification_token
 
 @pytest.mark.django_db
 def test_send_verification_email_contains_working_token():
-    user = UserFactory(is_active=False)
+    user = UserFactory(is_active=False, first_name="Zebedee")
     send_verification_email(user)
 
     assert len(mail.outbox) == 1
@@ -75,9 +75,10 @@ def test_send_verification_email_contains_working_token():
     assert sent.to == [user.email]
     assert "/verify-email?token=" in sent.body
 
-    token = sent.body.split("token=")[1].strip()
+    token = sent.body.split("token=")[1].split()[0]
 
     assert verify_token(token) == str(user.id)
+    assert user.first_name not in sent.body
 
 
 @pytest.mark.django_db
@@ -162,7 +163,7 @@ def test_one_mailbox_gets_one_account_and_its_owner_hears_about_the_attempt(
         assert mail.outbox[0].subject == "You already have an Eventra account"
     else:
         assert created is not None and User.objects.count() == 2
-        assert mail.outbox[0].subject == "Verify your Eventra account"
+        assert mail.outbox[0].subject == "Verify your email to finish signing up"
 
 
 @pytest.mark.django_db
@@ -176,7 +177,7 @@ def test_signing_up_again_before_verifying_resends_the_link(
 
     assert User.objects.count() == 1
     assert [m.to for m in mail.outbox] == [[owner.email]]
-    assert mail.outbox[0].subject == "Verify your Eventra account"
+    assert mail.outbox[0].subject == "Verify your email to finish signing up"
 
 
 @pytest.mark.django_db
@@ -330,6 +331,17 @@ def test_password_reset_email_points_at_the_frontend_page(settings):
 
     sent = mail.outbox[0]
     assert "http://app.example.test/reset-password?token=" in sent.body
+
+
+@pytest.mark.django_db
+def test_account_emails_give_their_own_reason_and_skip_the_review_line():
+    user = UserFactory()
+
+    send_password_reset_email(user)
+
+    body = mail.outbox[0].body
+    assert "because a password reset was requested for this address" in body
+    assert "checked by a person" not in body
 
 
 # ==================================================
