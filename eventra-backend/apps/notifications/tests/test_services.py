@@ -22,7 +22,9 @@ from ..models import Notification
 from ..services import (
     send_booking_confirmation_email,
     send_event_cancelled_notice,
+    send_event_postponed_notice,
     send_event_reminders_batch,
+    send_event_running_late_notice,
     send_event_updated_notice,
     send_payout_settled_email,
     send_refund_notice,
@@ -49,7 +51,7 @@ class TestEventBuyerNotices:
 
         [sent] = mail.outbox
         assert sent.to == [buyer.email]
-        assert sent.subject == "An event you booked has been updated"
+        assert sent.subject == "Jazz Night has been updated"
         assert "Jazz Night" in sent.body and event.venue.name in sent.body
         notification = Notification.objects.get(event=event)
         assert notification.type == Notification.NotificationType.EVENT_UPDATED
@@ -68,16 +70,19 @@ class TestEventBuyerNotices:
 
         send_event_updated_notice(event, UserFactory())
 
-        assert f"{start:%Y-%m-%d} 18:00 PKT" in mail.outbox[0].body
+        assert f"{start:%a} {start.day} {start:%b %Y}, 18:00 Karachi time" in (
+            mail.outbox[0].body
+        )
 
-    def test_cancelled_notice_promises_a_refund(self):
+    def test_cancelled_notice_promises_a_refund_for_paid_tickets(self):
         event = EventFactory(status="cancelled", title="Jazz Night")
+        booking = paid_booking(event, (TicketTierFactory(event=event), "20.00"))
 
-        send_event_cancelled_notice(event, UserFactory())
+        send_event_cancelled_notice(event, booking.user)
 
         [sent] = mail.outbox
-        assert sent.subject == "An event you booked has been cancelled"
-        assert "Jazz Night" in sent.body and "refund" in sent.body
+        assert sent.subject == "Jazz Night has been cancelled"
+        assert "full refund" in sent.body and "In full, automatically" in sent.body
         assert Notification.objects.get(event=event).type == (
             Notification.NotificationType.EVENT_CANCELLED
         )
@@ -87,7 +92,7 @@ class TestEventBuyerNotices:
     ):
         event = EventFactory(status="cancelled")
         monkeypatch.setattr(
-            "apps.notifications.services.EmailMessage.send",
+            "apps.notifications.emails.EmailMultiAlternatives.send",
             MagicMock(side_effect=RuntimeError("SMTP is down")),
         )
 
@@ -97,6 +102,104 @@ class TestEventBuyerNotices:
         assert Notification.objects.get(event=event).status == (
             Notification.Status.FAILED
         )
+
+    def test_cancelled_notice_for_free_tickets_promises_no_refund(self):
+        event = EventFactory(status="cancelled")
+        booking = paid_booking(event, (TicketTierFactory(event=event), "0.00"))
+
+        send_event_cancelled_notice(event, booking.user)
+
+        body = mail.outbox[0].body
+        assert "Your free tickets are cancelled." in body and "refund" not in body
+
+    def test_postponed_notice_gives_the_refund_deadline_for_paid_tickets(self):
+        event = EventFactory(status="approved")
+        event.postponed_from = event.start_datetime - timedelta(days=7)
+        booking = paid_booking(event, (TicketTierFactory(event=event), "20.00"))
+
+        send_event_postponed_notice(event, booking.user)
+
+        [sent] = mail.outbox
+        assert sent.subject == f"{event.title} has a new date"
+        assert "Request a full refund from your bookings until" in sent.body
+        assert "Was: " in sent.body and "Now: " in sent.body
+
+    def test_postponed_notice_for_free_tickets_offers_handing_them_back(self):
+        event = EventFactory(status="approved")
+        booking = paid_booking(event, (TicketTierFactory(event=event), "0.00"))
+
+        send_event_postponed_notice(event, booking.user)
+
+        assert "Hand your ticket back" in mail.outbox[0].body
+        assert "refund" not in mail.outbox[0].body
+
+    def test_new_end_time_notice_gives_the_end(self):
+        event = EventFactory(status="approved")
+
+        send_event_running_late_notice(event, UserFactory())
+
+        [sent] = mail.outbox
+        assert sent.subject == f"{event.title} now ends later"
+        assert "Now ends: " in sent.body and "running late" not in sent.body
+
+
+class TestEmailLayout:
+    def test_html_copy_escapes_organizer_text(self):
+        event = EventFactory(status="approved", title="<script>x</script> & Co")
+
+        send_event_updated_notice(event, UserFactory())
+
+        [(html, mimetype)] = mail.outbox[0].alternatives
+        assert mimetype == "text/html"
+        assert "<script>x</script>" not in html
+        assert "&lt;script&gt;x&lt;/script&gt; &amp; Co" in html
+
+    def test_logo_is_an_inline_image_the_html_points_at(self):
+        send_event_updated_notice(EventFactory(status="approved"), UserFactory())
+
+        sent = mail.outbox[0]
+        [logo] = [a for a in sent.attachments if not isinstance(a, tuple)]
+        assert logo.get_content_type() == "image/png"
+        assert logo.get_content_disposition() == "inline"
+        cid = logo["Content-ID"].strip("<>")
+        assert f'src="cid:{cid}"' in sent.alternatives[0][0]
+        assert 'alt="Eventra"' in sent.alternatives[0][0]
+
+    def test_replies_go_to_the_help_address_named_in_the_footer(self, settings):
+        settings.EMAIL_REPLY_TO = "help@example.test"
+
+        send_event_updated_notice(EventFactory(status="approved"), UserFactory())
+
+        sent = mail.outbox[0]
+        assert sent.reply_to == ["help@example.test"]
+        assert "Questions? Write to help@example.test." in sent.body
+        assert 'href="mailto:help@example.test"' in sent.alternatives[0][0]
+
+    def test_without_a_help_address_there_is_no_reply_to_or_questions_line(
+        self, settings
+    ):
+        settings.EMAIL_REPLY_TO = ""
+
+        send_event_updated_notice(EventFactory(status="approved"), UserFactory())
+
+        sent = mail.outbox[0]
+        assert sent.reply_to == []
+        assert "Questions?" not in sent.body
+
+    def test_button_links_and_footer_are_in_both_copies(self, settings):
+        settings.FRONTEND_URL = "http://app.example.test"
+        event = EventFactory(status="approved")
+
+        send_event_updated_notice(event, UserFactory())
+
+        sent = mail.outbox[0]
+        url = f"http://app.example.test/events/{event.id}"
+        assert f"See the event: {url}" in sent.body
+        assert f'href="{url}"' in sent.alternatives[0][0]
+        for copy in (sent.body, sent.alternatives[0][0]):
+            assert "See it listed. Know someone checked." in copy
+            assert "checked by a person before it goes on sale" in copy
+            assert "because you booked on Eventra" in copy
 
 
 class TestSendBookingConfirmationEmail:
@@ -108,9 +211,12 @@ class TestSendBookingConfirmationEmail:
         assert len(mail.outbox) == 1
         sent = mail.outbox[0]
         assert sent.to == [booking.user.email]
-        assert "confirmed" in sent.subject.lower()
-        assert len(sent.attachments) == 3
-        for filename, _content, content_type in sent.attachments:
+        assert sent.subject == f"Your tickets for {booking.event.title}"
+        assert "3 tickets" in sent.alternatives[0][0]
+        assert "The PDFs are attached" in sent.body
+        pdfs = [a for a in sent.attachments if isinstance(a, tuple)]
+        assert len(pdfs) == 3
+        for filename, _content, content_type in pdfs:
             assert filename.startswith("ticket-")
             assert filename.endswith(".pdf")
             assert content_type == "application/pdf"
@@ -125,18 +231,48 @@ class TestSendBookingConfirmationEmail:
         assert notification.status == Notification.Status.SENT
         assert notification.sent_at is not None
 
-    def test_zero_tickets_still_sends_an_email_with_no_attachments(self):
+    def test_booking_without_tickets_sends_nothing(self):
+        send_booking_confirmation_email(BookingFactory())
+
+        assert mail.outbox == []
+        assert not Notification.objects.exists()
+
+    def test_seats_are_grouped_by_section_and_row(self):
+        event = EventFactory(status="approved")
         booking = BookingFactory()
+        for section, row, number in (("B", "4", 12), ("B", "4", 11), ("C", "1", 3)):
+            seat = EventSeatFactory(
+                event=event,
+                seat=SeatFactory(
+                    venue=event.venue,
+                    section=section,
+                    row_label=row,
+                    seat_number=number,
+                ),
+            )
+            TicketFactory(booking=booking, event_seat=seat, status=Ticket.Status.VALID)
 
         send_booking_confirmation_email(booking)
 
-        assert len(mail.outbox) == 1
-        assert mail.outbox[0].attachments == []
+        assert (
+            "Seats: Section B, row 4, seats 11 and 12; Section C, row 1, seat 3"
+            in mail.outbox[0].body
+        )
+
+    def test_free_booking_says_free_and_how_to_hand_tickets_back(self):
+        event = EventFactory(status="approved")
+        booking = paid_booking(event, (TicketTierFactory(event=event), "0.00"))
+
+        send_booking_confirmation_email(booking)
+
+        body = mail.outbox[0].body
+        assert "Paid: Free" in body and "Hand your ticket back" in body
+        assert "refunded only if" not in body
 
     def test_send_failure_records_a_failed_notification_and_reraises(self, monkeypatch):
         booking = _booking_with_tickets(n_tickets=1)
         monkeypatch.setattr(
-            "apps.notifications.services.EmailMessage.send",
+            "apps.notifications.emails.EmailMultiAlternatives.send",
             MagicMock(side_effect=RuntimeError("SMTP is down")),
         )
 
@@ -167,9 +303,11 @@ class TestSendRefundNotice:
 
         [sent] = mail.outbox
         assert sent.to == [refund.booking.user.email]
-        assert sent.subject == "Your booking has been refunded"
-        assert "USD 80.00" in sent.body and "Jazz Night" in sent.body
-        assert "cancelled" in sent.body
+        assert sent.subject == "Your refund of USD 80.00 has been sent"
+        assert "Jazz Night" in sent.body
+        assert "Full refund" in sent.alternatives[0][0]
+        assert "Your tickets are cancelled." in sent.body
+        assert "within 5 to 10 working days" in sent.body
         notification = Notification.objects.get(user=refund.booking.user)
         assert notification.type == Notification.NotificationType.EVENT_CANCELLED_REFUND
         assert notification.status == Notification.Status.SENT
@@ -181,15 +319,15 @@ class TestSendRefundNotice:
         send_refund_notice(refund)
 
         [sent] = mail.outbox
-        assert sent.subject == "Part of your booking has been refunded"
-        assert "USD 30.00" in sent.body and "still valid" in sent.body
+        assert sent.subject == "Your refund of USD 30.00 has been sent"
+        assert "Your tickets still work." in sent.body
         notification = Notification.objects.get(user=refund.booking.user)
         assert notification.type == Notification.NotificationType.PARTIAL_REFUND
 
     def test_send_failure_records_a_failed_notification_and_reraises(self, monkeypatch):
         refund = _refund(Refund.Reason.UNAVAILABLE, "80.00")
         monkeypatch.setattr(
-            "apps.notifications.services.EmailMessage.send",
+            "apps.notifications.emails.EmailMultiAlternatives.send",
             MagicMock(side_effect=RuntimeError("SMTP is down")),
         )
 
@@ -211,7 +349,8 @@ class TestSendPayoutSettledEmail:
         assert len(mail.outbox) == 1
         sent = mail.outbox[0]
         assert sent.to == [event.organizer.email]
-        assert "settled" in sent.subject.lower()
+        assert sent.subject == f"Your payout for {event.title} has been sent"
+        assert "(10%, card fees included)" in sent.body
 
     def test_happy_path_records_a_sent_notification(self):
         event = EventFactory()
@@ -299,7 +438,7 @@ def test_far_future_past_cancelled_and_used_ticket_events_are_skipped():
 def test_a_failed_send_is_retried_on_the_next_run(monkeypatch):
     _ticket_for(_event_starting_in(10))
     monkeypatch.setattr(
-        "apps.notifications.services.EmailMessage.send",
+        "apps.notifications.emails.EmailMultiAlternatives.send",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("smtp down")),
     )
     assert send_event_reminders_batch() == 0
@@ -365,7 +504,7 @@ def test_reminder_gives_up_after_max_failed_attempts(monkeypatch):
         calls.append(1)
         raise RuntimeError("bad address")
 
-    monkeypatch.setattr("apps.notifications.services.EmailMessage.send", boom)
+    monkeypatch.setattr("apps.notifications.emails.EmailMultiAlternatives.send", boom)
 
     for _ in range(REMINDER_MAX_ATTEMPTS + 3):
         assert send_event_reminders_batch() == 0

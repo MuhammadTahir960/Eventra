@@ -52,7 +52,8 @@ class TestEventBuyerNoticeTasks:
 
 class TestSendConfirmationEmailTask:
     def test_fetches_booking_and_delegates_to_the_confirmation_service(self):
-        booking = BookingFactory()
+        event = EventFactory(status="approved")
+        booking = paid_booking(event, (TicketTierFactory(event=event), "20.00"))
 
         send_confirmation_email(str(booking.id))
 
