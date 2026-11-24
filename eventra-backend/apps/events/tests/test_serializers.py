@@ -171,13 +171,39 @@ def test_cosmetic_field_update_does_not_retrigger_approval():
     event = EventFactory(organizer=organizer, status=Event.Status.APPROVED)
     serializer = EventSerializer(
         event,
-        data={"title": "Updated Title"},
+        data={"description": "Updated description."},
         partial=True,
         context={"request": _request_for(organizer)},
     )
     assert serializer.is_valid(), serializer.errors
     updated = serializer.save()
     assert updated.status == Event.Status.APPROVED
+
+
+def test_renaming_a_live_event_sends_it_back_to_review():
+    organizer = UserFactory(role=Roles.ORGANIZER)
+    event = EventFactory(organizer=organizer, status=Event.Status.APPROVED)
+    serializer = EventSerializer(
+        event,
+        data={"title": "Updated Title"},
+        partial=True,
+        context={"request": _request_for(organizer)},
+    )
+    assert serializer.is_valid(), serializer.errors
+    assert serializer.save().status == Event.Status.PENDING_APPROVAL
+
+
+def test_title_with_a_web_address_is_rejected():
+    organizer = UserFactory(role=Roles.ORGANIZER)
+    event = EventFactory(organizer=organizer, status=Event.Status.APPROVED)
+    serializer = EventSerializer(
+        event,
+        data={"title": "Reset your password at www.evil-login.example"},
+        partial=True,
+        context={"request": _request_for(organizer)},
+    )
+    assert not serializer.is_valid()
+    assert "title" in serializer.errors
 
 
 def test_sensitive_field_update_does_not_retrigger_approval_for_admin_owned_event():

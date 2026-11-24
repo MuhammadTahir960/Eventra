@@ -73,7 +73,8 @@ function EditForm({ event }: { event: EventItem }) {
   const changed = Object.keys(patch).length > 0
   const needsReview =
     event.status !== 'pending_approval' &&
-    ('category' in patch ||
+    ('title' in patch ||
+      'category' in patch ||
       'start_datetime' in patch ||
       'end_datetime' in patch)
 
@@ -232,8 +233,8 @@ function EditForm({ event }: { event: EventItem }) {
 
       {needsReview && (
         <Notice tone="warning">
-          Changing the category or dates sends the event back to an admin for
-          approval. It comes off sale until it's approved again.
+          Changing the title, category or dates sends the event back to an admin
+          for approval. It comes off sale until it's approved again.
         </Notice>
       )}
 

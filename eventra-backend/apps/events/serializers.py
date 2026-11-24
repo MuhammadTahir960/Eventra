@@ -22,6 +22,7 @@ from .constants import (
     MAX_EVENT_LENGTH_DAYS,
     MAX_REJECTION_REASON_LENGTH,
     ORGANIZER_MIN_NOTICE_HOURS,
+    SENSITIVE_EVENT_FIELDS,
     WALL_CLOCK_FORMATS,
 )
 from .models import Event, TicketTier, TierSectionMapping
@@ -295,7 +296,7 @@ class EventSerializer(
     def update(self, instance, validated_data):
         changed_fields = {
             field
-            for field in ("venue", "category", "start_datetime", "end_datetime")
+            for field in SENSITIVE_EVENT_FIELDS
             if field in validated_data
             and validated_data[field] != getattr(instance, field)
         }
