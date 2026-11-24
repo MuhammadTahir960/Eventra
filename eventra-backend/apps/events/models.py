@@ -11,6 +11,8 @@ from django.utils.text import slugify
 from apps.common.models import SoftDeleteModel, UUIDBaseModel
 from apps.common.validators import validate_display_name, validate_ticket_price
 
+from .validators import validate_no_web_address
+
 EVENT_SEARCH_CONFIG = "english"
 
 
@@ -64,7 +66,9 @@ class Event(SoftDeleteModel):
         related_name="away_events",
     )
 
-    title = models.CharField(max_length=100, validators=[validate_display_name])
+    title = models.CharField(
+        max_length=100, validators=[validate_display_name, validate_no_web_address]
+    )
     slug = models.SlugField(max_length=220, blank=True, db_index=True)
     description = models.TextField()
     event_type = models.CharField(max_length=20, choices=EventType.choices)
