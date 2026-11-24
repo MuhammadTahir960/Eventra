@@ -152,6 +152,7 @@ MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "mediafiles"
 
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@eventra.local")
+EMAIL_REPLY_TO = env("EMAIL_REPLY_TO", default="")
 
 MAILERS = {
     "default": {

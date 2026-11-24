@@ -76,6 +76,18 @@ def test_prod_rejects_r2_public_domain_that_is_not_a_bare_hostname(bad_domain):
         ({"CORS_ALLOWED_ORIGINS": ""}, "CORS_ALLOWED_ORIGINS"),
         ({"ALLOWED_HOSTS": ".example.com"}, "exact hostname"),
         ({"EMAIL_HOST": ""}, "EMAIL_HOST"),
+        ({"DEFAULT_FROM_EMAIL": "noreply@eventra.local"}, "DEFAULT_FROM_EMAIL"),
+        ({"DEFAULT_FROM_EMAIL": "Eventra"}, "DEFAULT_FROM_EMAIL"),
+        ({"EMAIL_REPLY_TO": ""}, "EMAIL_REPLY_TO"),
+        (
+            {"DEFAULT_FROM_EMAIL": "Eventra <noreply@EVENTRA.LOCAL>"},
+            "DEFAULT_FROM_EMAIL",
+        ),
+        ({"EMAIL_REPLY_TO": "help@"}, "EMAIL_REPLY_TO"),
+        (
+            {"EMAIL_REPLY_TO": "help@example.com\r\nBcc: x@example.com"},
+            "EMAIL_REPLY_TO",
+        ),
         ({"TURNSTILE_SECRET_KEY": ""}, "TURNSTILE_SECRET_KEY"),
         (
             {"TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA"},
