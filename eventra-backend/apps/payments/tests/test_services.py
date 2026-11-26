@@ -947,7 +947,7 @@ class TestRefundOnRequest:
         seat.refresh_from_db()
         assert booking.status == Booking.Status.REFUNDED
         assert seat.status == EventSeat.Status.AVAILABLE
-        assert "postponed" in mailoutbox[0].body and "USD 25.00" in mailoutbox[0].body
+        assert "date moved" in mailoutbox[0].body and "USD 25.00" in mailoutbox[0].body
         TicketFactory(booking=BookingFactory(), event_seat=seat)
 
     def test_seats_go_out_on_the_seat_map_without_a_query_per_seat(

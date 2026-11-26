@@ -1,3 +1,4 @@
+from email.utils import parseaddr
 from urllib.parse import urlparse
 
 from django.core.exceptions import ImproperlyConfigured
@@ -71,6 +72,21 @@ if not CORS_ALLOWED_ORIGINS:
 
 if not MAILERS["default"]["OPTIONS"]["host"]:
     raise ImproperlyConfigured("EMAIL_HOST must be set in production.")
+
+
+def _email_domain(value: str) -> str:
+    local, _, domain = parseaddr(value)[1].rpartition("@")
+    return domain.lower() if local and "." in domain and value.isprintable() else ""
+
+
+if _email_domain(DEFAULT_FROM_EMAIL) in ("", "eventra.local"):
+    raise ImproperlyConfigured(
+        "DEFAULT_FROM_EMAIL must be a real sender on your domain in production "
+        "(for example: Eventra <hello@yourdomain>)."
+    )
+
+if not _email_domain(EMAIL_REPLY_TO):
+    raise ImproperlyConfigured("EMAIL_REPLY_TO must be set in production.")
 
 INSTALLED_APPS = [*INSTALLED_APPS, "storages"]
 

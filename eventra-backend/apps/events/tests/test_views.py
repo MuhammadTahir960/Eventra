@@ -1985,9 +1985,9 @@ class TestCancelledEventEmails:
         booking.refresh_from_db()
         assert booking.status == Booking.Status.REFUNDED
         assert [(m.to, m.subject) for m in mail.outbox] == [
-            ([buyer.email], "An event you booked has been cancelled"),
-            ([buyer.email], "Your booking has been refunded"),
-            ([buyer.email], "Your booking has been refunded"),
+            ([buyer.email], f"{event.title} has been cancelled"),
+            ([buyer.email], "Your refund of USD 25.00 has been sent"),
+            ([buyer.email], "Your refund of USD 25.00 has been sent"),
         ]
 
     def test_cancelling_an_unsold_event_sends_no_email(

@@ -127,8 +127,7 @@ def test_should_retrigger_approval_true_for_organizer_sensitive_field():
 def test_should_retrigger_approval_false_for_organizer_cosmetic_field_only():
     event = EventFactory(organizer=UserFactory(role=Roles.ORGANIZER))
     assert (
-        should_retrigger_approval(event=event, changed_fields={"title", "description"})
-        is False
+        should_retrigger_approval(event=event, changed_fields={"description"}) is False
     )
 
 

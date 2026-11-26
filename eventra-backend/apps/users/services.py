@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 import requests
 from django.conf import settings
 from django.contrib.auth.hashers import make_password
-from django.core.mail import send_mail
 from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 from django.utils.crypto import constant_time_compare
@@ -19,6 +18,13 @@ from apps.bookings.models import Booking
 from apps.common.constants import Roles
 from apps.common.redis import get_redis_client
 from apps.events.models import Event
+from apps.notifications.constants import (
+    REASON_ACCOUNT_DELETED,
+    REASON_RESET,
+    REASON_SIGN_UP,
+    REASON_SIGN_UP_ATTEMPT,
+)
+from apps.notifications.emails import build_email
 from apps.payments.constants import UNFINISHED_REFUND_STATUSES
 from apps.payments.models import Refund
 from apps.payouts.models import OrganizerPayout
@@ -28,6 +34,8 @@ from apps.tickets.services import forget_ticket_pdfs
 
 from .models import CanonicalEmail, User
 from .tokens import (
+    PASSWORD_RESET_MAX_AGE_SECONDS,
+    TOKEN_MAX_AGE_SECONDS,
     generate_password_reset_token,
     generate_verification_token,
     password_fingerprint,
@@ -41,6 +49,11 @@ WS_TICKET_TTL_SECONDS = 30
 _WS_TICKET_KEY_PREFIX = "ws_ticket:"
 
 
+def _hours(seconds: int) -> str:
+    hours = seconds // 3600
+    return "1 hour" if hours == 1 else f"{hours} hours"
+
+
 def send_verification_email(user: User) -> None:
     """
     Builds the verification link and sends it through Django's configured
@@ -50,13 +63,22 @@ def send_verification_email(user: User) -> None:
     token = generate_verification_token(user.id)
     verification_link = f"{settings.FRONTEND_URL}/verify-email?token={token}"
 
-    send_mail(
-        subject="Verify your Eventra account",
-        message=f"Welcome to Eventra! Verify your email:\n\n{verification_link}",
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[user.email],
-        fail_silently=False,
-    )
+    build_email(
+        user.email,
+        "Verify your email to finish signing up",
+        pill="Welcome",
+        headline="Welcome in.",
+        turn="One quick step.",
+        paragraphs=[
+            "Good to have you! Verify your email address to finish setting up your "
+            "account.",
+            f"The link works for {_hours(TOKEN_MAX_AGE_SECONDS)}.",
+        ],
+        button=("Verify your email", verification_link),
+        after="Didn't sign up? Ignore this email and nothing happens.",
+        reason=REASON_SIGN_UP,
+        review_line=False,
+    ).send(fail_silently=False)
 
 
 def register_user(serializer) -> User | None:
@@ -100,18 +122,21 @@ def send_password_reset_email(user: User) -> None:
     token = generate_password_reset_token(user)
     reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
 
-    send_mail(
-        subject="Reset your Eventra password",
-        message=(
-            "Use this link to reset your password:\n\n"
-            f"{reset_link}\n\n"
-            "This link expires in 1 hour. If you didn't request this, "
-            "you can safely ignore this email."
-        ),
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[user.email],
-        fail_silently=False,
-    )
+    build_email(
+        user.email,
+        "Reset your Eventra password",
+        headline="Locked out?",
+        turn="Easy fix.",
+        paragraphs=[
+            f"Hi {user.first_name or user.email}, we got a request to reset the "
+            "password for this account. Use the button to choose a new one.",
+            f"The link works for {_hours(PASSWORD_RESET_MAX_AGE_SECONDS)}.",
+        ],
+        button=("Choose a new password", reset_link),
+        after="Not you? Ignore this email. Your password stays the same.",
+        reason=REASON_RESET,
+        review_line=False,
+    ).send(fail_silently=False)
 
 
 def request_password_reset(email: str) -> None:
@@ -349,34 +374,41 @@ def delete_account(user: User, password: str) -> None:
 
 
 def send_account_exists_email(user: User) -> None:
-    send_mail(
-        subject="You already have an Eventra account",
-        message=(
-            f"Hi {user.first_name or user.email},\n\n"
-            "Someone tried to sign up with this email address, but it already has "
-            f"an Eventra account. To get in, sign in at {settings.FRONTEND_URL}/login "
-            f"or reset your password at {settings.FRONTEND_URL}/forgot-password.\n\n"
-            "If this wasn't you, you can ignore this email. Your account hasn't changed."
-        ),
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[user.email],
-        fail_silently=False,
-    )
+    build_email(
+        user.email,
+        "You already have an Eventra account",
+        headline="Good news:",
+        turn="you're already in.",
+        paragraphs=[
+            f"Hi {user.first_name or user.email}, someone tried to sign up with this "
+            "email address, but it already has an Eventra account. Sign in, or reset "
+            "your password if it slipped your mind."
+        ],
+        button=("Sign in", f"{settings.FRONTEND_URL}/login"),
+        link=("Reset your password", f"{settings.FRONTEND_URL}/forgot-password"),
+        after="Not you? Ignore this email. Your account hasn't changed.",
+        reason=REASON_SIGN_UP_ATTEMPT,
+        review_line=False,
+    ).send(fail_silently=False)
 
 
 def send_account_deleted_email(email: str, first_name: str) -> None:
-    send_mail(
-        subject="Your Eventra account has been deleted",
-        message=(
-            f"Hi {first_name},\n\n"
-            "Your Eventra account has been deleted and your personal details "
-            "removed. Records of past payments are kept.\n\n"
-            "You can sign up again with this email address at any time."
-        ),
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[email],
-        fail_silently=False,
-    )
+    build_email(
+        email,
+        "Your Eventra account has been deleted",
+        pill="Account closed",
+        headline="Sorry to see you go",
+        paragraphs=[
+            f"Hi {first_name or email}, your Eventra account has been deleted and "
+            "your personal details have been removed. Records of past payments are "
+            "kept.",
+            "If you ever want back in, sign up again with this email address. "
+            "We'll keep the lights on.",
+        ],
+        reason=REASON_ACCOUNT_DELETED,
+        account_link=False,
+        review_line=False,
+    ).send(fail_silently=False)
 
 
 def flush_expired_tokens() -> int:

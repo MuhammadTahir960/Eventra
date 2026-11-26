@@ -5,7 +5,7 @@ PUBLIC_STATUSES = [Event.Status.APPROVED, Event.Status.COMPLETED]
 DELETABLE_STATUSES = {Event.Status.CANCELLED, Event.Status.COMPLETED}
 
 SENSITIVE_EVENT_FIELDS = frozenset(
-    {"venue", "category", "start_datetime", "end_datetime"}
+    {"title", "venue", "category", "start_datetime", "end_datetime"}
 )
 
 COMPLETE_PAST_EVENTS_BUFFER_HOURS = 2
