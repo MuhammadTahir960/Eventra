@@ -1,3 +1,4 @@
+import base64
 from email.utils import parseaddr
 from urllib.parse import urlparse
 
@@ -87,6 +88,15 @@ if _email_domain(DEFAULT_FROM_EMAIL) in ("", "eventra.local"):
 
 if not _email_domain(EMAIL_REPLY_TO):
     raise ImproperlyConfigured("EMAIL_REPLY_TO must be set in production.")
+
+try:
+    _payout_key = base64.urlsafe_b64decode(PAYOUT_ACCOUNT_KEY)
+except ValueError:
+    _payout_key = b""
+if len(_payout_key) != 64 or not any(_payout_key):
+    raise ImproperlyConfigured(
+        "PAYOUT_ACCOUNT_KEY must be 64 random bytes in URL-safe base64 in production."
+    )
 
 INSTALLED_APPS = [*INSTALLED_APPS, "storages"]
 
