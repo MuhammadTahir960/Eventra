@@ -154,6 +154,8 @@ MEDIA_ROOT = BASE_DIR / "mediafiles"
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@eventra.local")
 EMAIL_REPLY_TO = env("EMAIL_REPLY_TO", default="")
 
+PAYOUT_ACCOUNT_KEY = env("PAYOUT_ACCOUNT_KEY", default="")
+
 MAILERS = {
     "default": {
         "BACKEND": "django.core.mail.backends.smtp.EmailBackend",
@@ -263,6 +265,7 @@ REST_FRAMEWORK = {
         "checkout": "20/min",
         "booking-cancel": "10/hour",
         "event-postpone": "10/hour",
+        "payout-account-number": "20/hour",
         "anon": "100/min",
         "user": "300/min",
     },
