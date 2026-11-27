@@ -2,18 +2,21 @@ import logging
 from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
+from django.core import signing
 from django.db import IntegrityError, models, transaction
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from apps.bookings.models import Booking
+from apps.common.constants import Roles
 from apps.events.models import Event
 from apps.payments.constants import UNFINISHED_REFUND_STATUSES
 from apps.payments.models import Refund, RefundItem
 from apps.payments.services import refunded_so_far
 from apps.tickets.models import Ticket
 
-from .models import OrganizerPayout
+from . import account_numbers
+from .models import OrganizerPayout, PayoutAccount
 
 PLATFORM_FEE_PERCENTAGE = Decimal("0.10")
 PAYOUT_WAIT_HOURS = 24
@@ -29,8 +32,67 @@ class PayoutNotAvailableError(Exception):
     """Raised when an event is not completed, too early, sold nothing or is paid."""
 
 
-class OrganizerInactiveError(Exception):
-    """Raised inside settle_payout() when the event's organizer account is no longer active."""
+class InvalidAccountNumberError(Exception):
+    """Raised when an account-number token is forged, altered or expired."""
+
+    def __init__(self):
+        super().__init__(
+            "This account number has expired. Get a new one and try again."
+        )
+
+
+class AccountNumberTakenError(Exception):
+    """Raised when an issued number is already on another account (a reused token)."""
+
+    def __init__(self):
+        super().__init__(
+            "This account number is already in use. Get a new one and try again."
+        )
+
+
+PAYEE_RELATED = ("organizer__payout_account", "payee_partner__payout_account")
+
+
+def encrypted_number(number_token) -> bytes:
+    try:
+        return account_numbers.encrypt(account_numbers.redeem(number_token))
+    except signing.BadSignature as exc:
+        raise InvalidAccountNumberError() from exc
+
+
+def ensure_account_number_free(number_token) -> None:
+    if PayoutAccount.objects.filter(
+        account_number=encrypted_number(number_token)
+    ).exists():
+        raise AccountNumberTakenError()
+
+
+def create_payout_account(*, number_token, organizer=None, partner=None, **fields):
+    try:
+        with transaction.atomic():
+            return PayoutAccount.objects.create(
+                organizer=organizer,
+                partner=partner,
+                account_number=encrypted_number(number_token),
+                **fields,
+            )
+    except IntegrityError as exc:
+        raise AccountNumberTakenError() from exc
+
+
+def _payee(event):
+    if event.payee_partner_id:
+        return event.payee_partner
+    return None if event.organizer.role == Roles.ADMIN else event.organizer
+
+
+def event_payout_account(event) -> PayoutAccount | None:
+    return getattr(_payee(event), "payout_account", None)
+
+
+def payee_account(event) -> PayoutAccount | None:
+    payee = _payee(event)
+    return event_payout_account(event) if payee and payee.is_active else None
 
 
 def _partial_refunds(event) -> models.QuerySet:
@@ -150,12 +212,16 @@ def awaiting_payout(events) -> models.QuerySet:
     return (
         events.filter(status=Event.Status.COMPLETED, payout__isnull=True)
         .filter(models.Exists(sold))
+        .filter(
+            models.Q(payee_partner__isnull=False)
+            | ~models.Q(organizer__role=Roles.ADMIN)
+        )
         .annotate(
             gross_revenue=Coalesce(models.Subquery(gross), zero)
             - Coalesce(models.Subquery(refunded), zero)
         )
         .filter(gross_revenue__gt=0)
-        .select_related("organizer", "venue")
+        .select_related(*PAYEE_RELATED, "venue")
         .order_by("completed_at", "id")
     )
 
@@ -186,6 +252,10 @@ def pay_out_event(event: Event) -> OrganizerPayout:
             )
         if timezone.now() < payout_available_at(event):
             raise PayoutNotAvailableError("This payout isn't available yet.")
+        if payee_account(event) is None:
+            raise PayoutNotAvailableError(
+                "The payee has no active payout account, so this can't be paid out."
+            )
 
         payout, _ = create_payout(event)
         _start_settling(payout)
@@ -221,16 +291,9 @@ def settle_payout(payout_id) -> None:
         if payout.status != OrganizerPayout.Status.PROCESSING:
             return
 
-        try:
-            organizer_is_active = Event.all_objects.filter(
-                id=payout.event_id, organizer__is_active=True
-            ).exists()
-            if not organizer_is_active:
-                raise OrganizerInactiveError(
-                    f"Organizer for event {payout.event_id} is not active."
-                )
-        except OrganizerInactiveError:
-            logger.exception("Payout settlement failed for payout %s", payout.id)
+        event = Event.all_objects.select_related(*PAYEE_RELATED).get(pk=payout.event_id)
+        if payee_account(event) is None:
+            logger.warning("Payout %s failed: the payee can't be paid", payout.id)
             payout.status = OrganizerPayout.Status.FAILED
             payout.save(update_fields=["status", "updated_at"])
             return
@@ -239,9 +302,10 @@ def settle_payout(payout_id) -> None:
         payout.settled_at = timezone.now()
         payout.save(update_fields=["status", "settled_at", "updated_at"])
 
-        transaction.on_commit(
-            lambda: _enqueue_payout_settled_notification(payout.id), robust=True
-        )
+        if not event.payee_partner_id:
+            transaction.on_commit(
+                lambda: _enqueue_payout_settled_notification(payout.id), robust=True
+            )
 
 
 def _enqueue_payout_settled_notification(payout_id) -> None:

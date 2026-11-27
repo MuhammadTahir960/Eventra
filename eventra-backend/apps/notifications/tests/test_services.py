@@ -9,6 +9,7 @@ from apps.bookings.factories import BookingFactory
 from apps.events.factories import EventFactory, TicketTierFactory
 from apps.events.models import Event
 from apps.payments.models import Refund
+from apps.payouts.account_numbers import decrypt, masked
 from apps.payouts.factories import OrganizerPayoutFactory
 from apps.seating.factories import EventSeatFactory
 from apps.seating.models import EventSeat
@@ -351,6 +352,10 @@ class TestSendPayoutSettledEmail:
         assert sent.to == [event.organizer.email]
         assert sent.subject == f"Your payout for {event.title} has been sent"
         assert "(10%, card fees included)" in sent.body
+        account = event.organizer.payout_account
+        assert f"Paid to: Test Bank {masked(account.account_number)}" in sent.body
+        full_number = decrypt(account.account_number)
+        assert full_number not in sent.body + sent.alternatives[0][0]
 
     def test_happy_path_records_a_sent_notification(self):
         event = EventFactory()

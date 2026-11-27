@@ -19,6 +19,6 @@ def settle_payout(payout_id) -> None:
 )
 def send_payout_settled_notification(payout_id) -> None:
     payout = OrganizerPayout.objects.select_related(
-        "event__organizer", "event__venue"
+        "event__organizer__payout_account", "event__venue"
     ).get(id=payout_id)
     send_payout_settled_email(payout)
