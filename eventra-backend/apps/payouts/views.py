@@ -5,13 +5,16 @@ from rest_framework.views import APIView
 from apps.common.permissions import IsAdmin, IsEventOwnerStrict, IsOrganizer
 from apps.events.models import Event
 
-from .models import OrganizerPayout
+from . import account_numbers
+from .models import OrganizerPayout, Partner
 from .serializers import (
     AwaitingPayoutSerializer,
     EventSalesSerializer,
     OrganizerPayoutSerializer,
+    PartnerSerializer,
 )
 from .services import (
+    PAYEE_RELATED,
     PayoutNotAvailableError,
     PayoutNotSettleableError,
     awaiting_payout,
@@ -19,6 +22,8 @@ from .services import (
     pay_out_event,
     request_payout_settlement,
 )
+
+_PAYOUT_RELATED = ("event__venue", *(f"event__{path}" for path in PAYEE_RELATED))
 
 
 class OrganizerEventSalesView(APIView):
@@ -39,7 +44,7 @@ class OrganizerPayoutListView(generics.ListAPIView):
     def get_queryset(self):
         return OrganizerPayout.objects.filter(
             event__organizer_id=self.request.user.id
-        ).select_related("event__venue")
+        ).select_related(*_PAYOUT_RELATED)
 
 
 class AdminPayoutListView(generics.ListAPIView):
@@ -48,7 +53,7 @@ class AdminPayoutListView(generics.ListAPIView):
     filterset_fields = ["status"]
 
     def get_queryset(self):
-        return OrganizerPayout.objects.select_related("event__venue").all()
+        return OrganizerPayout.objects.select_related(*_PAYOUT_RELATED)
 
 
 class AdminPayoutSettleView(APIView):
@@ -99,3 +104,20 @@ class AdminEventPayOutView(APIView):
         return Response(
             OrganizerPayoutSerializer(payout).data, status=status.HTTP_201_CREATED
         )
+
+
+class PayoutAccountNumberView(APIView):
+    permission_classes = [permissions.AllowAny]
+    throttle_scope = "payout-account-number"
+
+    def post(self, request):
+        return Response(account_numbers.issue(), status=status.HTTP_201_CREATED)
+
+
+class AdminPartnerListView(generics.ListAPIView):
+    serializer_class = PartnerSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    pagination_class = None
+
+    def get_queryset(self):
+        return Partner.objects.payable()

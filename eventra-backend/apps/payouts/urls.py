@@ -2,15 +2,23 @@ from django.urls import path
 
 from .views import (
     AdminEventPayOutView,
+    AdminPartnerListView,
     AdminPayoutListView,
     AdminPayoutReadyListView,
     AdminPayoutSettleView,
     OrganizerEventSalesView,
     OrganizerPayoutListView,
     OrganizerPayoutUpcomingListView,
+    PayoutAccountNumberView,
 )
 
 urlpatterns = [
+    path(
+        "payout-account-numbers/",
+        PayoutAccountNumberView.as_view(),
+        name="payout-account-numbers",
+    ),
+    path("admin/partners/", AdminPartnerListView.as_view(), name="admin-partner-list"),
     path(
         "organizer/events/<uuid:event_id>/sales/",
         OrganizerEventSalesView.as_view(),

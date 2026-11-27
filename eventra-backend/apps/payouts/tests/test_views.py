@@ -21,7 +21,8 @@ from apps.tickets.factories import TicketFactory
 from apps.users.factories import UserFactory
 from tests.helpers import auth_client, confirmed_booking_with_ticket
 
-from ..factories import OrganizerPayoutFactory
+from .. import account_numbers
+from ..factories import OrganizerPayoutFactory, PartnerFactory
 from ..models import OrganizerPayout
 from ..views import (
     AdminPayoutListView,
@@ -310,3 +311,52 @@ class TestAwaitingPayoutLists:
         TicketFactory(booking=booking, event_seat=seat, price=Decimal("20.00"))
         row = admin_client.get("/admin/payouts/ready/").data["results"][0]
         assert row["gross_revenue"] == "70.00"
+
+
+class TestPayoutAccountNumbers:
+    def test_anyone_can_get_a_number_and_its_token(self):
+        response = APIClient().post("/payout-account-numbers/")
+
+        assert response.status_code == status.HTTP_201_CREATED
+        assert len(response.data["number"]) == 16
+        assert account_numbers.redeem(response.data["token"]) == response.data["number"]
+
+    def test_get_is_not_allowed(self):
+        response = APIClient().get("/payout-account-numbers/")
+
+        assert response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
+
+
+class TestAdminPartnerList:
+    def test_lists_only_active_partners_with_an_account(self):
+        listed = PartnerFactory(name="Board A")
+        PartnerFactory(name="Inactive", is_active=False)
+        PartnerFactory(name="No account", payout_account=False)
+
+        response = auth_client(UserFactory(role=Roles.ADMIN)).get("/admin/partners/")
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data == [{"id": str(listed.id), "name": "Board A"}]
+
+    def test_organizers_cant_list_partners(self):
+        response = auth_client(UserFactory(role=Roles.ORGANIZER)).get(
+            "/admin/partners/"
+        )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+class TestPaidTo:
+    def test_payout_lists_show_the_masked_account_never_the_number(self):
+        payout = OrganizerPayoutFactory()
+        account = payout.event.organizer.payout_account
+        number = account_numbers.decrypt(account.account_number)
+
+        for client, url in (
+            (auth_client(payout.event.organizer), "/organizer/payouts/"),
+            (auth_client(UserFactory(role=Roles.ADMIN)), "/admin/payouts/"),
+        ):
+            response = client.get(url)
+            paid_to = response.data["results"][0]["paid_to"]
+            assert paid_to["account_number"] == f"•••• {number[-4:]}"
+            assert number not in str(response.data)

@@ -1,8 +1,49 @@
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import OrganizerPayout
-from .services import payout_available_at, split_gross_revenue
+from apps.common.serializers import RejectUnknownFieldsMixin
+
+from . import account_numbers
+from .models import OrganizerPayout, Partner, PayoutAccount
+from .services import event_payout_account, payout_available_at, split_gross_revenue
+
+
+class PayoutAccountSerializer(RejectUnknownFieldsMixin, serializers.ModelSerializer):
+    account_number = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PayoutAccount
+        fields = ["method", "provider", "holder_name", "account_number"]
+        read_only_fields = ["method"]
+
+    def get_account_number(self, account) -> str:
+        return account_numbers.masked(account.account_number)
+
+
+class NewPayoutAccountSerializer(RejectUnknownFieldsMixin, serializers.ModelSerializer):
+    number_token = serializers.CharField(write_only=True, max_length=200)
+
+    class Meta:
+        model = PayoutAccount
+        fields = ["method", "provider", "holder_name", "number_token"]
+
+
+class PartnerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Partner
+        fields = ["id", "name"]
+        read_only_fields = fields
+
+
+def _paid_to(event) -> dict | None:
+    account = event_payout_account(event)
+    if account is None:
+        return None
+    return {
+        "name": account.holder_name,
+        "provider": account.provider,
+        "account_number": account_numbers.masked(account.account_number),
+    }
 
 
 class OrganizerPayoutSerializer(serializers.ModelSerializer):
@@ -12,6 +53,7 @@ class OrganizerPayoutSerializer(serializers.ModelSerializer):
     net_amount = serializers.DecimalField(
         max_digits=18, decimal_places=2, read_only=True
     )
+    paid_to = serializers.SerializerMethodField()
 
     class Meta:
         model = OrganizerPayout
@@ -23,11 +65,15 @@ class OrganizerPayoutSerializer(serializers.ModelSerializer):
             "gross_revenue",
             "platform_fee",
             "net_amount",
+            "paid_to",
             "status",
             "settled_at",
             "created_at",
         ]
         read_only_fields = fields
+
+    def get_paid_to(self, payout) -> dict | None:
+        return _paid_to(payout.event)
 
 
 class TicketSaleSerializer(serializers.Serializer):
@@ -68,4 +114,5 @@ class AwaitingPayoutSerializer(serializers.Serializer):
             "gross_revenue": str(gross),
             "platform_fee": str(fee),
             "net_amount": str(net),
+            "paid_to": _paid_to(event),
         }
