@@ -14,6 +14,8 @@ from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 from apps.bookings.factories import BookingFactory
 from apps.bookings.models import Booking
 from apps.common.constants import Roles
+from apps.payouts import account_numbers
+from apps.payouts.models import PayoutAccount
 from tests.helpers import auth_client, failed_refund, results
 
 from ..factories import UserFactory
@@ -33,6 +35,16 @@ def api_client():
 # ==================================================
 # POST /auth/register/
 # ==================================================
+
+
+def _new_payout_account(**overrides):
+    return {
+        "method": "wallet",
+        "provider": "JazzCash",
+        "holder_name": "New User",
+        "number_token": account_numbers.issue()["token"],
+        **overrides,
+    }
 
 
 class TestRegister:
@@ -145,7 +157,10 @@ class TestRegister:
     @pytest.mark.django_db(transaction=True)
     @pytest.mark.parametrize("role", [Roles.ATTENDEE, Roles.ORGANIZER])
     def test_can_register_as_attendee_or_organizer(self, api_client, role):
-        response = api_client.post(self.url, self._payload(role=role))
+        payload = self._payload(role=role)
+        if role == Roles.ORGANIZER:
+            payload["payout_account"] = _new_payout_account()
+        response = api_client.post(self.url, payload, format="json")
         assert response.status_code == status.HTTP_202_ACCEPTED
         user = User.objects.get(email="newuser@example.com")
         assert user.role == role
@@ -933,3 +948,122 @@ def test_an_old_verification_link_does_not_revive_a_deleted_account():
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     user.refresh_from_db()
     assert not user.is_active and not user.is_email_verified
+
+
+class TestOrganizerPayoutDetails:
+    url = "/auth/register/"
+
+    def _organizer(self, **overrides):
+        return {
+            "email": "organizer@example.com",
+            "password": "a-genuinely-strong-pass-1",
+            "first_name": "New",
+            "last_name": "Organizer",
+            "gender": "female",
+            "role": "organizer",
+            "payout_account": _new_payout_account(),
+            **overrides,
+        }
+
+    def test_organizer_sign_up_saves_the_issued_number(self, api_client):
+        issued = account_numbers.issue()
+        payload = self._organizer(
+            payout_account=_new_payout_account(number_token=issued["token"])
+        )
+
+        response = api_client.post(self.url, payload, format="json")
+
+        assert response.status_code == status.HTTP_202_ACCEPTED
+        account = PayoutAccount.objects.get(organizer__email="organizer@example.com")
+        assert account_numbers.decrypt(account.account_number) == issued["number"]
+        assert (account.method, account.provider) == ("wallet", "JazzCash")
+
+    def test_organizers_must_give_payout_details(self, api_client):
+        payload = self._organizer()
+        del payload["payout_account"]
+
+        response = api_client.post(self.url, payload, format="json")
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "payout_account" in response.data
+
+    def test_attendees_cant_send_payout_details(self, api_client):
+        response = api_client.post(
+            self.url, self._organizer(role="attendee"), format="json"
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "payout_account" in response.data
+
+    @pytest.mark.parametrize(
+        "change",
+        [
+            {"number_token": "1234567812345678"},
+            {"account_number": "1234567812345678"},
+            {"method": "crypto"},
+            {"holder_name": "<b>x</b>"},
+        ],
+    )
+    def test_typed_numbers_and_bad_fields_are_refused(self, api_client, change):
+        payload = self._organizer(payout_account=_new_payout_account(**change))
+
+        response = api_client.post(self.url, payload, format="json")
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert not User.objects.filter(email="organizer@example.com").exists()
+
+    def test_a_used_number_is_a_409_whether_or_not_the_email_exists(self, api_client):
+        token = account_numbers.issue()["token"]
+        first = self._organizer(payout_account=_new_payout_account(number_token=token))
+        assert api_client.post(self.url, first, format="json").status_code == 202
+        cache.clear()  # the register throttle
+
+        for email in ("someone-new@example.com", "organizer@example.com"):
+            again = self._organizer(
+                email=email, payout_account=_new_payout_account(number_token=token)
+            )
+            response = api_client.post(self.url, again, format="json")
+            assert response.status_code == status.HTTP_409_CONFLICT
+
+    def test_me_shows_the_masked_number_and_edits_only_name_and_provider(self):
+        organizer = UserFactory(role=Roles.ORGANIZER)
+        number = account_numbers.decrypt(organizer.payout_account.account_number)
+        client = auth_client(organizer)
+
+        shown = client.get("/auth/me/").data["payout_account"]
+        assert shown["account_number"] == f"•••• {number[-4:]}"
+
+        response = client.patch(
+            "/auth/me/",
+            {"payout_account": {"provider": "Easypaisa", "holder_name": "N. O."}},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["payout_account"]["provider"] == "Easypaisa"
+
+        for locked in ({"method": "bank"}, {"account_number": "1111222233334444"}):
+            response = client.patch(
+                "/auth/me/", {"payout_account": locked}, format="json"
+            )
+            assert response.status_code == status.HTTP_400_BAD_REQUEST
+        organizer.payout_account.refresh_from_db()
+        assert account_numbers.decrypt(organizer.payout_account.account_number) == (
+            number
+        )
+
+    def test_attendees_have_no_payout_account_to_edit(self):
+        client = auth_client(UserFactory())
+
+        assert client.get("/auth/me/").data["payout_account"] is None
+        response = client.patch(
+            "/auth/me/", {"payout_account": {"provider": "Bank"}}, format="json"
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_deleting_the_account_wipes_the_holder_name(self):
+        organizer = UserFactory(role=Roles.ORGANIZER)
+
+        delete_account(organizer, "testpass123")
+
+        organizer.payout_account.refresh_from_db()
+        assert organizer.payout_account.holder_name == "Deleted user"
