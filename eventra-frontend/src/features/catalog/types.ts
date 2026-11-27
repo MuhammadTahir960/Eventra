@@ -46,6 +46,12 @@ export interface League {
   logo: string | null
 }
 
+// Who gets paid for an admin-listed event (admins only)
+export interface Partner {
+  id: string
+  name: string
+}
+
 export interface Team {
   id: string
   sport: string

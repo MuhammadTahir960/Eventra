@@ -33,6 +33,8 @@ export interface EventDraft {
   assignments: Record<string, string>
   // Set for a sports match (admins only: the backend refuses organizers)
   match?: MatchDraft | null
+  // Admins only. Empty: no payout, Eventra keeps the ticket money
+  payeePartnerId?: string
 }
 
 export interface MatchDraft {
@@ -256,6 +258,9 @@ export async function submitEvent(
                 away_team: draft.match.awayTeamId,
               }
             : { event_type: 'general' }),
+          ...(draft.payeePartnerId
+            ? { payee_partner: draft.payeePartnerId }
+            : {}),
           is_seated: true,
           max_tickets_per_buyer: Number(draft.maxTickets),
           // wall-clock time at the venue; the server reads it in the venue's zone

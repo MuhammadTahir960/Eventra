@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api-client'
 import { countryName } from '@/lib/format'
 import { fetchAllPages } from '@/lib/pagination'
-import type { Category, Country, League, Team, Venue } from './types'
+import type { Category, Country, League, Partner, Team, Venue } from './types'
 
 // Reference data changes rarely, so keep it fresh for 5 minutes
 const REFERENCE_STALE_MS = 5 * 60_000
@@ -56,6 +56,17 @@ export function useTeams(enabled = true) {
     staleTime: REFERENCE_STALE_MS,
     enabled,
     select: toMap,
+  })
+}
+
+// Admins only: the payees an admin-listed event can pay
+export function usePartners(enabled = true) {
+  return useQuery({
+    queryKey: ['catalog', 'partners'],
+    queryFn: ({ signal }) =>
+      apiFetch<Partner[]>('/admin/partners/', { signal }),
+    staleTime: REFERENCE_STALE_MS,
+    enabled,
   })
 }
 

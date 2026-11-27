@@ -197,6 +197,20 @@ export function useEventSales(id: string | undefined) {
 
 export type PayoutStatus = 'pending' | 'processing' | 'settled' | 'failed'
 
+// Where a payout goes: the organizer's account, or a Partner's on admin events
+export interface PaidTo {
+  name: string
+  provider: string
+  // Always masked: "•••• 4821"
+  account_number: string
+}
+
+export function describePaidTo(paidTo: PaidTo | null): string {
+  return paidTo
+    ? `${paidTo.name}, ${paidTo.provider} ${paidTo.account_number}`
+    : 'the payee (no payout account yet)'
+}
+
 export interface Payout {
   id: string
   event_id: string
@@ -206,6 +220,7 @@ export interface Payout {
   gross_revenue: string
   platform_fee: string
   net_amount: string
+  paid_to: PaidTo | null
   status: PayoutStatus
   settled_at: string | null
   created_at: string
@@ -246,6 +261,7 @@ export interface AwaitingPayout {
   gross_revenue: string
   platform_fee: string
   net_amount: string
+  paid_to: PaidTo | null
 }
 
 export function useAwaitingPayouts(scope: 'organizer' | 'admin') {
