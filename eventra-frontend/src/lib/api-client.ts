@@ -14,7 +14,8 @@ export class ApiError extends Error {
     this.data = data
   }
 
-  // DRF validation errors look like { email: ["..."], password: ["..."] }
+  // DRF validation errors look like { email: ["..."], password: ["..."] };
+  // nested objects become dotted keys ("payout_account.provider")
   get fieldErrors(): Record<string, string[]> {
     const result: Record<string, string[]> = {}
     if (
@@ -23,12 +24,24 @@ export class ApiError extends Error {
       !Array.isArray(this.data)
     ) {
       for (const [key, value] of Object.entries(this.data)) {
-        if (key === 'detail') continue
-        if (Array.isArray(value)) result[key] = value.map(String)
-        else if (typeof value === 'string') result[key] = [value]
+        if (key !== 'detail') collectFieldErrors(key, value, result)
       }
     }
     return result
+  }
+}
+
+function collectFieldErrors(
+  key: string,
+  value: unknown,
+  result: Record<string, string[]>,
+) {
+  if (Array.isArray(value)) result[key] = value.map(String)
+  else if (typeof value === 'string') result[key] = [value]
+  else if (value && typeof value === 'object') {
+    for (const [inner, innerValue] of Object.entries(value)) {
+      collectFieldErrors(`${key}.${inner}`, innerValue, result)
+    }
   }
 }
 
