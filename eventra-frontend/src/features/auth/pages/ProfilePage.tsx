@@ -8,11 +8,20 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { apiFetch, errorMessage, firstFieldErrors } from '@/lib/api-client'
-import { authStore, useAuth, type SessionUser } from '../auth-store'
+import {
+  PAYOUT_METHOD_LABEL,
+  PROVIDER_LABEL,
+  authStore,
+  useAuth,
+  type SessionUser,
+} from '../auth-store'
 import { DeleteAccountSection } from '../components/DeleteAccountSection'
 import { usePageTitle } from '@/lib/use-page-title'
 
-type Editable = Pick<SessionUser, 'first_name' | 'last_name' | 'gender'>
+type Editable = Pick<SessionUser, 'first_name' | 'last_name' | 'gender'> & {
+  provider: string
+  holder_name: string
+}
 
 const ROLE_LABEL: Record<SessionUser['role'], string> = {
   attendee: 'Attendee',
@@ -25,10 +34,13 @@ export function ProfilePage() {
   const { user } = useAuth()
   // RequireRole guarantees a signed-in user on this route
   const current = user as SessionUser
+  const account = current.payout_account ?? null
   const [values, setValues] = useState<Editable>({
     first_name: current.first_name,
     last_name: current.last_name,
     gender: current.gender,
+    provider: account?.provider ?? '',
+    holder_name: account?.holder_name ?? '',
   })
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [status, setStatus] = useState<{
@@ -37,10 +49,15 @@ export function ProfilePage() {
   } | null>(null)
   const [pending, setPending] = useState(false)
 
+  const payoutChanged =
+    account !== null &&
+    (values.provider !== account.provider ||
+      values.holder_name !== account.holder_name)
   const changed =
     values.first_name !== current.first_name ||
     values.last_name !== current.last_name ||
-    values.gender !== current.gender
+    values.gender !== current.gender ||
+    payoutChanged
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
@@ -49,6 +66,11 @@ export function ProfilePage() {
       clientErrors.first_name = 'Enter your first name.'
     if (!values.last_name.trim())
       clientErrors.last_name = 'Enter your last name.'
+    if (account && !values.provider.trim())
+      clientErrors['payout_account.provider'] = 'Enter the bank or wallet.'
+    if (account && !values.holder_name.trim())
+      clientErrors['payout_account.holder_name'] =
+        'Enter the account holder’s name.'
     setErrors(clientErrors)
     setStatus(null)
     if (Object.keys(clientErrors).length > 0) return
@@ -61,6 +83,14 @@ export function ProfilePage() {
           first_name: values.first_name.trim(),
           last_name: values.last_name.trim(),
           gender: values.gender,
+          ...(payoutChanged
+            ? {
+                payout_account: {
+                  provider: values.provider.trim(),
+                  holder_name: values.holder_name.trim(),
+                },
+              }
+            : {}),
         },
       })
       authStore.setUser(updated)
@@ -159,6 +189,56 @@ export function ProfilePage() {
             </NativeSelect>
           )}
         </FormField>
+        {account && (
+          <section
+            aria-labelledby="profile-payout-heading"
+            className="flex flex-col gap-5 border-t border-border pt-6"
+          >
+            <div>
+              <h2 id="profile-payout-heading" className="font-medium">
+                Payout details
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {PAYOUT_METHOD_LABEL[account.method]} · {account.account_number}
+                . The method and number can’t be changed.
+              </p>
+            </div>
+            <div className="grid gap-5 sm:grid-cols-2">
+              <FormField
+                id="profile-payout-provider"
+                label={PROVIDER_LABEL[account.method]}
+                error={errors['payout_account.provider']}
+              >
+                {(control) => (
+                  <Input
+                    {...control}
+                    value={values.provider}
+                    maxLength={100}
+                    onChange={(event) =>
+                      setValues({ ...values, provider: event.target.value })
+                    }
+                  />
+                )}
+              </FormField>
+              <FormField
+                id="profile-payout-holder"
+                label="Account holder"
+                error={errors['payout_account.holder_name']}
+              >
+                {(control) => (
+                  <Input
+                    {...control}
+                    value={values.holder_name}
+                    maxLength={200}
+                    onChange={(event) =>
+                      setValues({ ...values, holder_name: event.target.value })
+                    }
+                  />
+                )}
+              </FormField>
+            </div>
+          </section>
+        )}
         <Button
           type="submit"
           variant="ink"
