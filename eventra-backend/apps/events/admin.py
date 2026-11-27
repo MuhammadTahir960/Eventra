@@ -1,5 +1,6 @@
 from django.contrib import admin
 
+from apps.payouts.models import Partner
 from apps.tickets.models import Ticket
 
 from .models import Event, TicketTier, TierSectionMapping
@@ -23,6 +24,11 @@ class EventAdmin(admin.ModelAdmin):
 
     def get_queryset(self, request):
         return Event.all_objects.all()
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "payee_partner":
+            kwargs["queryset"] = Partner.objects.payable()
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     def has_delete_permission(self, request, obj=None):
         if obj is not None and Ticket.objects.filter(event_seat__event=obj).exists():

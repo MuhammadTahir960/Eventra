@@ -3,11 +3,13 @@ from zoneinfo import ZoneInfo
 
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVector
+from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import F, Q
 from django.utils.text import slugify
 
+from apps.common.constants import Roles
 from apps.common.models import SoftDeleteModel, UUIDBaseModel
 from apps.common.validators import validate_display_name, validate_ticket_price
 
@@ -30,6 +32,13 @@ class Event(SoftDeleteModel):
 
     organizer = models.ForeignKey(
         "users.User", on_delete=models.PROTECT, related_name="organized_events"
+    )
+    payee_partner = models.ForeignKey(
+        "payouts.Partner",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="events",
     )
     venue = models.ForeignKey(
         "venues.Venue",
@@ -137,6 +146,12 @@ class Event(SoftDeleteModel):
     @property
     def currency(self) -> str | None:
         return self.venue.currency if self.venue_id else None
+
+    def clean(self):
+        if self.payee_partner_id and self.organizer.role != Roles.ADMIN:
+            raise ValidationError(
+                {"payee_partner": "Only admin-listed events can pay a Partner."}
+            )
 
     def local_time(self, moment):
         return moment.astimezone(ZoneInfo(self.time_zone))
