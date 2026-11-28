@@ -12,6 +12,7 @@ import {
   useCategories,
   useCountries,
   useLeagues,
+  usePartners,
   useTeams,
   useVenues,
 } from '@/features/catalog/hooks'
@@ -98,6 +99,7 @@ export function CreateEventPage() {
   const isAdmin = useAuth().user?.role === 'admin'
   const teams = useTeams(isAdmin)
   const leagues = useLeagues(isAdmin)
+  const partners = usePartners(isAdmin)
 
   // The chosen venue lives in the URL so a reload keeps it. It is only used
   // if it is a real venue from the list.
@@ -579,6 +581,28 @@ export function CreateEventPage() {
                         ))}
                       </div>
                     )}
+                    <FormField
+                      id="event-payee"
+                      label="Who gets paid"
+                      hint="With no Partner, Eventra keeps the ticket money."
+                    >
+                      {(control) => (
+                        <NativeSelect
+                          {...control}
+                          value={draft.payeePartnerId ?? ''}
+                          onChange={(event) =>
+                            patch({ payeePartnerId: event.target.value })
+                          }
+                        >
+                          <option value="">No one (Eventra keeps it)</option>
+                          {partners.data?.map((partner) => (
+                            <option key={partner.id} value={partner.id}>
+                              {partner.name}
+                            </option>
+                          ))}
+                        </NativeSelect>
+                      )}
+                    </FormField>
                   </fieldset>
                 )}
 

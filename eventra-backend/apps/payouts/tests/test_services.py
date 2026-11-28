@@ -3,12 +3,16 @@ from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from apps.bookings.factories import BookingFactory
 from apps.bookings.models import Booking
+from apps.common.constants import Roles
 from apps.events.factories import EventFactory, TicketTierFactory
 from apps.events.models import Event
+from apps.events.services import ensure_event_deletable
 from apps.payments.models import Refund
 from apps.payments.services import refund_part_of_event
 from apps.seating.factories import EventSeatFactory
@@ -18,19 +22,25 @@ from apps.tickets.models import Ticket
 from apps.users.factories import UserFactory
 from tests.helpers import confirmed_booking_with_ticket, paid_booking, race
 
-from ..factories import OrganizerPayoutFactory
-from ..models import OrganizerPayout
+from .. import account_numbers
+from ..factories import OrganizerPayoutFactory, PartnerFactory
+from ..models import OrganizerPayout, PayoutAccount
 from ..services import (
     PAYOUT_WAIT_HOURS,
     PLATFORM_FEE_PERCENTAGE,
+    AccountNumberTakenError,
+    InvalidAccountNumberError,
     PayoutNotAvailableError,
     PayoutNotSettleableError,
     _sum_confirmed_booking_totals,
     awaiting_payout,
     compute_payout_amounts,
     create_payout,
+    create_payout_account,
+    ensure_account_number_free,
     get_event_sales,
     pay_out_event,
+    payee_account,
     request_payout_settlement,
     settle_payout,
 )
@@ -411,7 +421,7 @@ class TestSettlePayout:
         monkeypatch.setattr(
             "apps.payouts.tasks.send_payout_settled_notification", mock_task
         )
-        organizer = UserFactory(is_active=False)
+        organizer = UserFactory(role=Roles.ORGANIZER, is_active=False)
         event = EventFactory(status=Event.Status.COMPLETED, organizer=organizer)
         payout = OrganizerPayoutFactory(
             event=event, status=OrganizerPayout.Status.PROCESSING
@@ -426,7 +436,7 @@ class TestSettlePayout:
         mock_task.delay.assert_not_called()
 
     def test_reactivating_organizer_then_retrying_settle_succeeds(self):
-        organizer = UserFactory(is_active=False)
+        organizer = UserFactory(role=Roles.ORGANIZER, is_active=False)
         event = EventFactory(status=Event.Status.COMPLETED, organizer=organizer)
         payout = OrganizerPayoutFactory(
             event=event, status=OrganizerPayout.Status.PENDING
@@ -458,31 +468,22 @@ class TestSettlePayout:
         assert payout.status == OrganizerPayout.Status.SETTLED
         mock_task.delay.assert_not_called()
 
-    def test_lock_is_scoped_to_the_payout_row_only(self, monkeypatch):
-        organizer = UserFactory(is_active=True)
+    def test_lock_is_scoped_to_the_payout_row_only(self):
+        organizer = UserFactory(role=Roles.ORGANIZER, is_active=True)
         event = EventFactory(status=Event.Status.COMPLETED, organizer=organizer)
         payout = OrganizerPayoutFactory(
             event=event, status=OrganizerPayout.Status.PROCESSING
         )
 
-        real_filter = Event.all_objects.filter
-        calls = []
+        with CaptureQueriesContext(connection) as queries:
+            settle_payout(payout.id)
 
-        def spy_filter(*args, **kwargs):
-            calls.append(kwargs)
-            return real_filter(*args, **kwargs)
-
-        monkeypatch.setattr(Event.all_objects, "filter", spy_filter)
-
-        settle_payout(payout.id)
-
-        assert any("organizer__is_active" in call for call in calls), (
-            "organizer-active check should be its own unlocked Event query, "
-            "not a select_related()/select_for_update() traversal from OrganizerPayout"
-        )
+        locking = [q["sql"] for q in queries if "FOR UPDATE" in q["sql"]]
+        assert len(locking) == 1
+        assert 'FOR UPDATE OF "payouts_organizerpayout"' in locking[0]
 
     def test_soft_deleted_completed_event_with_active_organizer_still_settles(self):
-        organizer = UserFactory(is_active=True)
+        organizer = UserFactory(role=Roles.ORGANIZER, is_active=True)
         event = EventFactory(
             status=Event.Status.COMPLETED, organizer=organizer, is_active=False
         )
@@ -529,3 +530,104 @@ class TestPartialRefundsAndPayouts:
 
         with pytest.raises(PayoutNotAvailableError, match="still being processed"):
             pay_out_event(event)
+
+
+class TestPayoutAccounts:
+    def _fields(self):
+        return {
+            "method": PayoutAccount.Method.WALLET,
+            "provider": "JazzCash",
+            "holder_name": "Amira Khan",
+        }
+
+    def test_creates_the_account_with_the_issued_number_encrypted(self):
+        organizer = UserFactory(role=Roles.ORGANIZER, payout_account=False)
+        issued = account_numbers.issue()
+
+        account = create_payout_account(
+            number_token=issued["token"], organizer=organizer, **self._fields()
+        )
+
+        assert account_numbers.decrypt(account.account_number) == issued["number"]
+
+    def test_a_forged_token_is_refused(self):
+        organizer = UserFactory(role=Roles.ORGANIZER, payout_account=False)
+
+        with pytest.raises(InvalidAccountNumberError):
+            create_payout_account(
+                number_token="1234567812345678", organizer=organizer, **self._fields()
+            )
+
+    def test_a_reused_token_is_refused_before_and_at_save(self):
+        token = account_numbers.issue()["token"]
+        create_payout_account(
+            number_token=token,
+            organizer=UserFactory(role=Roles.ORGANIZER, payout_account=False),
+            **self._fields(),
+        )
+
+        with pytest.raises(AccountNumberTakenError):
+            ensure_account_number_free(token)
+        with pytest.raises(AccountNumberTakenError):
+            create_payout_account(
+                number_token=token,
+                partner=PartnerFactory(payout_account=False),
+                **self._fields(),
+            )
+
+
+class TestPayee:
+    def _admin_event(self, **kwargs):
+        return EventFactory(
+            status=Event.Status.COMPLETED,
+            completed_at=timezone.now() - timedelta(hours=25),
+            organizer=UserFactory(role=Roles.ADMIN),
+            **kwargs,
+        )
+
+    def test_an_organizer_event_pays_the_organizers_account(self):
+        event = EventFactory()
+
+        assert payee_account(event) == event.organizer.payout_account
+
+    def test_an_admin_event_with_a_partner_pays_the_partner(self):
+        partner = PartnerFactory()
+
+        assert payee_account(self._admin_event(payee_partner=partner)) == (
+            partner.payout_account
+        )
+
+    def test_an_admin_event_without_a_partner_pays_no_one_and_can_be_deleted(self):
+        event = self._admin_event()
+        confirmed_booking_with_ticket(event, Decimal("100.00"))
+
+        assert payee_account(event) is None
+        assert not awaiting_payout(Event.all_objects.filter(pk=event.pk)).exists()
+        with pytest.raises(PayoutNotAvailableError):
+            pay_out_event(event)
+        ensure_event_deletable(event)
+
+    def test_a_deactivated_partner_cant_be_paid(self):
+        partner = PartnerFactory(is_active=False)
+        event = self._admin_event(payee_partner=partner)
+        confirmed_booking_with_ticket(event, Decimal("100.00"))
+
+        with pytest.raises(PayoutNotAvailableError, match="no active payout account"):
+            pay_out_event(event)
+
+    def test_partner_payouts_settle_without_an_email(
+        self, monkeypatch, django_capture_on_commit_callbacks
+    ):
+        mock_task = MagicMock()
+        monkeypatch.setattr(
+            "apps.payouts.tasks.send_payout_settled_notification", mock_task
+        )
+        event = self._admin_event(payee_partner=PartnerFactory())
+        confirmed_booking_with_ticket(event, Decimal("100.00"))
+
+        with django_capture_on_commit_callbacks(execute=True):
+            payout = pay_out_event(event)
+
+        payout.refresh_from_db()
+        assert payout.status == OrganizerPayout.Status.SETTLED
+        mock_task.delay.assert_not_called()

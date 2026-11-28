@@ -8,7 +8,8 @@ from django.utils import timezone
 from apps.bookings.models import Booking
 from apps.payments.constants import REFUND_REQUEST_CUTOFF_HOURS
 from apps.payments.models import Refund
-from apps.payouts.services import PLATFORM_FEE_PERCENTAGE
+from apps.payouts import account_numbers
+from apps.payouts.services import PLATFORM_FEE_PERCENTAGE, event_payout_account
 from apps.tickets.models import Ticket
 from apps.tickets.services import get_or_render_ticket_pdf
 
@@ -166,6 +167,11 @@ def send_booking_confirmation_email(booking) -> None:
     )
 
 
+def _paid_to(event) -> str:
+    account = event_payout_account(event)
+    return f"{account.provider} {account_numbers.masked(account.account_number)}"
+
+
 def send_payout_settled_email(payout) -> None:
     event = payout.event
     currency = event.currency
@@ -190,6 +196,7 @@ def send_payout_settled_email(payout) -> None:
                         f"({PLATFORM_FEE_PERCENTAGE * 100:.0f}%, card fees included)",
                     ),
                     ("You receive", _money(payout.net_amount, currency)),
+                    ("Paid to", _paid_to(payout.event)),
                 ],
             },
             "button": (

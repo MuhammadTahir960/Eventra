@@ -1,3 +1,4 @@
+import base64
 import os
 import subprocess
 import sys
@@ -147,6 +148,7 @@ PROD_ENV = {
     "EMAIL_HOST": "smtp.example.com",
     "DEFAULT_FROM_EMAIL": "Eventra <hello@example.com>",
     "EMAIL_REPLY_TO": "help@example.com",
+    "PAYOUT_ACCOUNT_KEY": base64.urlsafe_b64encode(bytes(range(64))).decode(),
     "FRONTEND_URL": "https://example.com",
     "TURNSTILE_SECRET_KEY": "0x4AAAAAAAreal-looking-secret",
     "R2_ACCOUNT_ID": "demo-account-id",

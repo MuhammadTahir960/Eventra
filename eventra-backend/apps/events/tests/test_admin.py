@@ -1,8 +1,10 @@
 import pytest
 from django.contrib.admin.sites import AdminSite
+from django.core.exceptions import ValidationError
 
 from apps.bookings.factories import BookingFactory
 from apps.bookings.models import Booking
+from apps.payouts.factories import PartnerFactory
 from apps.seating.factories import EventSeatFactory
 from apps.tickets.factories import TicketFactory
 from apps.tickets.models import Ticket
@@ -65,3 +67,14 @@ def test_django_admin_applies_the_event_title_rule(rf, admin_user):
     form_class = EventAdmin(Event, AdminSite()).get_form(request)
     assert "title" in form_class(data={"title": "Party <3"}).errors
     assert "title" not in form_class(data={"title": "R&B Night: Vol. 2"}).errors
+
+
+def test_an_organizers_event_cant_pay_a_partner_even_in_django_admin():
+    event = EventFactory(organizer=UserFactory(role="organizer"))
+    event.payee_partner = PartnerFactory()
+
+    with pytest.raises(ValidationError, match="Only admin-listed events"):
+        event.clean()
+
+    event.organizer = UserFactory(role="admin")
+    event.clean()

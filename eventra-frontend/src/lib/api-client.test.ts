@@ -94,6 +94,15 @@ describe('apiFetch', () => {
     ])
   })
 
+  it('reads nested field errors as dotted keys', () => {
+    const error = new ApiError(400, 'Bad', {
+      payout_account: { provider: ['Enter a provider.'] },
+    })
+    expect(error.fieldErrors['payout_account.provider']).toEqual([
+      'Enter a provider.',
+    ])
+  })
+
   it('treats 205 (logout) as an empty success', async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 205 }))
     await expect(

@@ -15,6 +15,7 @@ from apps.common.serializers import (
 )
 from apps.common.validators import validate_multiline_text, validate_ticket_price
 from apps.payments.services import refund_price_drops
+from apps.payouts.models import Partner
 from apps.venues.models import Venue
 
 from .constants import (
@@ -96,12 +97,18 @@ class EventSerializer(
     end_datetime = wall_clock_field()
     time_zone = serializers.CharField(read_only=True)
     currency = serializers.CharField(read_only=True, allow_null=True)
+    payee_partner = serializers.PrimaryKeyRelatedField(
+        queryset=Partner.objects.payable(),
+        required=False,
+        allow_null=True,
+    )
 
     class Meta:
         model = Event
         fields = [
             "id",
             "organizer",
+            "payee_partner",
             "venue",
             "category",
             "league",
@@ -148,6 +155,7 @@ class EventSerializer(
         request = self.context.get("request")
         if not _is_organizer_or_admin_for_event(request, instance):
             data.pop("rejection_reason", None)
+            data.pop("payee_partner", None)
         return data
 
     def _actor_is_admin(self):
@@ -217,6 +225,10 @@ class EventSerializer(
         read_in_time_zone(attrs, times, time_zone)
 
     def validate(self, attrs):
+        if attrs.get("payee_partner") and not self._actor_is_admin():
+            raise serializers.ValidationError(
+                {"payee_partner": "Only admin-listed events can pay a Partner."}
+            )
         self._validate_venue_currency(attrs)
         self._read_times_at_venue(attrs)
         start = self._current(attrs, "start_datetime")

@@ -4,11 +4,13 @@ import pytest
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
 
+from apps.common.constants import Roles
 from apps.events.factories import EventFactory
 from apps.events.models import Event
+from apps.users.factories import UserFactory, new_account_number
 
-from ..factories import OrganizerPayoutFactory
-from ..models import OrganizerPayout
+from ..factories import OrganizerPayoutFactory, PartnerFactory
+from ..models import OrganizerPayout, PayoutAccount
 
 pytestmark = pytest.mark.django_db
 
@@ -41,3 +43,32 @@ class TestOrganizerPayoutModel:
 
     def test_no_organizer_id_column_exists_on_the_model(self):
         assert not hasattr(OrganizerPayout, "organizer_id")
+
+
+@pytest.mark.django_db
+class TestPayoutAccountModel:
+    def test_an_account_needs_exactly_one_owner(self):
+        organizer = UserFactory(role=Roles.ORGANIZER, payout_account=False)
+        partner = PartnerFactory(payout_account=False)
+        fields = {
+            "method": PayoutAccount.Method.BANK,
+            "provider": "Bank",
+            "holder_name": "Holder",
+        }
+
+        for owners in ({}, {"organizer": organizer, "partner": partner}):
+            with pytest.raises(IntegrityError), transaction.atomic():
+                PayoutAccount.objects.create(
+                    account_number=new_account_number(), **owners, **fields
+                )
+
+    def test_an_account_number_is_unique(self):
+        number = new_account_number()
+        PayoutAccount.objects.filter(
+            organizer=UserFactory(role=Roles.ORGANIZER)
+        ).update(account_number=number)
+
+        with pytest.raises(IntegrityError), transaction.atomic():
+            PayoutAccount.objects.filter(partner=PartnerFactory()).update(
+                account_number=number
+            )

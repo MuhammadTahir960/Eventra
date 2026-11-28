@@ -27,7 +27,8 @@ from apps.notifications.constants import (
 from apps.notifications.emails import build_email
 from apps.payments.constants import UNFINISHED_REFUND_STATUSES
 from apps.payments.models import Refund
-from apps.payouts.models import OrganizerPayout
+from apps.payouts.models import OrganizerPayout, PayoutAccount
+from apps.payouts.services import create_payout_account, ensure_account_number_free
 from apps.seating.models import SeatHold
 from apps.tickets.models import Ticket
 from apps.tickets.services import forget_ticket_pdfs
@@ -91,11 +92,16 @@ def register_user(serializer) -> User | None:
 
     from .tasks import send_account_exists_email_task, send_verification_email_task
 
+    payout_account = serializer.validated_data.pop("payout_account", None)
+    if payout_account:
+        ensure_account_number_free(payout_account["number_token"])
     existing = account_for_mailbox(serializer.validated_data["email"])
     if existing is None:
         try:
             with transaction.atomic():
                 user = serializer.save()
+                if payout_account:
+                    create_payout_account(organizer=user, **payout_account)
                 transaction.on_commit(
                     lambda: send_verification_email_task.delay(str(user.id)),
                     robust=True,
@@ -349,6 +355,9 @@ def delete_account(user: User, password: str) -> None:
         original_email, first_name = user.email, user.first_name
         user.email = f"deleted-{user.id}@deleted.eventra.invalid"
         user.first_name, user.last_name, user.gender = "Deleted", "user", ""
+        PayoutAccount.objects.filter(organizer=user).update(
+            holder_name="Deleted user", updated_at=timezone.now()
+        )
         tickets = Ticket.objects.filter(booking__user=user)
         transaction.on_commit(lambda: forget_ticket_pdfs(tickets), robust=True)
         user.set_unusable_password()

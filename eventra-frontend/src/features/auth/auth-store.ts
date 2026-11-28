@@ -14,6 +14,27 @@ export interface SessionUser {
   gender: 'male' | 'female' | 'other' | ''
   // Static asset key derived from gender; null when gender was never set
   avatar: string | null
+  // Organizers only; the number is always masked ("•••• 4821")
+  payout_account?: PayoutAccount | null
+}
+
+export type PayoutMethod = 'bank' | 'wallet'
+
+export const PAYOUT_METHOD_LABEL: Record<PayoutMethod, string> = {
+  bank: 'Bank account',
+  wallet: 'Mobile wallet',
+}
+
+export const PROVIDER_LABEL: Record<PayoutMethod, string> = {
+  bank: 'Bank name',
+  wallet: 'Wallet provider',
+}
+
+export interface PayoutAccount {
+  method: PayoutMethod
+  provider: string
+  holder_name: string
+  account_number: string
 }
 
 interface AuthState {

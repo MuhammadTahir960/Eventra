@@ -84,6 +84,9 @@ def test_prod_rejects_r2_public_domain_that_is_not_a_bare_hostname(bad_domain):
             "DEFAULT_FROM_EMAIL",
         ),
         ({"EMAIL_REPLY_TO": "help@"}, "EMAIL_REPLY_TO"),
+        ({"PAYOUT_ACCOUNT_KEY": ""}, "PAYOUT_ACCOUNT_KEY"),
+        ({"PAYOUT_ACCOUNT_KEY": "c2hvcnQ="}, "PAYOUT_ACCOUNT_KEY"),
+        ({"PAYOUT_ACCOUNT_KEY": "A" * 86 + "=="}, "PAYOUT_ACCOUNT_KEY"),
         (
             {"EMAIL_REPLY_TO": "help@example.com\r\nBcc: x@example.com"},
             "EMAIL_REPLY_TO",

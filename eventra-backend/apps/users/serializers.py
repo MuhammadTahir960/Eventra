@@ -9,6 +9,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.common.constants import Roles
 from apps.common.serializers import RejectUnknownFieldsMixin
+from apps.payouts.serializers import NewPayoutAccountSerializer, PayoutAccountSerializer
 
 from .models import User
 
@@ -31,6 +32,7 @@ class RegisterSerializer(RejectUnknownFieldsMixin, serializers.ModelSerializer):
         ],
         required=True,
     )
+    payout_account = NewPayoutAccountSerializer(required=False)
 
     class Meta:
         model = User
@@ -43,6 +45,7 @@ class RegisterSerializer(RejectUnknownFieldsMixin, serializers.ModelSerializer):
             "gender",
             "role",
             "captcha_token",
+            "payout_account",
         ]
         read_only_fields = ["id"]
         extra_kwargs = {"email": {"validators": []}}
@@ -57,6 +60,15 @@ class RegisterSerializer(RejectUnknownFieldsMixin, serializers.ModelSerializer):
             last_name=attrs.get("last_name"),
         )
         validate_password(attrs["password"], user=temp_user)
+        is_organizer = attrs.get("role") == Roles.ORGANIZER
+        if is_organizer and not attrs.get("payout_account"):
+            raise serializers.ValidationError(
+                {"payout_account": "Organizers need payout details to sign up."}
+            )
+        if not is_organizer and "payout_account" in attrs:
+            raise serializers.ValidationError(
+                {"payout_account": "Only organizers have payout details."}
+            )
         return attrs
 
     def create(self, validated_data):
@@ -155,6 +167,7 @@ _AVATAR_ASSET_KEYS = {
 
 class UserSerializer(RejectUnknownFieldsMixin, serializers.ModelSerializer):
     avatar = serializers.SerializerMethodField()
+    payout_account = PayoutAccountSerializer(required=False)
 
     class Meta:
         model = User
@@ -166,6 +179,7 @@ class UserSerializer(RejectUnknownFieldsMixin, serializers.ModelSerializer):
             "last_name",
             "gender",
             "avatar",
+            "payout_account",
             "is_active",
             "created_at",
         ]
@@ -174,6 +188,27 @@ class UserSerializer(RejectUnknownFieldsMixin, serializers.ModelSerializer):
 
     def get_avatar(self, obj) -> str | None:
         return _AVATAR_ASSET_KEYS.get(obj.gender)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        account = getattr(instance, "payout_account", None)
+        data["payout_account"] = (
+            PayoutAccountSerializer(account).data if account else None
+        )
+        return data
+
+    def update(self, instance, validated_data):
+        changes = validated_data.pop("payout_account", None)
+        if changes:
+            account = getattr(instance, "payout_account", None)
+            if account is None:
+                raise serializers.ValidationError(
+                    {"payout_account": "This account has no payout details."}
+                )
+            for field, value in changes.items():
+                setattr(account, field, value)
+            account.save(update_fields=[*changes, "updated_at"])
+        return super().update(instance, validated_data)
 
 
 class SafeTokenRefreshSerializer(RejectUnknownFieldsMixin, TokenRefreshSerializer):

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { Link, Navigate, useSearchParams } from 'react-router-dom'
 import { ErrorSummary, type ErrorItem } from '@/components/ErrorSummary'
 import { FormField } from '@/components/FormField'
@@ -8,7 +8,12 @@ import { ButtonLink } from '@/components/ui/button-link'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { ApiError, errorMessage, firstFieldErrors } from '@/lib/api-client'
-import { authApi, type RegisterPayload } from '../api'
+import { authApi, type IssuedAccountNumber, type RegisterPayload } from '../api'
+import {
+  PAYOUT_METHOD_LABEL,
+  PROVIDER_LABEL,
+  type PayoutMethod,
+} from '../auth-store'
 import { AuthLayout } from '../components/AuthLayout'
 import { PasswordField } from '../components/PasswordField'
 import { Turnstile } from '../components/Turnstile'
@@ -17,7 +22,22 @@ import { ROLE_HOME } from '../role-routes'
 import { usePageTitle } from '@/lib/use-page-title'
 
 type FieldName =
-  'first_name' | 'last_name' | 'email' | 'password' | 'gender' | 'role'
+  | 'first_name'
+  | 'last_name'
+  | 'email'
+  | 'password'
+  | 'gender'
+  | 'role'
+  | 'method'
+  | 'provider'
+  | 'holder_name'
+  | 'account_number'
+
+interface PayoutDraft {
+  method: PayoutMethod | ''
+  provider: string
+  holder_name: string
+}
 
 type Errors = Partial<Record<FieldName, string>>
 
@@ -29,11 +49,27 @@ const FIELD_ID: Record<FieldName, string> = {
   password: 'reg-password',
   gender: 'reg-gender',
   role: 'reg-role-attendee',
+  method: 'reg-payout-method',
+  provider: 'reg-payout-provider',
+  holder_name: 'reg-payout-holder',
+  account_number: 'reg-payout-number',
+}
+
+// The server's nested keys, mapped onto this form's fields
+const PAYOUT_FIELD: Record<string, FieldName> = {
+  'payout_account.method': 'method',
+  'payout_account.provider': 'provider',
+  'payout_account.holder_name': 'holder_name',
+  'payout_account.number_token': 'account_number',
 }
 
 // Quick checks to save a round trip. The server validates everything again
 // (password strength, duplicate email) and its answer is the one that counts.
-function validate(values: Partial<RegisterPayload>): Errors {
+function validate(
+  values: Partial<RegisterPayload>,
+  payout: PayoutDraft,
+  issued: IssuedAccountNumber | null,
+): Errors {
   const errors: Errors = {}
   if (!values.first_name?.trim()) errors.first_name = 'Enter your first name.'
   if (!values.last_name?.trim()) errors.last_name = 'Enter your last name.'
@@ -44,6 +80,13 @@ function validate(values: Partial<RegisterPayload>): Errors {
   }
   if (!values.gender) errors.gender = 'Choose an option.'
   if (!values.role) errors.role = 'Choose how you will use Eventra.'
+  if (values.role === 'organizer') {
+    if (!payout.method) errors.method = 'Choose how you want to be paid.'
+    if (!payout.provider.trim()) errors.provider = 'Enter the bank or wallet.'
+    if (!payout.holder_name.trim())
+      errors.holder_name = 'Enter the account holder’s name.'
+    if (!issued) errors.account_number = 'Wait for your account number.'
+  }
   return errors
 }
 
@@ -76,6 +119,36 @@ export function RegisterPage() {
   const [registeredEmail, setRegisteredEmail] = useState<string | null>(null)
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const [captchaKey, setCaptchaKey] = useState(0)
+  const [payout, setPayout] = useState<PayoutDraft>({
+    method: '',
+    provider: '',
+    holder_name: '',
+  })
+  // Eventra assigns the number; the form only shows it, locked
+  const [issued, setIssued] = useState<IssuedAccountNumber | null>(null)
+  const isOrganizer = values.role === 'organizer'
+  // Kept across role switches; cleared (and so re-fetched) only when the server refuses it
+  useEffect(() => {
+    if (!isOrganizer || issued) return
+    let cancelled = false
+    authApi
+      .issueAccountNumber()
+      .then((number) => !cancelled && setIssued(number))
+      .catch(
+        (caught) =>
+          !cancelled &&
+          setErrors((current) => ({
+            ...current,
+            account_number: errorMessage(
+              caught,
+              'We couldn’t get your account number. Reload the page.',
+            ),
+          })),
+      )
+    return () => {
+      cancelled = true
+    }
+  }, [isOrganizer, issued])
 
   if (user) return <Navigate to={ROLE_HOME[user.role]} replace />
 
@@ -107,7 +180,7 @@ export function RegisterPage() {
     event.preventDefault()
     setFormError(null)
 
-    const clientErrors = validate(values)
+    const clientErrors = validate(values, payout, issued)
     if (Object.keys(clientErrors).length > 0) {
       setErrors(clientErrors)
       setFocusKey((key) => key + 1)
@@ -124,15 +197,37 @@ export function RegisterPage() {
       const created = await authApi.register({
         ...(values as RegisterPayload),
         captcha_token: captchaToken,
+        ...(isOrganizer && issued
+          ? {
+              payout_account: {
+                method: payout.method as PayoutMethod,
+                provider: payout.provider.trim(),
+                holder_name: payout.holder_name.trim(),
+                number_token: issued.token,
+              },
+            }
+          : {}),
       })
       setRegisteredEmail(created.email)
     } catch (caught) {
-      if (caught instanceof ApiError && caught.status === 400) {
+      if (
+        caught instanceof ApiError &&
+        (caught.status === 400 || caught.status === 409)
+      ) {
         // Map the backend's per-field messages onto our form
         const server = firstFieldErrors(caught)
         const serverErrors: Errors = {}
         for (const name of Object.keys(FIELD_ID) as FieldName[]) {
           if (server[name]) serverErrors[name] = server[name]
+        }
+        for (const [key, name] of Object.entries(PAYOUT_FIELD)) {
+          if (server[key]) serverErrors[name] = server[key]
+        }
+        if (server.payout_account) setFormError(server.payout_account)
+        // An expired or already-used number: show a fresh one
+        if (serverErrors.account_number) {
+          setIssued(null)
+          serverErrors.account_number = `${serverErrors.account_number} We’ve given you a new one.`
         }
         // DRF's unique-field message is lower-case model wording
         if (serverErrors.email?.includes('already exists')) {
@@ -297,6 +392,98 @@ export function RegisterPage() {
             </p>
           )}
         </fieldset>
+
+        {isOrganizer && (
+          <fieldset className="flex flex-col gap-4">
+            <legend className="mb-1.5 text-sm font-medium">
+              Payout details
+            </legend>
+            <p className="-mt-2 text-xs text-muted-foreground">
+              Where Eventra sends your ticket money after each event.
+            </p>
+            <FormField
+              id={FIELD_ID.method}
+              label="Paid to"
+              error={errors.method}
+            >
+              {(control) => (
+                <NativeSelect
+                  {...control}
+                  value={payout.method}
+                  onChange={(event) =>
+                    setPayout({
+                      ...payout,
+                      method: event.target.value as PayoutMethod,
+                    })
+                  }
+                >
+                  <option value="" disabled>
+                    Select…
+                  </option>
+                  {Object.entries(PAYOUT_METHOD_LABEL).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </NativeSelect>
+              )}
+            </FormField>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField
+                id={FIELD_ID.provider}
+                label={PROVIDER_LABEL[payout.method || 'bank']}
+                error={errors.provider}
+              >
+                {(control) => (
+                  <Input
+                    {...control}
+                    value={payout.provider}
+                    maxLength={100}
+                    onChange={(event) =>
+                      setPayout({ ...payout, provider: event.target.value })
+                    }
+                  />
+                )}
+              </FormField>
+              <FormField
+                id={FIELD_ID.holder_name}
+                label="Account holder"
+                error={errors.holder_name}
+              >
+                {(control) => (
+                  <Input
+                    {...control}
+                    value={payout.holder_name}
+                    maxLength={200}
+                    autoComplete="name"
+                    onChange={(event) =>
+                      setPayout({ ...payout, holder_name: event.target.value })
+                    }
+                  />
+                )}
+              </FormField>
+            </div>
+            <FormField
+              id={FIELD_ID.account_number}
+              label="Account number"
+              hint="Assigned by Eventra. It can’t be changed."
+              error={errors.account_number}
+            >
+              {(control) => (
+                <Input
+                  {...control}
+                  readOnly
+                  value={
+                    issued
+                      ? issued.number.replace(/(\d{4})(?=\d)/g, '$1 ')
+                      : 'Getting your number…'
+                  }
+                  className="bg-muted font-mono tabular-nums"
+                />
+              )}
+            </FormField>
+          </fieldset>
+        )}
 
         <Turnstile onToken={setCaptchaToken} resetKey={captchaKey} />
 

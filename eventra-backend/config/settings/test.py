@@ -5,6 +5,8 @@ CELERY_TASK_EAGER_PROPAGATES = True
 
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 
+PAYOUT_ACCOUNT_KEY = "A" * 86 + "=="
+
 import tempfile  # noqa: E402
 from pathlib import Path  # noqa: E402
 

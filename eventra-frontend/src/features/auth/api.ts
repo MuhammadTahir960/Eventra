@@ -1,5 +1,5 @@
 import { apiFetch } from '@/lib/api-client'
-import type { Role, SessionUser } from './auth-store'
+import type { PayoutAccount, Role, SessionUser } from './auth-store'
 
 // POST /auth/login/ returns tokens and role only, never the profile
 export interface LoginResponse {
@@ -24,6 +24,19 @@ export interface RegisterPayload {
   role: 'attendee' | 'organizer'
   // Cloudflare Turnstile token, checked by the backend before anything else
   captcha_token: string
+  // Organizers only. The number is never sent: only the token Eventra issued
+  payout_account?: Pick<
+    PayoutAccount,
+    'method' | 'provider' | 'holder_name'
+  > & {
+    number_token: string
+  }
+}
+
+// A new account number, shown locked on the sign-up form before the account exists
+export interface IssuedAccountNumber {
+  number: string
+  token: string
 }
 
 export const authApi = {
@@ -45,6 +58,12 @@ export const authApi = {
     apiFetch<void>('/auth/logout/', { method: 'POST', body: { refresh } }),
 
   me: () => apiFetch<SessionUser>('/auth/me/'),
+
+  issueAccountNumber: () =>
+    apiFetch<IssuedAccountNumber>('/payout-account-numbers/', {
+      method: 'POST',
+      auth: false,
+    }),
 
   register: (payload: RegisterPayload) =>
     // The same answer whether or not the email already had an account

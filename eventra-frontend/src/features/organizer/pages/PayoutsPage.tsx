@@ -12,6 +12,7 @@ import { apiFetch, errorMessage, firstFieldErrors } from '@/lib/api-client'
 import { formatDateTime, formatMoney } from '@/lib/format'
 import {
   PAYOUT_STATUS,
+  describePaidTo,
   useAwaitingPayouts,
   usePayOut,
   useRefundPart,
@@ -55,7 +56,7 @@ function RetryButton({ payout }: { payout: Payout }) {
         </Button>
       }
       title="Retry this payout?"
-      description={`Tries again to pay ${formatMoney(payout.net_amount, payout.currency)} for "${payout.event_title}" to the organizer.`}
+      description={`Tries again to pay ${formatMoney(payout.net_amount, payout.currency)} for "${payout.event_title}" to ${describePaidTo(payout.paid_to)}.`}
       confirmLabel="Retry payout"
       pending={settle.isPending}
       onConfirm={() => settle.mutate()}
@@ -86,7 +87,7 @@ function PayOutButton({ row }: { row: AwaitingPayout }) {
         </Button>
       }
       title="Pay out this event?"
-      description={`Pays ${formatMoney(row.net_amount, row.currency)} for "${row.event_title}" to ${row.organizer_name}. After this the event can no longer be voided.`}
+      description={`Pays ${formatMoney(row.net_amount, row.currency)} for "${row.event_title}" to ${describePaidTo(row.paid_to)}. After this the event can no longer be voided.`}
       confirmLabel="Pay out"
       pending={payOut.isPending}
       onConfirm={() =>
@@ -226,19 +227,24 @@ function AwaitingPayouts({ scope }: { scope: 'organizer' | 'admin' }) {
                   {scope === 'admin' && `${row.organizer_name} · `}
                   Ended {formatDateTime(row.completed_at)}
                 </span>
+                <span className="tabular block text-[13px] text-muted-foreground">
+                  To {describePaidTo(row.paid_to)}
+                </span>
               </td>
               <td className="num font-semibold">
                 {formatMoney(row.net_amount, row.currency)}
               </td>
               <td>
                 <div className="flex items-center justify-end gap-2">
-                  {scope === 'admin' && row.eligible ? (
+                  {scope === 'admin' && row.eligible && row.paid_to ? (
                     <PayOutButton row={row} />
                   ) : (
                     <span className="tabular text-[13px] text-muted-foreground">
-                      {scope === 'admin' || !row.eligible
-                        ? `Available from ${formatDateTime(row.payout_available_at)}`
-                        : 'Waiting for an admin'}
+                      {!row.paid_to
+                        ? 'Needs payout details first'
+                        : scope === 'admin' || !row.eligible
+                          ? `Available from ${formatDateTime(row.payout_available_at)}`
+                          : 'Waiting for an admin'}
                     </span>
                   )}
                   {/* Pay the organizer or refund the buyers: one decision, one place */}
@@ -325,6 +331,9 @@ export function PayoutsPage({ scope }: { scope: 'organizer' | 'admin' }) {
                       {payout.settled_at
                         ? `Settled ${formatDateTime(payout.settled_at)}`
                         : `Created ${formatDateTime(payout.created_at)}`}
+                    </span>
+                    <span className="tabular block text-[13px] text-muted-foreground">
+                      To {describePaidTo(payout.paid_to)}
                     </span>
                   </td>
                   <td className="num">

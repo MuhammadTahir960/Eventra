@@ -6,6 +6,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from apps.common.constants import Roles
 from apps.common.permissions import IsAdmin
+from apps.payouts.services import AccountNumberTakenError, InvalidAccountNumberError
 from apps.tickets.models import Ticket
 from apps.tickets.services import forget_ticket_pdfs
 
@@ -46,7 +47,17 @@ class RegisterView(generics.CreateAPIView):
             )
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        register_user(serializer)
+        try:
+            register_user(serializer)
+        except (InvalidAccountNumberError, AccountNumberTakenError) as exc:
+            return Response(
+                {"payout_account": {"number_token": [str(exc)]}},
+                status=(
+                    status.HTTP_409_CONFLICT
+                    if isinstance(exc, AccountNumberTakenError)
+                    else status.HTTP_400_BAD_REQUEST
+                ),
+            )
         return Response(
             {"email": serializer.validated_data["email"]},
             status=status.HTTP_202_ACCEPTED,
@@ -213,7 +224,7 @@ class AdminUserListView(generics.ListAPIView):
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated, IsAdmin]
     filterset_class = AdminUserFilterSet
-    queryset = User.objects.all().order_by("-created_at")
+    queryset = User.objects.select_related("payout_account").order_by("-created_at")
 
 
 class SafeTokenRefreshView(TokenRefreshView):

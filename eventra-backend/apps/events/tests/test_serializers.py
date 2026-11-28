@@ -8,6 +8,7 @@ from rest_framework import serializers
 
 from apps.categories.factories import CategoryFactory
 from apps.common.constants import Roles
+from apps.payouts.factories import PartnerFactory
 from apps.seating.factories import EventSeatFactory
 from apps.users.factories import UserFactory
 from apps.venues.factories import SeatFactory, VenueFactory
@@ -529,3 +530,17 @@ def test_moving_to_a_venue_in_another_zone_needs_the_new_times():
     )
     assert with_times.is_valid(), with_times.errors
     assert with_times.validated_data["start_datetime"] == start.replace(microsecond=0)
+
+
+def test_only_admin_events_can_pay_a_partner():
+    partner = PartnerFactory()
+    for role, valid in ((Roles.ORGANIZER, False), (Roles.ADMIN, True)):
+        owner = UserFactory(role=role)
+        event = EventFactory(organizer=owner, status=Event.Status.APPROVED)
+        serializer = EventSerializer(
+            event,
+            data={"payee_partner": str(partner.id)},
+            partial=True,
+            context={"request": _request_for(owner)},
+        )
+        assert serializer.is_valid() is valid, serializer.errors
